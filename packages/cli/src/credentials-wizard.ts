@@ -25,6 +25,8 @@ interface CredentialsEntry {
   providerName: string;
   spec: SerializedProviderCredentialsSpec;
   configured: boolean;
+  /** Accounts the credential broker holds; absent from older collectors. */
+  brokeredAccounts?: string[];
 }
 
 interface CredentialsStatusResponse {

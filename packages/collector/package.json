@@ -100,6 +100,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./main": "./src/main.ts"
+    "./main": "./src/main.ts",
+    "./registry": "./src/source-descriptors.ts"
   }
 }

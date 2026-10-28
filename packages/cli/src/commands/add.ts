@@ -1078,7 +1078,16 @@ async function addSingleSource(sourceArg: string, ctx: AddContext, deps: AddDeps
     const status = await fetchCredentialsStatus(ctx.deviceId);
     const entry = status.items.find((e) => e.fileKey === spec.fileKey);
     const sameHost = isSameHostAsCollector(status.hostname);
-    if (entry && spec.perAccount) {
+    // A brokered account this device does not have yet needs nothing pasted:
+    // its credential is the broker's, and discovery below offers it.
+    const brokeredToAdd = entry?.brokeredAccounts?.length
+      ? splitConfiguredAccounts(descriptor.id, entry.brokeredAccounts, ctx.sources).fresh
+      : [];
+    if (brokeredToAdd.length > 0) {
+      console.log(
+        `\n${c.dim}${descriptor.provider.name} credentials come from the credential broker for ${brokeredToAdd.join(", ")}${c.reset}`,
+      );
+    } else if (entry && spec.perAccount) {
       console.log(
         `\n${c.yellow}${descriptor.provider.name} needs the credentials for the account you're connecting.${c.reset}`,
       );
