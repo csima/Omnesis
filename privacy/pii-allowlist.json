@@ -12198,6 +12198,50 @@
       "value": "Expected Failure",
       "paths": ["scripts/ci/verify-ios-e2e-results.test.mjs"],
       "reason": "Public xcresulttool TestResult enum value, not a person's name."
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": [
+        "packages/providers/github/src/broker.test.ts",
+        "packages/providers/granola/src/broker.test.ts",
+        "packages/providers/strava/src/broker.test.ts"
+      ],
+      "reason": "Invented person from CLAUDE.md's list of fictional example names, used as the account owner in credential-broker tests."
+    },
+    {
+      "value": "Studio Northstar",
+      "paths": ["packages/providers/notion/src/broker.test.ts"],
+      "reason": "Invented workspace name from CLAUDE.md's list of fictional example businesses, used in a credential-broker test."
+    },
+    {
+      "value": "What Google",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Start of a doc comment sentence, not a name."
+    },
+    {
+      "value": "Google Drive",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Product name in an expected error message."
+    },
+    {
+      "value": "Insufficient Permission",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Google API error message text."
+    },
+    {
+      "value": "Lunch Flow",
+      "paths": ["packages/providers/lunchflow/src/broker.test.ts"],
+      "reason": "Product name of the provider under test."
+    },
+    {
+      "value": "Neither Microsoft",
+      "paths": ["packages/providers/outlook/src/broker.test.ts"],
+      "reason": "Start of a test comment sentence, not a name."
+    },
+    {
+      "value": "Neither Strava",
+      "paths": ["packages/providers/strava/src/broker.test.ts"],
+      "reason": "Start of a test comment sentence, not a name."
     }
   ],
   "secretFixtures": [
@@ -12221,6 +12265,26 @@
       "kind": "private-key",
       "reason": "Documentation string names a PEM header shape without containing a real key.",
       "paths": []
+    },
+    {
+      "path": "packages/providers/google/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/notion/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/outlook/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/strava/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
     }
   ]
 }
