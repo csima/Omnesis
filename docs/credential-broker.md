@@ -118,14 +118,15 @@ below.
 1. **Notion Databases: duplicate `<name>_start` column (upstream bug, not broker-related). Fixed on this branch.**
    A text property named like a date property's derived column ("date start" before "Date") made the schema emit
    two `date_start` columns, and the gateway's analytics ingest failed with DuckDB
-   `Catalog Error: Column with name date_start already exists!` on every sync. A date property now picks a base whose
-   `_start` and `_end` are free, and the schema and the row extractor share one naming pass (`mapPropertyColumns` in
+   `Catalog Error: Column with name date_start already exists!` on every sync. A date property now picks a name that is free
+   together with its `_start` and `_end`, and the schema and the row extractor share one naming pass (`mapPropertyColumns` in
    `packages/providers/notion/src/schema-mapper.ts`), so a row's keys always name the table's columns. Databases
    without a collision keep their column names. Worth proposing upstream on its own, together with the next fix.
    **Notion Pages: one unreadable block stopped the whole sync. Fixed on this branch.** A nested block whose children
    Notion answers with `object_not_found` or `restricted_resource` (such as a synced block whose original is not
-   shared with the integration) renders without them, and a page that 404s between search and its content fetch is
-   skipped for the run, still counted present, with the watermark left short of it so the next run reads it again.
+   shared with the integration) renders without them. A page that 404s between search and its content fetch is
+   skipped for the run and still counted present; its stored copy stays until its next edit or the next snapshot
+   rewalk reads it. A restricted page still fails the run as a permission error.
 2. **Identity re-check for Google, GitHub, Coinbase, Lunch Flow and Granola.** Their `createContext` trusts that a
    linked connection still belongs to the linked account. If a connection is re-authorised at Nango as someone else
    (or a key is swapped), that account's data syncs under the stored id. Use the `verify` option of
