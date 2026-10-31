@@ -115,14 +115,17 @@ below.
 
 ## Open work, in priority order
 
-1. **Notion Databases: duplicate `<name>_start` column (upstream bug, not broker-related).**
-   `packages/providers/notion/src/schema-mapper.ts` turns a `date` property into `<col>_start` and `<col>_end`
-   without reserving those names, so a database with properties such as “Date” and “Date Start” produces two
-   `date_start` columns and the gateway's analytics ingest fails with DuckDB
-   `Catalog Error: Column with name date_start already exists!` on every sync. Fix: run every derived column name
-   through `sanitizeColumnName(..., usedNames)` (or check `usedNames` for the suffixed names before choosing the base
-   name), and keep `sourceColumnId` stable. Add a test with both properties in both orders. Worth proposing upstream
-   on its own.
+1. **Notion Databases: duplicate `<name>_start` column (upstream bug, not broker-related). Fixed on this branch.**
+   A text property named like a date property's derived column ("date start" before "Date") made the schema emit
+   two `date_start` columns, and the gateway's analytics ingest failed with DuckDB
+   `Catalog Error: Column with name date_start already exists!` on every sync. A date property now picks a base whose
+   `_start` and `_end` are free, and the schema and the row extractor share one naming pass (`mapPropertyColumns` in
+   `packages/providers/notion/src/schema-mapper.ts`), so a row's keys always name the table's columns. Databases
+   without a collision keep their column names. Worth proposing upstream on its own, together with the next fix.
+   **Notion Pages: one unreadable block stopped the whole sync. Fixed on this branch.** A nested block whose children
+   Notion answers with `object_not_found` or `restricted_resource` (such as a synced block whose original is not
+   shared with the integration) renders without them, and a page that 404s between search and its content fetch is
+   skipped for the run, still counted present, with the watermark left short of it so the next run reads it again.
 2. **Identity re-check for Google, GitHub, Coinbase, Lunch Flow and Granola.** Their `createContext` trusts that a
    linked connection still belongs to the linked account. If a connection is re-authorised at Nango as someone else
    (or a key is swapped), that account's data syncs under the stored id. Use the `verify` option of
