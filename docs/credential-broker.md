@@ -53,17 +53,17 @@ Flow:
 
 ## Providers
 
-| Provider   | Nango integration(s)                                                              | Purposes                         | Account id (same as a sign-in here)                                                                                                                                                 | Re-checks identity on each token     |
-| ---------- | --------------------------------------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| Notion     | `notion`                                                                          | default                          | workspace id from the token response                                                                                                                                                | yes (`raw.workspace_id`)             |
-| Google     | `google-mail`, `google-calendar`, `google-drive`, `google-contacts` (or `google`) | gmail, calendar, drive, contacts | email from Gmail profile / Drive about / primary calendar; all must agree. Contacts cannot name its account: linking it needs `--param account=<email>`, checked against the others | no                                   |
-| Outlook    | `outlook`, `microsoft`, `one-drive-personal`, `one-drive`                         | default                          | ID-token username (as MSAL), else Graph `/me`                                                                                                                                       | yes (ID token, when present)         |
-| Strava     | `strava`, `strava-web`                                                            | default                          | athlete id from the token response, else `/athlete`                                                                                                                                 | yes (`raw.athlete`, when present)    |
-| GitHub     | `github` (OAuth) or `github-pat` (API key)                                        | default                          | lowercased login, or `login@label` with `--param accountLabel=`                                                                                                                     | no                                   |
-| Granola    | `granola` (API key)                                                               | default                          | owner email of the newest note, else `granola-<sha12(key)>`                                                                                                                         | no                                   |
-| Lunch Flow | `private-api-generic` / `private-api-bearer` (API key)                            | default                          | `lunchflow-<sha12(key)>`, fixed at link time; bank-overlap check runs at link                                                                                                       | no                                   |
-| Coinbase   | `private-api-basic` (username = CDP key name, password = PEM)                     | default                          | portfolio id, else key-name hash; trade-capable keys refused at link                                                                                                                | no                                   |
-| IMAP       | `private-api-basic` (username = email, password = app password) + `--param host=` | default                          | the username (email)                                                                                                                                                                | yes (username must stay the account) |
+| Provider   | Nango integration(s)                                                              | Purposes                         | Account id (same as a sign-in here)                                                                                                                                                 | Re-checks identity on each token                    |
+| ---------- | --------------------------------------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Notion     | `notion`                                                                          | default                          | workspace id from the token response                                                                                                                                                | yes (`raw.workspace_id`)                            |
+| Google     | `google-mail`, `google-calendar`, `google-drive`, `google-contacts` (or `google`) | gmail, calendar, drive, contacts | email from Gmail profile / Drive about / primary calendar; all must agree. Contacts cannot name its account: linking it needs `--param account=<email>`, checked against the others | yes, per purpose and per token (see below)          |
+| Outlook    | `outlook`, `microsoft`, `one-drive-personal`, `one-drive`                         | default                          | ID-token username (as MSAL), else Graph `/me`                                                                                                                                       | yes (ID token, when present)                        |
+| Strava     | `strava`, `strava-web`                                                            | default                          | athlete id from the token response, else `/athlete`                                                                                                                                 | yes (`raw.athlete`, when present)                   |
+| GitHub     | `github` (OAuth) or `github-pat` (API key)                                        | default                          | lowercased login, or `login@label` with `--param accountLabel=`                                                                                                                     | yes (`GET /user` id recorded at link)               |
+| Granola    | `granola` (API key)                                                               | default                          | owner email of the newest note, else `granola-<sha12(key)>`                                                                                                                         | no                                                  |
+| Lunch Flow | `private-api-generic` / `private-api-bearer` (API key)                            | default                          | `lunchflow-<sha12(key)>`, fixed at link time; bank-overlap check runs at link                                                                                                       | yes (the key, else a bank account recorded at link) |
+| Coinbase   | `private-api-basic` (username = CDP key name, password = PEM)                     | default                          | portfolio id, else key-name hash; trade-capable keys refused at link                                                                                                                | yes (key name recorded at link, else the portfolio) |
+| IMAP       | `private-api-basic` (username = email, password = app password) + `--param host=` | default                          | the username (email)                                                                                                                                                                | yes (username must stay the account)                |
 
 Not brokered, by design: Plaid (Link widget), Enable Banking (bank SCA), WhatsApp (QR pairing), and the local-only
 sources.
@@ -134,12 +134,41 @@ below.
    a 400 `VALIDATION_ERROR` instead of a DuckDB error, and the collector then discards the page through
    `POST /sync-state/:sourceId/pending-page/abandon` while its cursor is uncommitted; that attempt fails and the next
    one fetches the page again. A cursor-committed page is never discarded. Worth proposing upstream.
-2. **Identity re-check for Google, GitHub, Coinbase, Lunch Flow and Granola.** Their `createContext` trusts that a
-   linked connection still belongs to the linked account. If a connection is re-authorised at Nango as someone else
-   (or a key is swapped), that account's data syncs under the stored id. Use the `verify` option of
-   `BrokeredCredentials.load`: Google per-purpose probe (cache the answer per token), GitHub `/user`, Coinbase key
-   name recorded at link, Lunch Flow bank-account ids, Granola owner email. Fail with
-   `BrokerCredentialError("identity-changed", ...)`.
+2. **Identity re-check for Google, GitHub, Coinbase and Lunch Flow. Done on this branch.** Each
+   provider passes a `verify` hook to `BrokeredCredentials.load`, so every credential the broker hands out is
+   checked before any request uses it; a mismatch throws `BrokerCredentialError("identity-changed", ...)` (an
+   `auth` failure), and a failed check keeps the classification of the request that failed (`network`,
+   `transient`, `rate-limit`, `auth`, `permission`) and is never taken as a match or remembered. A credential
+   that passes is remembered for that context, so a token handed out again is not asked about twice. No
+   message names the account a connection now belongs to. Each provider with a check also declares it as its
+   broker spec's `verify`, and `omnesis broker status` runs it on every connection, so a connection signed in
+   again as someone else reads as failed there instead of healthy.
+   - **Google** (`verifyGoogleIdentity`, `packages/providers/google/src/broker.ts`): each purpose asks Google
+     with that token alone (never through the broker client, inside whose refresh it runs): Gmail
+     `users.getProfile`, Calendar `calendars.get(primary)`, Drive `about.get(fields=user(emailAddress))`,
+     Contacts `people.get(people/me, personFields=emailAddresses)`. Each is meant to be allowed by its
+     purpose's read-only scope (`gmail.readonly`, `calendar.readonly`, `drive.readonly`, `contacts.readonly`),
+     and linking runs the same probes, so a grant that cannot answer one is refused when it is linked rather
+     than at the first sync. The address must be the
+     account's (case-insensitive); for Contacts, an `ACCOUNT`-sourced address if Google gives one, and the
+     `people/me` resource name must equal the `contactsPerson` param linking now records. A token for which
+     nothing could be compared is refused. Linking now refuses a purpose Google will not identify at all (a
+     Contacts grant refused on `people/me`), and a Contacts binding linked before `contactsPerson` was recorded
+     must be linked again.
+   - **GitHub** (`verifyGithubIdentity`): linking records the numeric `GET /user` id (`userId`), and each
+     token's `GET /user` id must equal it. The login is only the account's name: a renamed user still
+     matches, and a login another user claims after a rename does not. A binding linked before `userId`
+     was recorded is refused until it is linked again.
+   - **Coinbase** (`verifyCoinbaseIdentity`): linking records the key name (`keyName`), and that key is
+     accepted offline. Any other key is asked `key_permissions` with itself: it must be View-only, and the
+     portfolio `portfolioIdOf` gives (the permissions' `retail_portfolio_id`, else the first account's, the
+     rule linking and a paste use) must derive the account id. `portfolio_uuid` is not used: account ids
+     have always come from `retail_portfolio_id`, and Coinbase does not document the two as the same.
+   - **Lunch Flow** (`verifyLunchflowIdentity`): the key the account id was hashed from is accepted offline.
+     Any other key must list at least one bank account recorded at link time (`bankAccounts`, a JSON array);
+     a binding without that record refuses every other key and must be linked again.
+   - **Granola** is not re-checked, by decision: a personal key also lists notes shared with its owner, so no
+     note proves whose key it is.
 3. **Needs-sign-in hint for brokered accounts. Done.** A provider account registered with a broker spec carries
    `brokered()` on its `RegisteredProvider` (`source-instantiator.ts`), which checks for the binding file when it is
    asked rather than at registration, since `omnesis broker unlink` drops it while the source stays registered.
