@@ -70,9 +70,9 @@ async function otherProcessHolder(path: string, keyHex?: string): Promise<ChildP
           : ""
       }
       await conn.run(${JSON.stringify(attachSql(path, keyHex, false))});
-      // Since @duckdb/node-api 1.5.6 an unreferenced instance is closed when it
-      // is garbage collected, which releases the file lock this holder exists
-      // to keep.
+      // @duckdb/node-api 1.5.6 closes an unreferenced instance when it is
+      // garbage collected (1.5.0 did not), which releases the file lock this
+      // holder exists to keep.
       globalThis.heldStore = { inst, conn };
       process.stdout.write("held");
       setInterval(() => {}, 1000);
