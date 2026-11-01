@@ -102,6 +102,7 @@ export const DEFAULT_WEB_CAPTURE_RULES: WebCaptureRules = {
     "api-tokens",
     "access-tokens",
     "personal-access-tokens",
+    "personal_access_tokens",
     "api-keys",
     "apikeys",
     "api_keys",
@@ -114,41 +115,69 @@ export const DEFAULT_WEB_CAPTURE_RULES: WebCaptureRules = {
 
 /**
  * Segments that are ordinary words as well as account pages: an article on
- * passwords, a library's `secrets` module, a `keys` command, a file under
- * `src/auth/`. They refuse a page only as one of its first two segments
- * (`/checkout`, `/vault/secrets`) or directly under an account area
- * (`/settings/tokens`), and never on a code host's file view or a
- * documentation, wiki or blog page.
+ * passwords, a library's `secrets` module, a `checkout` blog post, a file
+ * under `src/auth/`. They refuse a page as one of its first two segments
+ * (`/checkout`, `/vault/secrets`) — except on a code host, where those two are
+ * an owner and a repository — or anywhere below an account area
+ * (`/settings/security/passwords`).
  */
 export const GENERIC_SKIP_SEGMENTS: ReadonlySet<string> = new Set([
   "auth",
-  "keys",
-  "token",
-  "tokens",
   "password",
+  "passwords",
   "secrets",
   "credentials",
   "payment",
   "payments",
+  "payment-methods",
+  "payment_methods",
   "billing",
   "checkout",
   "register",
 ]);
 
-/** Segments under which a generic word names the account's own page. */
+/**
+ * Segments that name an account's own keys, tokens and security settings,
+ * and an ordinary page just as often (`/shop/keys`, `/tokens/northcoin`).
+ * They refuse a page only below an account area, or on an application host.
+ */
+export const ACCOUNT_SKIP_SEGMENTS: ReadonlySet<string> = new Set([
+  "keys",
+  "token",
+  "tokens",
+  "security",
+  "api",
+  "access",
+  "webhooks",
+]);
+
+/** Segments below which a generic word names the account's own page. */
 const ACCOUNT_AREAS = new Set([
   "settings",
   "account",
   "accounts",
+  "my-account",
   "console",
   "dashboard",
   "admin",
   "user",
+  "user_settings",
   "profile",
+  "preferences",
+  "manage",
 ]);
 
-/** Segments that mark a code host's file view. */
-const CODE_VIEW_SEGMENTS = new Set(["blob", "tree", "raw", "src", "-"]);
+/** Host labels of an application, where every page is the signed-in user's own. */
+const ACCOUNT_HOST = /^(?:app|dashboard|console|admin|my|manage|account|accounts|portal)\./;
+
+/** Segments after which `secrets` names a secret store rather than a word. */
+const SECRET_STORE_PARENTS = new Set(["ui", "vault", "admin", "integrations", "settings"]);
+
+/** Hosts whose first two segments are an owner and a repository. */
+const CODE_HOST = /^(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|gitlab\.[a-z0-9.-]+)$/;
+
+/** Segments that mark a code host's file view; `-` counts only before one of them (GitLab). */
+const CODE_VIEW_SEGMENTS = new Set(["blob", "tree", "raw"]);
 
 /** Segments and host labels that mark documentation, a wiki or a blog. */
 const READING_SEGMENTS = new Set([
@@ -180,8 +209,6 @@ const SKIPPED_SEGMENT_PAIRS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /**
- * Sites every browser skips whatever/**
- * Sites every browser skips whatever/**
  * Sites every browser skips whatever the policy says, even before any
  * collector has announced the domains its sources own: mail, messaging,
  * sign-in and password-manager sites, whose pages are private correspondence
@@ -237,16 +264,19 @@ export const BUILT_IN_SKIP_PAGES: ReadonlyArray<readonly [domain: string, pathPr
 
 /** A link's keyword segment that is followed by a credential: `/reset/<token>`, `/verify-email/<token>`. */
 const TOKEN_LINK_KEYWORD =
-  /^(?:reset|verify|invite|magic|activate|confirm|accept-invitation)(?:[-_](?:password|email|account|link|invite|invitation))?$/;
+  /^(?:reset|verify|invite|magic|activate|confirm|accept|accept-invitation|r)(?:[-_](?:password|email|account|link|invite|invitation))?$/;
 
 /**
  * Whether a segment looks like a credential rather than a name: at least 16
  * base64url or hex characters, of at least two classes (letters and digits,
- * or both cases), and not a hyphenated lowercase slug (`my-first-talk`).
+ * or both cases), and no hyphenated words (`team-offsite-2026`,
+ * `booking-reference-ABC123`).
  */
 function segmentLooksLikeToken(segment: string): boolean {
   if (segment.length < 16 || !/^[A-Za-z0-9_\-=.~]+$/.test(segment)) return false;
-  if (/^[a-z0-9]+(?:[-_][a-z0-9]+)+$/.test(segment) && !/[0-9]/.test(segment)) return false;
+  if (/[A-Za-z]{2,}[-_][A-Za-z0-9]{2,}/.test(segment) && /[A-Za-z]{3,}[-_]/.test(segment)) {
+    return false;
+  }
   const digits = /[0-9]/.test(segment);
   const letters = /[A-Za-z]/.test(segment);
   return (digits && letters) || (/[a-z]/.test(segment) && /[A-Z]/.test(segment));
@@ -367,49 +397,91 @@ export function pathHasSkippedSegment(pathname: string, segments: readonly strin
 /**
  * Whether a path is refused by the segment rules, on a page at `host`: a
  * specific segment (`login`, `api-keys`, `mfa`) anywhere, a pair such as
- * `sessions/new`, and a generic word ({@link GENERIC_SKIP_SEGMENTS}) only
- * where an account page puts it.
+ * `sessions/new`, `secrets` after a secret store's parent, and the words in
+ * {@link GENERIC_SKIP_SEGMENTS} and {@link ACCOUNT_SKIP_SEGMENTS} where an
+ * account page puts them. A documentation, wiki or blog page, or a file in a
+ * repository, is exempt from those words unless its path holds an account area.
  */
 export function pathIsSkippedByRules(
   host: string,
   pathname: string,
   segments: readonly string[],
 ): boolean {
+  const comparable = comparableHost(host);
   const parts = pathSegments(pathname).map((segment) => segment.toLowerCase());
-  const wanted = new Set(segments.map((segment) => segment.toLowerCase()));
-  const reading =
-    READING_HOST.test(comparableHost(host)) ||
-    parts.some((part) => READING_SEGMENTS.has(part) || CODE_VIEW_SEGMENTS.has(part));
+  const specific = new Set(
+    segments
+      .map((segment) => segment.toLowerCase())
+      .filter((name) => !GENERIC_SKIP_SEGMENTS.has(name) && !ACCOUNT_SKIP_SEGMENTS.has(name)),
+  );
+  const codeHost = CODE_HOST.test(comparable);
+  const accountHost = ACCOUNT_HOST.test(comparable);
+  const firstAccountArea = parts.findIndex((part) => ACCOUNT_AREAS.has(part));
+  const codeView = parts.some(
+    (part, index) =>
+      CODE_VIEW_SEGMENTS.has(part) && (codeHost || parts[index - 1] === "-" || index >= 2),
+  );
+  const reading = READING_HOST.test(comparable) || parts.some((part) => READING_SEGMENTS.has(part));
+  const exempt = firstAccountArea < 0 && (codeView || reading);
   return parts.some((part, index) => {
     if (index > 0 && SKIPPED_SEGMENT_PAIRS.some(([a, b]) => parts[index - 1] === a && part === b)) {
       return true;
     }
+    if (part === "secrets" && index > 0 && SECRET_STORE_PARENTS.has(parts[index - 1]!)) return true;
     return segmentNames(part).some((name) => {
-      if (!wanted.has(name) && !GENERIC_SKIP_SEGMENTS.has(name)) return false;
-      if (!GENERIC_SKIP_SEGMENTS.has(name)) return true;
-      if (reading) return false;
-      return index <= 1 || ACCOUNT_AREAS.has(parts[index - 1] ?? "");
+      if (specific.has(name)) return true;
+      const generic = GENERIC_SKIP_SEGMENTS.has(name);
+      if (!generic && !ACCOUNT_SKIP_SEGMENTS.has(name)) return false;
+      if (exempt) return false;
+      const belowAccount = firstAccountArea >= 0 && firstAccountArea < index;
+      if (belowAccount || accountHost) return true;
+      return generic && index <= 1 && !codeHost;
     });
   });
 }
 
 /**
- * The paths a page is judged by: its own, and for a single-page app that
- * routes in the fragment (`/#/settings/tokens`, `/#!/settings/tokens`), the
- * routed path too.
+ * Whether a page's fragment anchor (`#personal-access-tokens`) or one of its
+ * query values (`?section=security_credentials`) names a specific credential
+ * page. Only the specific segments count here: a generic word in a query
+ * names a search as often as a page.
  */
-function judgedPaths(url: URL): string[] {
+function extrasNameCredentialPage(url: URL, segments: readonly string[]): boolean {
+  const specific = new Set(
+    segments
+      .map((segment) => segment.toLowerCase())
+      .filter((name) => !GENERIC_SKIP_SEGMENTS.has(name) && !ACCOUNT_SKIP_SEGMENTS.has(name)),
+  );
+  const values: string[] = [];
+  for (const target of judgedUrls(url)) {
+    for (const value of target.searchParams.values()) values.push(value);
+    if (target.hash && !/^#!?\//.test(target.hash)) values.push(target.hash.slice(1));
+  }
+  return values.some((value) => specific.has(value.trim().toLowerCase()));
+}
+
+/**
+ * The addresses a page is judged by: its own, and for a single-page app that
+ * routes in the fragment (`/#/settings/tokens`, `/#!/settings/tokens`), the
+ * routed address too.
+ */
+function judgedUrls(url: URL): URL[] {
   const route = url.hash.startsWith("#/")
     ? url.hash.slice(1)
     : url.hash.startsWith("#!/")
       ? url.hash.slice(2)
       : null;
-  if (route === null) return [url.pathname];
+  if (route === null) return [url];
   try {
-    return [url.pathname, new URL(route, url.origin).pathname];
+    return [url, new URL(route, url.origin)];
   } catch {
-    return [url.pathname];
+    return [url];
   }
+}
+
+/** The paths a page is judged by; see {@link judgedUrls}. */
+function judgedPaths(url: URL): string[] {
+  return judgedUrls(url).map((target) => target.pathname);
 }
 
 /** Whether a path falls under one of the built-in private message paths of `host`. */
@@ -427,8 +499,10 @@ function pageIsBuiltInSkip(host: string, paths: readonly string[]): boolean {
 /** Whether the path, or a fragment-routed path, is one no browser captures. */
 function pathIsSkipped(url: URL, host: string, policySegments: readonly string[]): boolean {
   const segments = [...DEFAULT_WEB_CAPTURE_RULES.skipPathSegments, ...policySegments];
-  return judgedPaths(url).some(
-    (path) => pathIsSecretLink(path) || pathIsSkippedByRules(host, path, segments),
+  return (
+    judgedPaths(url).some(
+      (path) => pathIsSecretLink(path) || pathIsSkippedByRules(host, path, segments),
+    ) || extrasNameCredentialPage(url, segments)
   );
 }
 

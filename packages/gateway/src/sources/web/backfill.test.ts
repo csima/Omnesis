@@ -270,6 +270,62 @@ describe("redactStoredWebVisits", () => {
     expect(await redactStoredWebVisits(analyticsDb, state)).toBe(0);
   });
 
+  it("merges a moved row into a row already at its cleaned key, keeping the longer dwell and a title", async () => {
+    await analyticsDb.ingestPage({
+      tableName: "page_visits",
+      records: [
+        {
+          url: "https://app.example.org/p?q=1",
+          title: "",
+          browser_profile_label: "Personal",
+          visited_at: "2026-01-15T10:00:00Z",
+          dwell_ms: 4_000,
+        },
+        {
+          url: "https://app.example.org/p?q=1&session_token=S1x",
+          title: "Report",
+          browser_profile_label: "Personal",
+          visited_at: "2026-01-15T10:00:00Z",
+          dwell_ms: 9_000,
+        },
+      ],
+      schema,
+      sourceId: "web",
+    });
+    expect(await redactStoredWebVisits(analyticsDb, state)).toBe(1);
+    const rows = (
+      await analyticsDb.executeQuery("SELECT url, title, dwell_ms FROM page_visits", { limit: 10 })
+    ).rows;
+    expect(rows.map((r) => [String(r[0]), String(r[1]), Number(r[2])])).toEqual([
+      ["https://app.example.org/p?q=1", "Report", 9_000],
+    ]);
+  });
+
+  it("moves 20,000 rows in bounded transactions", async () => {
+    const records = Array.from({ length: 20_000 }, (_, i) => ({
+      url: `https://app.example.org/p/${i}?session_token=S${i}x&q=${i}`,
+      title: "Doc",
+      browser_profile_label: "Personal",
+      visited_at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString(),
+      dwell_ms: 5_000,
+    }));
+    for (let off = 0; off < records.length; off += 5_000) {
+      await analyticsDb.ingestPage({
+        tableName: "page_visits",
+        records: records.slice(off, off + 5_000),
+        schema,
+        sourceId: "web",
+      });
+    }
+    expect(await redactStoredWebVisits(analyticsDb, state)).toBe(20_000);
+    const left = (
+      await analyticsDb.executeQuery(
+        "SELECT count(*) FILTER (WHERE url LIKE '%session_token%'), count(*) FROM page_visits",
+      )
+    ).rows;
+    expect(left[0]!.map(Number)).toEqual([0, 20_000]);
+  }, 120_000);
+
   it("records the pass as done when there is no page_visits table", async () => {
     expect(await redactStoredWebVisits(analyticsDb, state)).toBe(0);
     expect(current).toBe(true);

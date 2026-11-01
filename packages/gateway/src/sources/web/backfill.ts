@@ -248,6 +248,13 @@ export class WebRedactionBackfill {
   }
 }
 
+/**
+ * Visit addresses that might hold a credential: a user and password before
+ * the host, a query or fragment parameter (an `=`), or a shaped token's
+ * prefix. Every other row is skipped by the scan without being read.
+ */
+const VISIT_URL_CANDIDATES = String.raw`url LIKE '%@%' OR url LIKE '%=%' OR regexp_matches(url, '(gh[pousr]_|github_pat_|eyJ|xox[abceoprs]-|sk-|AKIA|ASIA|glpat-|hvs\.|npm_|hf_)')`;
+
 /** The text columns of a web `page_visits` row the stored-visit pass rewrites in place. */
 const VISIT_TEXT_COLUMNS = ["title", "browser_profile_label"];
 
@@ -278,7 +285,9 @@ export interface WebVisitRedactionState {
  * write turn. Titles and browser labels are rewritten in place. An address
  * that still carries a credential parameter or a user and password — rules
  * that came after the row was captured — is part of the row's key, so its row
- * moves to the cleaned key. Shaped rules only, as for stored pages.
+ * moves to the cleaned key; when a row already holds that key the two merge,
+ * keeping the longer dwell and the non-empty title. Shaped rules only, as for
+ * stored pages.
  */
 export async function redactStoredWebVisits(
   analyticsDb: AnalyticsDb,
@@ -292,7 +301,16 @@ export async function redactStoredWebVisits(
     const columns = VISIT_TEXT_COLUMNS.filter((column) => present.has(column));
     changed += await analyticsDb.rewriteTextColumns("page_visits", columns, redactShapedSecrets);
     if (present.has("url")) {
-      changed += await analyticsDb.rewriteKeyColumn("page_visits", "url", storedVisitUrl);
+      const merge = [
+        present.has("dwell_ms")
+          ? `dwell_ms = greatest(COALESCE(dwell_ms, 0), COALESCE(excluded.dwell_ms, 0))`
+          : null,
+        present.has("title") ? `title = COALESCE(NULLIF(title, ''), excluded.title)` : null,
+      ].filter((clause): clause is string => clause !== null);
+      changed += await analyticsDb.rewriteKeyColumn("page_visits", "url", storedVisitUrl, {
+        candidates: VISIT_URL_CANDIDATES,
+        ...(merge.length > 0 ? { onConflict: merge.join(", ") } : {}),
+      });
     }
   }
   await state.markCurrent();

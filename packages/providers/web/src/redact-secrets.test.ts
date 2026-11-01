@@ -85,8 +85,6 @@ describe("redactSecrets", () => {
     ["secret: plain-value", "secret: [redacted]"],
     ["token = abc123def456", "token = [redacted]"],
     ["private_key: abc123def456", "private_key: [redacted]"],
-    ["X-API-Key: abc123def456", "X-API-Key: [redacted]"],
-    ["passphrase=two-words-here", "passphrase=[redacted]"],
     ["pwd=hunter-two", "pwd=[redacted]"],
   ])("redacts the .env-style assignment %s", (input, expected) => {
     expect(redactSecrets(input)).toBe(expected);
@@ -105,12 +103,18 @@ describe("redactSecrets", () => {
     expect(redactSecrets(`Authorization: Basic ${basic}`)).toBe("Authorization: [redacted]");
     expect(redactSecrets(`authorization: basic ${basic}`)).toBe("authorization: [redacted]");
     expect(redactSecrets(`-H "Authorization: Token ${basic}"`)).toBe(
-      '-H "Authorization: [redacted]',
+      '-H "Authorization: [redacted]"',
     );
     expect(redactSecrets(`Authorization: bearer ${basic}`)).toBe("Authorization: [redacted]");
   });
 
   it("redacts the user and password in a URL and in curl -u", () => {
+    expect(redactSecrets(join("redis://:", "Xk9mQ2vLp7", "@cache.example.com:6379/0"))).toBe(
+      "redis://[redacted]@cache.example.com:6379/0",
+    );
+    expect(redactSecrets(join("https://jordan:", "Xk9@mQ2vLp", "@db.example.com/"))).toBe(
+      "https://[redacted]@db.example.com/",
+    );
     expect(redactSecrets("postgres://app:hunter-two@db.example.com:5432/main")).toBe(
       "postgres://[redacted]@db.example.com:5432/main",
     );
@@ -137,29 +141,6 @@ describe("redactSecrets", () => {
     ).toBe(
       "DefaultEndpointsProtocol=https;AccountName=northstar;AccountKey=[redacted];EndpointSuffix=core.windows.net",
     );
-  });
-
-  it("redacts the cells under a credential column of a Markdown table", () => {
-    const table = [
-      "| Service | Password | Notes |",
-      "| --- | --- | --- |",
-      "| Staging | correct-horse | rotate monthly |",
-      "| Backups | battery-staple | |",
-      "",
-      "After the table.",
-    ].join("\n");
-    expect(redactSecrets(table)).toBe(
-      [
-        "| Service | Password | Notes |",
-        "| --- | --- | --- |",
-        "| Staging | [redacted] | rotate monthly |",
-        "| Backups | [redacted] | |",
-        "",
-        "After the table.",
-      ].join("\n"),
-    );
-    const plain = "| Service | Owner |\n| --- | --- |\n| Staging | platform team |";
-    expect(redactSecrets(plain)).toBe(plain);
   });
 
   it("redacts a PGP private key block", () => {
@@ -223,7 +204,7 @@ describe("redactSecrets", () => {
     const secret = `${FILLER}${FILLER.slice(0, 8)}`;
     expect(secret).toHaveLength(40);
     expect(redactSecrets(`aws_secret_access_key = ${secret}`)).toBe(REDACTED_SECRET);
-    expect(redactSecrets(`AWS_SECRET_ACCESS_KEY="${secret}"`)).toBe(`${REDACTED_SECRET}"`);
+    expect(redactSecrets(`AWS_SECRET_ACCESS_KEY="${secret}"`)).toBe(REDACTED_SECRET);
   });
 
   it("keeps a credential's name and redacts the value assigned to it", () => {
@@ -275,11 +256,14 @@ describe("redactSecrets", () => {
     ["refreshToken = Q7rT2mX9pL4v", "refreshToken = [redacted]"],
     ["clientSecret: Q7rT2mX9pL4v", "clientSecret: [redacted]"],
     ["privateKey: Q7rT2mX9pL4v", "privateKey: [redacted]"],
-    ["PGPASSWORD=hunter-two-x", "PGPASSWORD=[redacted]"],
     ["DB_PASS=hunter-two-x", "DB_PASS=[redacted]"],
-    ["SECRET_KEY_BASE=Q7rT2mX9pL4v", "SECRET_KEY_BASE=[redacted]"],
-    ["API_TOKEN_V2=Q7rT2mX9pL4v;", "API_TOKEN_V2=[redacted];"],
-  ])("redacts the camelCase or suffixed name %s", (input, expected) => {
+    ["API_TOKEN=Q7rT2mX9pL4v;", "API_TOKEN=[redacted];"],
+    ["STRIPE_SECRET_KEY=Q7rT2mX9pL4v", "STRIPE_SECRET_KEY=[redacted]"],
+    ["password=!Xk9mQ2vLp", "password=[redacted]"],
+    ["spring.datasource.password=Xk9#mQ2vLp", "spring.datasource.password=[redacted]"],
+    ["define('DB_PASSWORD', 'Xk9#mQ2vLp');", "define('DB_PASSWORD', [redacted]);"],
+    ["<password>Xk9#mQ2vLp</password>", "<password>[redacted]</password>"],
+  ])("redacts the credential name %s", (input, expected) => {
     expect(redactSecrets(input)).toBe(expected);
   });
 
@@ -362,34 +346,190 @@ describe("redactSecrets leaves text that only talks about credentials alone", ()
 });
 
 /**
- * Inputs built to make a backtracking pattern scan its run once per start.
- * Each must finish in well under the budget at 200 KB.
+ * Inputs built to make a backtracking pattern scan its run once per start:
+ * repeated pattern tokens, long runs after an opening tick or a table pipe,
+ * and a minified bundle on one line.
  */
-const PATHOLOGICAL: Array<[string, string]> = [
-  ["eyJ- runs", "eyJ-"],
-  ["a. runs", "a."],
-  ["xoxb- runs", "xoxb-"],
-  ["M runs", "MAAAAAAAAAAAAAAAAAAAAAAAAA."],
-  ["sk- runs", "sk-"],
-  ["digit-colon runs", "1234567890:AA"],
-  ["armour lines", join("-----BEGIN ", "PRIVATE KEY-----")],
-  ["armour with chunks", join("-----BEGIN ", "PRIVATE KEY-----\nQ7rT2mX9pL4vN8kB ")],
-  ["Bearer runs", "Bearer a"],
-  ["assignments", "password=a"],
-  ["quoted assignments", '"token":"'],
-  ["url schemes", "a+b.c-d:"],
-  ["userinfo", "https://a:b"],
-  ["tilde runs", "abc1Q~"],
-  ["code spans", "`a``"],
-  ["table rows", "| Password |\n| --- |\n| x |\n"],
-  ["dotted runs", "hvs.dp.st.ya29.SG."],
+const N = 200_000;
+const tick = "`";
+const PATHOLOGICAL: Array<[string, (size: number) => string]> = [
+  ...(
+    [
+      ["eyJ- runs", "eyJ-"],
+      ["a. runs", "a."],
+      ["xoxb- runs", "xoxb-"],
+      ["M runs", "MAAAAAAAAAAAAAAAAAAAAAAAAA."],
+      ["sk- runs", "sk-"],
+      ["digit-colon runs", "1234567890:AA"],
+      ["armour lines", join("-----BEGIN ", "PRIVATE KEY-----")],
+      ["armour with chunks", join("-----BEGIN ", "PRIVATE KEY-----\nQ7rT2mX9pL4vN8kB ")],
+      ["armour with quoted breaks", join("-----BEGIN ", "PRIVATE KEY-----", "\n>".repeat(50))],
+      ["Bearer runs", "Bearer a"],
+      ["assignments", "password=a"],
+      ["call-like values", "token=("],
+      ["quoted assignments", '"token":"'],
+      ["url schemes", "a+b.c-d:"],
+      ["userinfo", "https://a:b"],
+      ["curl users", " --user 'a:"],
+      ["tilde runs", "abc1Q~"],
+      ["code spans", "`a``"],
+      ["single ticks", "`aaaaaaaaaaaaaaaaaaaa"],
+      ["table rows", "| Password |\n| --- |\n| x |\n"],
+      ["dotted runs", "hvs.dp.st.ya29.SG."],
+    ] as const
+  ).map(
+    ([label, unit]) =>
+      [label, (size: number) => unit.repeat(Math.ceil(size / unit.length)).slice(0, size)] as [
+        string,
+        (size: number) => string,
+      ],
+  ),
+  ["one tick then a long run", (size) => `${tick}${tick} x${tick}${"a".repeat(size)}`],
+  ["table separator with leading spaces", (size) => `|a\n${" ".repeat(size)}x`],
+  ["table separator with trailing spaces", (size) => `|a\n| --- ${" ".repeat(size)}x`],
+  [
+    "minified bundle",
+    (size) => {
+      const unit = "function a(e,t){return e.map(function(n){return n*t+1})};var b=a([1,2,3],4);";
+      let body = "";
+      for (let i = 0; body.length < size; i++)
+        body += i % 600 === 599 ? "var s=`row ${b[0]}`;" : unit;
+      return `\`\`\`js\n${body.slice(0, size)}\n\`\`\``;
+    },
+  ],
 ];
 
-describe("redactSecrets runs in linear time", () => {
-  it.each(PATHOLOGICAL)("%s at 200 KB", (_label, unit) => {
-    const text = unit.repeat(Math.ceil(200_000 / unit.length)).slice(0, 200_000);
+/**
+ * Below this, a run says nothing about its growth: a quadratic pattern takes
+ * seconds on these sizes, and a few milliseconds are scheduling noise.
+ */
+const FLOOR_MS = 25;
+
+/** The fastest of three runs, which keeps a busy host's pauses out of the ratio. */
+function fastest(text: string): number {
+  let best = Infinity;
+  for (let i = 0; i < 3; i++) {
     const started = performance.now();
     redactSecrets(text);
-    expect(performance.now() - started).toBeLessThan(50);
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
+}
+
+/**
+ * Time grows with the text, not faster: four times the input may take at
+ * most six times as long. An absolute budget flakes on a loaded host; a ratio
+ * of the same input at two sizes does not, and a quadratic pattern shows as a
+ * ratio near sixteen. The last term absorbs timer granularity and scheduling
+ * noise on inputs that finish in a few milliseconds.
+ */
+function expectLinear(build: (size: number) => string): void {
+  const small = fastest(build(N / 4));
+  const large = fastest(build(N));
+  expect(large).toBeLessThanOrEqual(Math.max(FLOOR_MS, 6 * small + 5));
+}
+
+describe("redactSecrets runs in linear time", () => {
+  it.each(PATHOLOGICAL)("%s", (_label, build) => {
+    expectLinear(build);
+  });
+
+  /** Inputs built at random from the tokens the patterns are made of. */
+  const TOKENS = [
+    "eyJ",
+    ".",
+    "-",
+    "_",
+    "\\",
+    "`",
+    "``",
+    "|",
+    " ",
+    "\n",
+    "\n> ",
+    "=",
+    ":",
+    "://",
+    "@",
+    "/",
+    "a",
+    "A",
+    "0",
+    "Bearer ",
+    "password",
+    "token",
+    "secret",
+    "api_key",
+    "DB_PASSWORD",
+    "Authorization: ",
+    "Basic ",
+    "xoxb-",
+    "sk-",
+    "ghp_",
+    "AKIA",
+    "hvs.",
+    "SG.",
+    "dp.st.",
+    "-u ",
+    "--user ",
+    "AccountKey=",
+    "aws_secret_access_key",
+    "-----BEGIN ",
+    "PRIVATE KEY-----",
+    "-----END ",
+    "Q~",
+    "M",
+    "<password>",
+    "</password>",
+    "define('",
+    "', '",
+    "${",
+    "{{",
+    "'",
+    '"',
+    "(",
+    ")",
+  ];
+
+  it("stays linear on 200 random token mixes", () => {
+    let seed = 0x5eed;
+    const random = (): number => {
+      seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    for (let round = 0; round < 200; round++) {
+      const unit = Array.from(
+        { length: 4 + Math.floor(random() * 12) },
+        () => TOKENS[Math.floor(random() * TOKENS.length)]!,
+      ).join("");
+      const build = (size: number): string =>
+        unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+      const small = fastest(build(N / 8));
+      const large = fastest(build(N / 2));
+      expect(large, JSON.stringify(unit)).toBeLessThanOrEqual(Math.max(FLOOR_MS, 6 * small + 5));
+    }
+  }, 120_000);
+});
+
+describe("windows over long lines", () => {
+  it("redacts a token that straddles a window boundary, whole and once", () => {
+    const token = join("gh", "p_", FILLER, "AbCd");
+    for (const at of [4096 - 512 - 10, 4096 - 20, 4096 - 512 + 5, 7168 - 3]) {
+      const line = `${"a ".repeat(Math.floor(at / 2))}${token} ${"b ".repeat(3000)}`;
+      const out = redactSecrets(line);
+      expect(out).not.toContain(token.slice(4, 20));
+      expect(out.split(REDACTED_SECRET)).toHaveLength(2);
+      expect(redactSecrets(out)).toBe(out);
+    }
+  });
+
+  it("redacts every token on a minified line of many windows", () => {
+    const token = join("gh", "p_", FILLER, "AbCd");
+    const line = Array.from({ length: 40 }, (_, i) => `var t${i}="${token}";`).join(
+      "x".repeat(400),
+    );
+    const out = redactSecrets(line);
+    expect(out).not.toContain(token.slice(4));
+    expect(out.split(REDACTED_SECRET)).toHaveLength(41);
   });
 });

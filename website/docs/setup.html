@@ -812,11 +812,14 @@ omnesis.example.com {
           tokens, JSON Web Tokens, private keys, API keys with a known prefix (OpenAI and Anthropic
           <code>sk-</code>, AWS, Azure, GitHub, GitLab, Google, Hugging Face, npm, PyPI, SendGrid,
           Slack, Stripe, Discord and Telegram), the password in a URL or a
-          <code>curl -u</code> argument, the key in a connection string, and a value that looks like
-          a credential written after a name such as <code>password:</code>,
-          <code>DB_PASSWORD=</code>, <code>accessToken =</code>, <code>"api_key": </code> or
-          <code>Authorization: Basic</code>, or under a table column named for a password or key. A
-          type, a variable reference or a sentence after such a name is left as it is. When a page
+          <code>curl -u</code> argument, the key in a connection string, the credential in an
+          <code>Authorization</code> header, and a value that looks like a credential assigned to a
+          credential's own name: <code>password</code>, <code>secret</code>, <code>token</code>,
+          <code>api_key</code>, <code>accessToken</code> and the like, an environment name such as
+          <code>DB_PASSWORD</code> or <code>NPM_TOKEN</code>, a
+          <code>&lt;password&gt;</code> element or <code>define('DB_PASSWORD', …)</code>. A name
+          that only contains one (<code>token_endpoint</code>, <code>secret_name</code>), and a
+          type, a reference, a path or a placeholder after a name, is left as it is. When a page
           arrives, the gateway redacts it again, its address and metadata included, and turns away a
           page the capture settings refuse or that has no web address, so a browser that missed
           either cannot store the page. After an upgrade, pages and visits already stored are

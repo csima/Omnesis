@@ -11,12 +11,30 @@
  * every ingested web page through it again as a backstop, so a browser with an
  * older or modified extension cannot put a credential into the corpus either.
  *
- * The rules match credentials by shape — a vendor prefix, a JWT's two encoded
- * JSON segments, a PEM armour line — or by the name it is assigned to
- * (`password: …`, `api_key=…`). Each match is replaced with
- * {@link REDACTED_SECRET}. Redaction is idempotent: redacting already-redacted
- * text changes nothing, so the content hash the gateway stores for a page the
- * extension already redacted is the one the extension computed.
+ * Two kinds of rule:
+ *
+ * - **Shaped** rules match a credential by its own shape: a vendor prefix, a
+ *   JWT's two encoded JSON segments, a private key's armour, a password in a
+ *   URL or a `curl -u`, a connection-string key, an `Authorization` header
+ *   with its scheme. They are precise, so they are also the rules applied to
+ *   text already stored ({@link redactShapedSecrets}).
+ * - **Assignment** rules match a value assigned to one of a short list of
+ *   credential names (`password`, `api_key`, `DB_PASSWORD`, `<password>`,
+ *   `define('DB_PASSWORD', …)`) when the value itself looks like a credential.
+ *
+ * Each match is replaced with {@link REDACTED_SECRET}. Redaction is
+ * idempotent: redacting already-redacted text changes nothing, so the content
+ * hash the gateway stores for a page the extension already redacted is the one
+ * the extension computed.
+ *
+ * Cost is bounded by construction, not by trusting each pattern. Private keys,
+ * the one multi-line rule, are matched only forward from an armour line, over
+ * a bounded body. Every other rule runs one line at a time, and a line longer
+ * than {@link WINDOW_CHARS} is read in overlapping windows, so no pattern ever
+ * sees more than a window however it backtracks. The rules record the spans
+ * they would replace; spans found in overlapping windows are merged before
+ * anything is replaced, so a token on a window boundary is redacted whole and
+ * once.
  *
  * Dependency-free, so it bundles into the extension's content script unchanged.
  */
@@ -31,11 +49,9 @@ export const REDACTED_SECRET = "[redacted]";
  * matches. {@link tok} is one character of `chars`, escaped or not; {@link US}
  * is an underscore, escaped or not.
  *
- * Every pattern starts with {@link from}: a lookbehind that refuses to start
- * inside a run of the characters the credential is made of. A plain `\b`
- * would let a match start at every `-`, `.` or `_` inside a long run, and
- * each start would scan to the end of the run — quadratic time on a page of
- * `eyJ-eyJ-…`. Starting only where a run starts keeps every pattern linear.
+ * Every shaped pattern starts with {@link from}: a lookbehind that refuses to
+ * start inside a run of the characters the credential is made of, so a match
+ * can start only where a run starts.
  */
 const tok = (chars: string): string => String.raw`(?:\\?[${chars}])`;
 const from = (chars: string): string => String.raw`(?<![\\${chars}])`;
@@ -44,6 +60,15 @@ const B64URL = "A-Za-z0-9_-";
 const ALNUM = "A-Za-z0-9";
 const B64URL_DOT = "A-Za-z0-9_.-";
 
+/** Longest piece of a line one pattern is run over. */
+export const WINDOW_CHARS = 4096;
+/** How far consecutive windows overlap; a token up to this long is seen whole in one of them. */
+export const WINDOW_OVERLAP = 512;
+/** Characters before a window a pattern may look back at, so a lookbehind sees what precedes it. */
+const WINDOW_CONTEXT = 64;
+/** Longest private key body read after an armour line. */
+const MAX_KEY_CHARS = 64 * 1024;
+
 /**
  * Characters a page can hide inside a token to break it up: zero-width
  * spaces and joiners, invisible operators and separators, the BOM, soft hyphens.
@@ -51,30 +76,43 @@ const B64URL_DOT = "A-Za-z0-9_.-";
 const HIDDEN_CHARACTERS = /[\u00AD\u200B-\u200D\u2060-\u2064\uFEFF]/g;
 
 /**
- * Two single-backtick code spans whose closing and opening ticks touch, which
- * is how a token split across adjacent `<code>` elements arrives. The first
- * tick must not follow another tick and the last must not precede one, and
- * the first span must hold more than whitespace, so a gap between two spans
- * is never mistaken for a span of its own.
+ * A chain of single-backtick code spans whose closing and opening ticks touch
+ * (`` `ab``cd``ef` ``), which is how a token split across adjacent `<code>`
+ * elements arrives. Each span's text is taken whole by a lookahead and
+ * backreference, which cannot be backtracked into, so the scan is linear. The
+ * first tick must not follow a tick, the last must not precede one, and the
+ * first span must start with a non-space, so the gap between two separate
+ * spans is never read as a span of its own.
  */
-const ADJACENT_CODE_SPANS = /(?<!`)`([^`\n]*[^`\s][^`\n]*)``([^`\n]+)`(?!`)/g;
+const CODE_SPAN_CHAIN =
+  /(?<!`)`(?=([^`\s][^`\n]*))\1``(?:(?=([^`\n]+))\2``)*(?=([^`\n]+))\3`(?!`)/g;
 
 /** The armour lines of a PEM or PGP private key. */
 const PRIVATE_KEY_BEGIN = String.raw`\\?-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----`;
 const PRIVATE_KEY_END = String.raw`\\?-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----`;
-/** A line break, with the blockquote or indent prefix a key quoted in Markdown carries. */
-const KEY_LINE_BREAK = String.raw`\r?\n[ \t>]*`;
 /**
- * A private key: its armour, then base64 chunks of at least 16 characters
- * (a shorter one only as the last before the end marker) and armour headers,
- * with at most one blank line between lines (PGP puts one after its headers),
- * then its end marker if it has one. The body cannot contain prose, so a key
- * with no end marker stops at the first line that is not key material and the
- * rest of the page stays, and a body never runs past another armour line.
+ * What separates the lines of a key: a line break (with the trailing spaces a
+ * Markdown `<br>` leaves before it, and the blockquote or indent prefix a
+ * quoted key carries after it), at most one blank line, or spaces where the
+ * lines were joined into one.
  */
-const KEY_SEPARATOR = String.raw`(?:(?:${KEY_LINE_BREAK}){1,2}|[ \t]+)`;
-const KEY_CHUNK = String.raw`(?:[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/=]{1,15}(?=${KEY_SEPARATOR}${PRIVATE_KEY_END})|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\n]*)`;
-const PRIVATE_KEY = String.raw`${PRIVATE_KEY_BEGIN}(?:${KEY_SEPARATOR}${KEY_CHUNK}){0,1000}(?:${KEY_SEPARATOR}${PRIVATE_KEY_END})?`;
+const KEY_SEPARATOR = String.raw`(?:[ \t]*(?:\r?\n[ \t>]*){1,2}|[ \t]+)`;
+/**
+ * One line of key material: a base64 chunk of at least 16 characters, a
+ * shorter one as the last before the end marker, PGP's `=XXXX` checksum
+ * (Markdown-escaped or not), or an armour header.
+ */
+const KEY_CHUNK = String.raw`(?:[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/=]{1,15}(?=${KEY_SEPARATOR}(?:\\?=[A-Za-z0-9+/]{4}${KEY_SEPARATOR})?${PRIVATE_KEY_END})|\\?=[A-Za-z0-9+/]{4}(?=${KEY_SEPARATOR}${PRIVATE_KEY_END})|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\n]{0,200})`;
+/**
+ * A private key from its armour: key material only, then the end marker if
+ * there is one. The body cannot contain prose, so a key with no end marker
+ * stops at the first line that is not key material and the rest of the page
+ * stays. Sticky: it is only ever tried where an armour line was found.
+ */
+const PRIVATE_KEY = new RegExp(
+  String.raw`${PRIVATE_KEY_BEGIN}(?:${KEY_SEPARATOR}${KEY_CHUNK}){0,1000}(?:${KEY_SEPARATOR}${PRIVATE_KEY_END})?`,
+  "y",
+);
 
 /**
  * Credentials recognised by their own shape. Each alternative names one
@@ -97,8 +135,6 @@ const SHAPED_SECRET = new RegExp(
     String.raw`${from(B64URL)}sk-(?=[A-Za-z]{0,64}[0-9])[A-Za-z0-9]{20,}(?![A-Za-z0-9_-])`,
     // A JSON Web Token: two base64url JSON objects and a signature.
     String.raw`${from(B64URL)}eyJ${tok(B64URL)}{8,}\.eyJ${tok(B64URL)}{8,}\.${tok(B64URL)}*`,
-    // A PEM or PGP private key.
-    PRIVATE_KEY,
     // GitHub classic and fine-grained tokens.
     String.raw`${from(B64URL)}gh[pousr]${US}[A-Za-z0-9]{30,}`,
     String.raw`${from(B64URL)}github${US}pat${US}${tok("A-Za-z0-9_")}{22,}`,
@@ -132,101 +168,95 @@ const SHAPED_SECRET = new RegExp(
     // An Azure AD client secret, which carries `Q~` after its fourth character.
     String.raw`${from("A-Za-z0-9_~.-")}[A-Za-z0-9_~.-]{3}[0-9]Q~${tok("A-Za-z0-9_~.-")}{31,34}(?![A-Za-z0-9_~.-])`,
   ].join("|"),
-  "g",
+  "gd",
 );
 
 /** An AWS secret access key, which has no prefix of its own, after its name. */
 const AWS_SECRET = new RegExp(
   String.raw`${from(ALNUM)}aws${US}secret${US}access${US}key\W{0,5}[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`,
-  "gi",
+  "gid",
 );
 
 /** The key in an Azure storage or Service Bus connection string; the rest of the string stays. */
 const CONNECTION_STRING_KEY =
-  /(?<![A-Za-z0-9])(AccountKey|SharedAccessKey)=[A-Za-z0-9+/]{20,}={0,2}/gi;
+  /(?<![A-Za-z0-9])(?:AccountKey|SharedAccessKey)=([A-Za-z0-9+/]{20,}={0,2})/dgi;
 
-/** The user and password in a URL's authority: `https://user:pass@host`. */
+/**
+ * The user and password in a URL's authority: `https://user:pass@host`, an
+ * empty user (`redis://:pass@host`), and a password that itself holds an `@`
+ * (the last `@` before the host ends it).
+ */
 const URL_USERINFO =
-  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/?#@:]{1,256}:[^\s/?#@]{1,256}@/gi;
+  /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/([^\s/?#@:]{0,256}:[^\s/?#]{1,256})@/dgi;
 
 /** The user and password given to `curl -u` or `--user`. */
 const CURL_USER =
-  /((?:^|[ \t])(?:-u|--user)[ \t]+)(?:"[^"\n:]*:[^"\n]*"|'[^'\n:]*:[^'\n]*'|[^\s"':]+:[^\s"']+)/gm;
+  /(?:^|[ \t])(?:-u|--user)[ \t]+("[^"\n:]{0,256}:[^"\n]{0,256}"|'[^'\n:]{0,256}:[^'\n]{0,256}'|[^\s"':]{1,256}:[^\s"']{1,256})/dg;
 
-/** Replace every credential recognised by its shape alone. */
-function redactShaped(text: string): string {
-  return text
-    .replace(SHAPED_SECRET, REDACTED_SECRET)
-    .replace(AWS_SECRET, REDACTED_SECRET)
-    .replace(CONNECTION_STRING_KEY, `$1=${REDACTED_SECRET}`)
-    .replace(URL_USERINFO, `$1${REDACTED_SECRET}@`)
-    .replace(CURL_USER, `$1${REDACTED_SECRET}`);
+/** An `Authorization` header with its scheme; the scheme and the credential go. */
+const AUTH_HEADER =
+  /(?<![A-Za-z0-9_-])(?:proxy-)?authorization\\?["']?[ \t]*:[ \t]*["']?((?:basic|bearer|token|digest|negotiate)[ \t]+[A-Za-z0-9+/=._~-]{1,512})/dgi;
+
+/** A pattern and the capture group whose span it redacts (0 = the whole match). */
+interface Rule {
+  re: RegExp;
+  group: number;
+  /** A check on the redacted span's text; a span that fails it stays. */
+  accept?: (text: string) => boolean;
 }
 
-/**
- * An identifier followed by an assignment: `password: `, `DB_PASSWORD=`,
- * `"api_key": `, `accessToken = `, including Markdown emphasis around the
- * separator (`**Password:** `). `==`, `===`, `!=`, `=>` and `:=`'s colon are
- * never separators. Only the name and separator are matched; the value is
- * read afterwards, and only for a name that names a credential, so the scan
- * costs the length of the text however many names it holds.
- */
-const ASSIGNMENT = new RegExp(
-  String.raw`(?<![A-Za-z0-9_\\-])([A-Za-z][A-Za-z0-9_\\-]{0,63})(\\?["']?[ \t]*(?<![=!<>:])[:=](?![=>])(?:[ \t]*[*_${"`"}]+)?[ \t]*)`,
-  "g",
-);
+const SHAPED_RULES: readonly Rule[] = [
+  { re: SHAPED_SECRET, group: 0 },
+  { re: AWS_SECRET, group: 0 },
+  { re: CONNECTION_STRING_KEY, group: 1 },
+  { re: URL_USERINFO, group: 1 },
+  { re: CURL_USER, group: 1 },
+  {
+    re: AUTH_HEADER,
+    group: 1,
+    accept: (text) => looksLikeCredential(text.replace(/^\S+[ \t]+/, ""), true),
+  },
+];
 
-/** An assigned value, read where its separator ends: quoted, or up to the next whitespace. */
-const ASSIGNED_VALUE = /"[^"\n]{0,4096}"|'[^'\n]{0,4096}'|\S{1,4096}/y;
-
-/** The words of an identifier: `DB_PASSWORD` → `db password`, `accessToken` → `access token`. */
-function identifierWords(identifier: string): string[] {
-  return identifier
-    .replace(/\\/g, "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .toLowerCase()
-    .split(/[_-]+/)
-    .filter(Boolean);
-}
-
-const CREDENTIAL_WORDS = new Set([
+/** Names whose whole identifier names a credential, compared lowercased with `-` read as `_`. */
+const CREDENTIAL_NAMES = new Set([
   "password",
   "passwd",
-  "passphrase",
-  "passcode",
   "pwd",
   "pass",
   "secret",
-  "token",
+  "client_secret",
+  "clientsecret",
+  "api_key",
   "apikey",
-  "authorization",
-  "credential",
-  "credentials",
-]);
-/** A cheap first test: every credential name contains one of these. */
-const CREDENTIAL_HINT = /pass|pwd|secret|token|key|auth|credential/i;
-const CREDENTIAL_PAIRS = new Set([
-  "api key",
-  "private key",
-  "secret key",
-  "access key",
-  "auth key",
+  "access_token",
+  "accesstoken",
+  "refresh_token",
+  "refreshtoken",
+  "auth_token",
+  "private_key",
+  "privatekey",
+  "secret_key",
+  "secretkey",
+  "aws_secret_access_key",
+  "token",
 ]);
 
+/** An UPPER_SNAKE environment name that ends in a credential word: `DB_PASSWORD`, `NPM_TOKEN`. */
+const CREDENTIAL_ENV_NAME =
+  /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:PASSWORD|PASS|SECRET|TOKEN|API_KEY|SECRET_KEY)$/;
+
 /**
- * Whether an identifier names a credential: one of its words is a credential
- * word (`API_TOKEN_V2`, `DB_PASS`, `clientSecret`), a word ends in `password`
- * (`PGPASSWORD`), or two adjacent words name one (`privateKey`, `x-api-key`).
+ * Whether an identifier names a credential: it is one of a short list of
+ * names (`password`, `api_key`, `clientSecret`, `token`, …) or an UPPER_SNAKE
+ * name ending in `_PASSWORD`, `_PASS`, `_SECRET`, `_TOKEN`, `_API_KEY` or
+ * `_SECRET_KEY`. A name that only contains one (`token_endpoint`,
+ * `secret_name`, `PRIVATE_KEY_FILE`) is not one.
  */
 export function namesCredential(identifier: string): boolean {
-  if (!CREDENTIAL_HINT.test(identifier)) return false;
-  const words = identifierWords(identifier);
-  return words.some(
-    (word, index) =>
-      CREDENTIAL_WORDS.has(word) ||
-      word.endsWith("password") ||
-      (index > 0 && CREDENTIAL_PAIRS.has(`${words[index - 1]} ${word}`)),
+  const name = identifier.replace(/\\/g, "");
+  return (
+    CREDENTIAL_NAMES.has(name.toLowerCase().replace(/-/g, "_")) || CREDENTIAL_ENV_NAME.test(name)
   );
 }
 
@@ -249,118 +279,219 @@ const NOT_CREDENTIALS = new Set([
   "redacted",
 ]);
 
+/** Well-known example passwords, which a tutorial shows and no one is protecting. */
+const EXAMPLE_PASSWORD =
+  /^(?:p[a@4]ss(?:w[o0]rd)?|changeme|hunter2|letmein|qwerty|admin|secret)[0-9!@#$.]*$/i;
+
 /**
  * Whether a value assigned to a credential name looks like a credential
- * rather than code, a type, a reference or prose: at least eight characters,
- * at least two character classes (lower, upper, digit, other), and none of a
- * keyword, a type (`string[]`, `Optional[str]`, `Array<string>`), a variable or
- * template reference (`$DB_PASS`, `${{ secrets.X }}`, `{{ .Values.x }}`,
- * `<your-token>`), a call (`getenv("X")`), an indexing or bracketed
- * expression (`os.environ['X']`), a member access (`settings.SECRET_KEY`), an environment variable name (`DB_PASSWORD`), an
- * operator or a masked placeholder (`********`). A value that follows an
- * explicit authorization scheme (`Basic dXNlcjpwYXNz`) needs only the length
- * and none of those: base64 of a short user and password can be all letters.
+ * rather than code, a type, a reference, a placeholder or prose: at least
+ * eight characters, at least two character classes (lower, upper, digit,
+ * other), and none of:
+ *
+ * - a keyword, a type (`string[]`, `Optional[str]`, `Array<string>`) or a
+ *   well-known example password (`P@ssw0rd!`);
+ * - a reference: `$VAR`, `${…}`, `$(…)`, `%VAR%`, `{{…}}`, `<your-token>`;
+ * - a call or an index on a name (`getenv("X")`, `Token::new(&key)`,
+ *   `os.environ['X']`), a member access
+ *   (`settings.SECRET_KEY`, `process.env.SECRET_KEY!`) or an environment name
+ *   (`DB_PASSWORD`);
+ * - a path (`/run/secrets/x`, `./key`, `~/.ssh/id`) or a URL;
+ * - a mask or placeholder (`********`, `xxxx-xxxx`, `your-api-key`,
+ *   `tok_live_EXAMPLE`), a date or a number with a unit (`3600s`).
+ *
+ * A value that follows an explicit authorization scheme (`Basic dXNlcjpwYXNz`)
+ * skips the shape tests: base64 of a short user and password can be all letters.
  */
 export function looksLikeCredential(raw: string, afterScheme = false): boolean {
-  const value = raw.replace(/^["']|["']$/g, "").replace(/[;,)\]}]+$/, "");
-  if (value.length < 8 || value.length > 4096) return false;
-  if (NOT_CREDENTIALS.has(value.toLowerCase())) return false;
-  if (/^[$%<{!&|>=@#]/.test(value) || value.includes("${") || value.includes("{{")) return false;
-  if (/[()[\]{}<>'"`]/.test(value)) return false;
-  if (/^[A-Za-z_][\w.]*(?:<[^>]*>|\[[^\]]*\])+\??$/.test(value)) return false;
-  if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value)) return false;
-  if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(value) && !/[0-9]/.test(value)) return false;
-  if (/^([*•x.#-])\1*$/i.test(value)) return false;
+  const quoted = /^(["']).*\1$/.test(raw);
+  const value = quoted ? raw.slice(1, -1) : raw.replace(/[;,)\]}`*]+$/, "");
+  if (value.length < 8 || value.length > 512) return false;
+  const lower = value.toLowerCase();
+  if (NOT_CREDENTIALS.has(lower) || EXAMPLE_PASSWORD.test(value)) return false;
+  if (/^(?:\$\{|\$\(|\{\{|<)/.test(value) || value.includes("${")) return false;
+  if (/^\$(?:[A-Z_][A-Z0-9_]*|[a-z_][a-z0-9_]*)$/.test(value) || /^%[A-Za-z_]\w*%$/.test(value)) {
+    return false;
+  }
+  if (/^(?:\/|\.\/|~\/)/.test(value) || value.includes("://")) return false;
+  if (/^[xX*•#._-]+$/.test(value) || /^[xX]{2,}(?:-[xX]{2,})+$/.test(value)) return false;
+  if (/^(?:your|my)[-_ ]/i.test(value) || /example|changeme|placeholder|redacted/i.test(value)) {
+    return false;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(value) || /^\d+(?:\.\d+)?[a-z%]{0,6}$/i.test(value)) return false;
   if (afterScheme) return true;
+  if (/^[A-Za-z_$][A-Za-z_$.:]*[([]/.test(value)) return false;
+  if (/^[A-Za-z_][\w.]*<.*>\??$/.test(value) || /^[A-Za-z_][\w.]*(?:\[\])+$/.test(value)) {
+    return false;
+  }
+  if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+[!?]*$/.test(value)) return false;
+  if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(value) && !/[0-9]/.test(value)) return false;
   if (/^[A-Za-z]+$/.test(value)) return false;
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((re) => re.test(value));
-  return classes.length >= 2;
+  let classes = 0;
+  for (const re of [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/]) if (re.test(value)) classes += 1;
+  return classes >= 2;
 }
 
-/** An authorization scheme followed by its credential. */
-const AUTH_SCHEME = /^(basic|bearer|token|digest|negotiate)[ \t]+(\S+)/i;
-
 /**
- * Redact the value of every assignment whose name names a credential and
- * whose value looks like one. An authorization scheme goes with its
- * credential. A value's trailing `;`, `,` or closing bracket stays.
+ * An identifier followed by an assignment: `password: `, `DB_PASSWORD=`,
+ * `"api_key": `, `accessToken = `, including Markdown emphasis around the
+ * separator (`**Password:** `). `==`, `===`, `!=`, `=>` and `:=` are never
+ * separators. A name never starts right after `.` (a member access), `{`, `$`,
+ * `:` or `-` (`${SECRET_KEY:-x}`, `arn:…:secret:…`). Only the name and
+ * separator are matched; the value is read afterwards, and only for a
+ * credential name.
  */
-function redactAssignments(text: string): string {
-  let out = "";
-  let last = 0;
+const ASSIGNMENT = new RegExp(
+  String.raw`(?<![A-Za-z0-9_\\{$.:-])([A-Za-z][A-Za-z0-9_\\-]{0,63})(\\?["']?[ \t]*(?<![=!<>:])[:=](?![=>:])(?:[ \t]*[*_${"`"}]+)?[ \t]*)`,
+  "g",
+);
+
+/** A properties key at the start of a line: `spring.datasource.password=`. */
+const PROPERTIES_KEY = /^[ \t]*(?:[A-Za-z0-9_-]+\.)+([A-Za-z][A-Za-z0-9_-]*)([ \t]*[=:][ \t]*)/d;
+
+/** An assigned value, read where its separator ends: quoted, or up to the next whitespace. */
+const ASSIGNED_VALUE = /"[^"\n]{0,512}"|'[^'\n]{0,512}'|\S{1,512}(?!\S)/y;
+
+/** PHP's `define('DB_PASSWORD', '…')`. */
+const DEFINE_CALL =
+  /define\(\s*(["'])([A-Za-z_][A-Za-z0-9_]{0,63})\1\s*,\s*(["'][^"'\n]{1,512}["'])/dgi;
+
+/** An XML element named for a credential: `<password>…</password>`. */
+const XML_ELEMENT = /<([A-Za-z][A-Za-z0-9_-]{0,63})>([^<\n]{1,512})<\/\1>/dg;
+
+/** A span of the line to replace, start inclusive and end exclusive. */
+type Span = [number, number];
+
+/** The value of a credential assignment that starts at `valueStart`, as a span, or null. */
+function assignedValueSpan(text: string, valueStart: number): Span | null {
+  ASSIGNED_VALUE.lastIndex = valueStart;
+  const value = ASSIGNED_VALUE.exec(text)?.[0];
+  if (!value || value.startsWith(REDACTED_SECRET) || !looksLikeCredential(value)) return null;
+  const trailing = /^["']/.test(value) ? "" : (/[;,)\]}`*]+$/.exec(value)?.[0] ?? "");
+  return [valueStart, valueStart + value.length - trailing.length];
+}
+
+/** Spans of credential values assigned to credential names in `text`. */
+function assignmentSpans(text: string, atLineStart: boolean): Span[] {
+  const spans: Span[] = [];
   ASSIGNMENT.lastIndex = 0;
   for (let match = ASSIGNMENT.exec(text); match; match = ASSIGNMENT.exec(text)) {
-    const [whole, identifier] = match;
-    const valueStart = match.index + whole.length;
+    const valueStart = match.index + match[0].length;
     ASSIGNMENT.lastIndex = valueStart;
-    if (!namesCredential(identifier!)) continue;
-    ASSIGNED_VALUE.lastIndex = valueStart;
-    const rawValue = ASSIGNED_VALUE.exec(text)?.[0];
-    if (!rawValue || rawValue.startsWith(REDACTED_SECRET)) continue;
-    let value = rawValue;
-    if (!/^["']/.test(rawValue)) {
-      const scheme = AUTH_SCHEME.exec(text.slice(valueStart, valueStart + 4200));
-      if (scheme) value = scheme[0];
+    if (!namesCredential(match[1]!)) continue;
+    const span = assignedValueSpan(text, valueStart);
+    if (span) {
+      spans.push(span);
+      ASSIGNMENT.lastIndex = span[1];
     }
-    const scheme = AUTH_SCHEME.exec(value);
-    if (!looksLikeCredential(scheme?.[2] ?? value, scheme !== null)) continue;
-    const trailing = /^["']/.test(value) ? "" : (/[;,)\]}]+$/.exec(value)?.[0] ?? "");
-    out += text.slice(last, valueStart) + REDACTED_SECRET;
-    last = valueStart + value.length - trailing.length;
-    ASSIGNMENT.lastIndex = last;
+  }
+  if (atLineStart) {
+    const key = PROPERTIES_KEY.exec(text);
+    if (key && namesCredential(key[1]!)) {
+      const span = assignedValueSpan(text, key[0].length);
+      if (span) spans.push(span);
+    }
+  }
+  for (const [re, nameGroup, valueGroup] of [
+    [DEFINE_CALL, 2, 3],
+    [XML_ELEMENT, 1, 2],
+  ] as const) {
+    re.lastIndex = 0;
+    for (let match = re.exec(text); match; match = re.exec(text)) {
+      const [start, end] = match.indices![valueGroup]!;
+      if (namesCredential(match[nameGroup]!) && looksLikeCredential(match[valueGroup]!)) {
+        spans.push([start, end]);
+      }
+    }
+  }
+  return spans;
+}
+
+/** Spans the shaped rules redact in `text`. */
+function shapedSpans(text: string): Span[] {
+  const spans: Span[] = [];
+  for (const rule of SHAPED_RULES) {
+    rule.re.lastIndex = 0;
+    for (let match = rule.re.exec(text); match; match = rule.re.exec(text)) {
+      const [start, end] = match.indices![rule.group]!;
+      if (end > start && (!rule.accept || rule.accept(text.slice(start, end)))) {
+        spans.push([start, end]);
+      }
+      if (match[0].length === 0) rule.re.lastIndex += 1;
+    }
+  }
+  return spans;
+}
+
+/**
+ * The spans to redact in one line, found window by window. Each window
+ * carries {@link WINDOW_CONTEXT} characters of the line before it for
+ * lookbehinds; a match that starts in that context belongs to the previous
+ * window and is skipped.
+ */
+function lineSpans(line: string, withAssignments: boolean): Span[] {
+  const spans: Span[] = [];
+  const step = WINDOW_CHARS - WINDOW_OVERLAP;
+  for (let start = 0; start < line.length; start += step) {
+    const from = Math.max(0, start - WINDOW_CONTEXT);
+    const window = line.slice(from, start + WINDOW_CHARS);
+    const found = shapedSpans(window);
+    if (withAssignments) found.push(...assignmentSpans(window, start === 0));
+    for (const [a, b] of found) {
+      if (from + a >= start || start === 0) spans.push([from + a, from + b]);
+    }
+    if (start + WINDOW_CHARS >= line.length) break;
+  }
+  return spans;
+}
+
+/** Replace the union of `spans` in `text` with {@link REDACTED_SECRET}. */
+function replaceSpans(text: string, spans: Span[]): string {
+  if (spans.length === 0) return text;
+  spans.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
+  let out = "";
+  let last = 0;
+  let open: Span | null = null;
+  for (const span of spans) {
+    if (open && span[0] <= open[1]) {
+      open[1] = Math.max(open[1], span[1]);
+      continue;
+    }
+    if (open) {
+      out += text.slice(last, open[0]) + REDACTED_SECRET;
+      last = open[1];
+    }
+    open = [span[0], span[1]];
+  }
+  if (open) {
+    out += text.slice(last, open[0]) + REDACTED_SECRET;
+    last = open[1];
+  }
+  return out + text.slice(last);
+}
+
+/** Redact every private key, trying the key pattern only where an armour line starts. */
+function redactPrivateKeys(text: string): string {
+  if (!text.includes("-----BEGIN")) return text;
+  let out = "";
+  let last = 0;
+  for (let at = text.indexOf("-----BEGIN"); at >= 0; at = text.indexOf("-----BEGIN", at + 1)) {
+    if (at < last) continue;
+    const start = at > 0 && text[at - 1] === "\\" ? at - 1 : at;
+    const piece = text.slice(start, start + MAX_KEY_CHARS);
+    PRIVATE_KEY.lastIndex = 0;
+    const match = PRIVATE_KEY.exec(piece);
+    if (!match) continue;
+    out += text.slice(last, start) + REDACTED_SECRET;
+    last = start + match[0].length;
   }
   return last === 0 ? text : out + text.slice(last);
 }
 
-/** A Markdown table header cell that names a credential column. */
-const SECRET_COLUMN =
-  /^(?:password|passwd|passphrase|pwd|secret|secret key|private key|api key|apikey|client secret|access key|credential|credentials)$/i;
-const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
-const CELL_DIVIDER = /(?<!\\)\|/;
-
-/** Normalize a header cell for {@link SECRET_COLUMN}: no escapes, emphasis or code ticks, one space between words. */
-function headerName(cell: string): string {
-  return cell
-    .replace(/[\\*`]/g, "")
-    .replace(/[\s_-]+/g, " ")
-    .trim();
-}
-
-/** Redact each cell under a credential-named column of a Markdown table whose value looks like a credential. */
-function redactTableColumns(text: string): string {
-  if (!text.includes("|")) return text;
-  const lines = text.split("\n");
-  for (let i = 0; i + 1 < lines.length; i++) {
-    if (!lines[i]!.trimStart().startsWith("|") || !TABLE_SEPARATOR.test(lines[i + 1]!)) continue;
-    const columns = lines[i]!.split(CELL_DIVIDER)
-      .map((cell, index) => (SECRET_COLUMN.test(headerName(cell)) ? index : -1))
-      .filter((index) => index > 0);
-    let row = i + 2;
-    for (; row < lines.length && lines[row]!.trimStart().startsWith("|"); row++) {
-      if (columns.length === 0) continue;
-      const cells = lines[row]!.split(CELL_DIVIDER);
-      for (const index of columns) {
-        const cell = cells[index]?.replace(/\\/g, "").replace(/`/g, "").trim();
-        if (!cell || !looksLikeCredential(cell)) continue;
-        cells[index] = ` ${REDACTED_SECRET} `;
-      }
-      lines[row] = cells.join("|");
-    }
-    i = row - 1;
-  }
-  return lines.join("\n");
-}
-
-/** Join code spans that touch, until none do. */
+/** Join every chain of touching code spans into one span. */
 function mergeAdjacentCodeSpans(text: string): string {
   if (!text.includes("``")) return text;
-  let previous: string;
-  let merged = text;
-  do {
-    previous = merged;
-    merged = merged.replace(ADJACENT_CODE_SPANS, "`$1$2`");
-  } while (merged !== previous);
-  return merged;
+  return text.replace(CODE_SPAN_CHAIN, (chain) => `\`${chain.slice(1, -1).replace(/``/g, "")}\``);
 }
 
 /** Strip the characters a page can hide inside a token, and join split code spans. */
@@ -368,23 +499,34 @@ function visibleText(text: string): string {
   return mergeAdjacentCodeSpans(text.replace(HIDDEN_CHARACTERS, ""));
 }
 
+/** Apply the line rules to every line of `text`, after its private keys. */
+function redact(text: string, withAssignments: boolean): string {
+  const lines = redactPrivateKeys(visibleText(text)).split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.length > 0) lines[i] = replaceSpans(line, lineSpans(line, withAssignments));
+  }
+  return lines.join("\n");
+}
+
 /**
  * Replace every credential recognised by its shape alone — vendor prefixes,
- * JWTs, private keys, URL and `curl -u` passwords, connection-string keys —
- * with {@link REDACTED_SECRET}. These rules have no false positives worth
- * the name, so they are the ones applied to text already stored.
+ * JWTs, private keys, URL and `curl -u` passwords, connection-string keys,
+ * `Authorization` headers — with {@link REDACTED_SECRET}. These rules have no
+ * false positives worth the name, so they are the ones applied to text
+ * already stored and to addresses.
  */
 export function redactShapedSecrets(text: string): string {
   if (!text) return text;
-  return redactShaped(visibleText(text));
+  return redact(text, false);
 }
 
 /**
  * Replace every credential in `text` with {@link REDACTED_SECRET}: the shaped
  * ones, and a credential-looking value assigned to a credential's name in a
- * `.env` file, YAML, JSON, a header or a table column.
+ * `.env` file, YAML, JSON, a properties file, XML or a header.
  */
 export function redactSecrets(text: string): string {
   if (!text) return text;
-  return redactTableColumns(redactAssignments(redactShaped(visibleText(text))));
+  return redact(text, true);
 }

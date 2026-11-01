@@ -1154,47 +1154,76 @@ export class AnalyticsTableManager {
   }
 
   /**
-   * Rewrite one key column, a page of rows per write turn: a row whose value
-   * `rewrite` changes is copied under the new key and the old row deleted, in
-   * one write slot. A copy whose new key already exists is dropped, so two rows
-   * that now share a key collapse into the one already there. `rewrite` must be
-   * idempotent. Returns the rows moved.
+   * Rewrite one key column, a page of candidate rows per write turn. A row
+   * whose value `rewrite` changes moves to the new key: the page's moves are
+   * loaded into a temporary table, then one transaction copies each row under
+   * its new key and deletes the old rows. When the new key already exists, the
+   * two rows merge through `onConflict` (an `ON CONFLICT DO UPDATE SET …`
+   * clause over `excluded`), or the copy is dropped when none is given.
+   * `candidates` is a SQL predicate that narrows the scan to rows that might
+   * change; `rewrite` must be idempotent. Returns the rows moved.
    */
   async rewriteKeyColumn(
     tableName: string,
     column: string,
     rewrite: (value: string) => string,
-    pageSize = 500,
+    options: { candidates: string; onConflict?: string; pageSize?: number },
   ): Promise<number> {
+    const pageSize = options.pageSize ?? 500;
     const table = quoteIdent(tableName);
     const key = quoteIdent(column);
+    const moves = quoteIdent("_omnesis_key_moves");
+    const conflict = options.onConflict
+      ? `ON CONFLICT DO UPDATE SET ${options.onConflict}`
+      : "ON CONFLICT DO NOTHING";
     let after = -1n;
     let changed = 0;
     for (;;) {
       const page = await this.pool.serializeWrite(() =>
         this.pool.withConn(async ({ conn }) => {
           const reader = await conn.runAndReadAll(
-            `SELECT rowid, ${key} FROM ${table} WHERE rowid > ${after} ORDER BY rowid LIMIT ${pageSize}`,
+            `SELECT rowid, ${key} FROM ${table}
+              WHERE rowid > ${after} AND (${options.candidates})
+              ORDER BY rowid LIMIT ${pageSize}`,
           );
           const rows = reader.getRows() as unknown[][];
-          let pageChanged = 0;
+          const changes: Array<[bigint, string]> = [];
           for (const row of rows) {
             const value = row[1];
             if (typeof value !== "string") continue;
             const next = rewrite(value);
-            if (next === value) continue;
-            const rowid = BigInt(row[0] as bigint);
+            if (next !== value) changes.push([BigInt(row[0] as bigint), next]);
+          }
+          if (changes.length > 0) {
             await conn.run(
-              `INSERT OR IGNORE INTO ${table} SELECT * REPLACE ('${escapeStr(next)}' AS ${key}) FROM ${table} WHERE rowid = ${rowid}`,
+              `CREATE TEMP TABLE IF NOT EXISTS ${moves} (rid BIGINT, new_value VARCHAR)`,
             );
-            await conn.run(`DELETE FROM ${table} WHERE rowid = ${rowid}`);
-            pageChanged += 1;
+            await conn.run(`DELETE FROM ${moves}`);
+            await conn.run(
+              `INSERT INTO ${moves} VALUES ${changes
+                .map(([rid, next]) => `(${rid}, '${escapeStr(next)}')`)
+                .join(", ")}`,
+            );
+            await conn.run("BEGIN TRANSACTION");
+            try {
+              await conn.run(
+                `INSERT INTO ${table}
+                 SELECT ${table}.* REPLACE (m.new_value AS ${key})
+                   FROM ${table} JOIN ${moves} m ON ${table}.rowid = m.rid
+                 ${conflict}`,
+              );
+              await conn.run(`DELETE FROM ${table} WHERE rowid IN (SELECT rid FROM ${moves})`);
+              await conn.run("COMMIT");
+            } catch (error) {
+              await conn.run("ROLLBACK").catch(() => undefined);
+              throw error;
+            }
           }
           const last = rows.length > 0 ? BigInt(rows[rows.length - 1]![0] as bigint) : null;
-          return { last, pageChanged, size: rows.length };
+          return { last, moved: changes.length, size: rows.length };
         }),
       );
-      changed += page.pageChanged;
+      changed += page.moved;
       if (page.last === null || page.size < pageSize) break;
       after = page.last;
     }

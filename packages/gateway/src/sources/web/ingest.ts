@@ -3,7 +3,7 @@
 
 import { computeContentHash, createLogger, normalizeUrl } from "@omnesis/core";
 import { judgeCaptureUrl, type WebCapturePolicy } from "@omnesis/provider-web/capture-policy";
-import { redactSecrets } from "@omnesis/provider-web/redact-secrets";
+import { redactSecrets, redactShapedSecrets } from "@omnesis/provider-web/redact-secrets";
 import { SCOPE_ADMIN, SCOPE_WRITE_ALL, scopeSatisfies, sourceTypeOf } from "@omnesis/types";
 import { ForbiddenError } from "../../http/errors.js";
 import { WEB_SOURCE_ID } from "../../web-dataset.js";
@@ -62,9 +62,11 @@ export function assertCanonicalWebSourceIds(
 
 /**
  * An address as it is stored: without a user or password, normalized (which
- * strips credential params, in the fragment too) and redacted.
+ * strips credential params, in the fragment too) and redacted with the shaped
+ * rules only — an address holds no assignments, and a path such as
+ * `/token=…/docs` must keep its shape.
  */
-function redactUrl(url: string, redact: (text: string) => string = redactSecrets): string {
+function redactUrl(url: string): string {
   let clean = url;
   try {
     const parsed = new URL(url);
@@ -76,7 +78,7 @@ function redactUrl(url: string, redact: (text: string) => string = redactSecrets
   } catch {
     // Not a URL: redacted as text below.
   }
-  return redact(normalizeUrl(clean));
+  return redactShapedSecrets(normalizeUrl(clean));
 }
 
 function redactStrings(value: unknown, redact: (text: string) => string): unknown {
@@ -106,7 +108,7 @@ function redactMetadata(
   const next: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(metadata)) {
     if (key === "documentType") next[key] = value;
-    else if (key === "sourceUrl" && typeof value === "string") next[key] = redactUrl(value, redact);
+    else if (key === "sourceUrl" && typeof value === "string") next[key] = redactUrl(value);
     else next[key] = redactStrings(value, redact);
   }
   return JSON.stringify(next) === JSON.stringify(metadata)

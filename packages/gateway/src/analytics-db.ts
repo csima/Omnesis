@@ -195,8 +195,9 @@ export class AnalyticsDb {
     tableName: string,
     column: string,
     rewrite: (value: string) => string,
+    options: { candidates: string; onConflict?: string; pageSize?: number },
   ): Promise<number> {
-    return this.tables.rewriteKeyColumn(tableName, column, rewrite);
+    return this.tables.rewriteKeyColumn(tableName, column, rewrite, options);
   }
 
   async deleteRecords(tableName: string, ids: string[], pkColumn: string): Promise<number> {
