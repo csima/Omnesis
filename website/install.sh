@@ -5915,6 +5915,11 @@ for NAME in $(env | sed -n 's/^\(OMNESIS_[A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
     OMNESIS_CONFIG_DIR|OMNESIS_GATEWAY_URL|OMNESIS_GATEWAY_PORT) continue ;;
     OMNESIS_DB_PATH|OMNESIS_INDEX_DB_PATH|OMNESIS_ANALYTICS_DB_PATH) continue ;;
     OMNESIS_LOG_FILE|OMNESIS_TLS_CERT|OMNESIS_TLS_KEY) continue ;;
+    # The Access service token is the collector container's, set in its compose
+    # environment. Forwarding a host copy would put the secret on the docker
+    # command line, where any local user can read it, and the secret file names
+    # a host path the container does not mount.
+    OMNESIS_ACCESS_CLIENT_SECRET|OMNESIS_ACCESS_CLIENT_SECRET_FILE) continue ;;
   esac
   # A value containing a newline makes `env` look like it listed another
   # variable; the default keeps that from ending the run under `set -u`.
