@@ -158,7 +158,8 @@ below.
      Contacts purpose linked to the same connection as Gmail, Calendar or Drive (one combined `google` integration) is
      confirmed by that purpose's probe asked with the Contacts token; a Contacts connection of its own still has to name
      its account. A Google rate limit declares no quota bucket: Google counts per-user limits per API, so a Gmail limit
-     leaves the account's Calendar, Drive and Contacts sources running.
+     leaves the account's Calendar, Drive and Contacts sources running (a Contacts check that has to ask a sibling on its
+     shared connection passes over one that fails for the next).
    - **GitHub** (`verifyGithubIdentity`): linking records the numeric `GET /user` id (`userId`), and each
      token's `GET /user` id must equal it. The login is only the account's name: a renamed user still
      matches, and a login another user claims after a rename does not. A binding linked before `userId`

@@ -759,3 +759,54 @@ describe("Contacts on the same connection as Gmail is confirmed through it", () 
     await expect(contacts.sync(null)).rejects.toMatchObject({ kind: "rate-limit" });
   });
 });
+
+describe("Contacts on a shared connection asks People first, then each sibling", () => {
+  test("a People answer matching the recorded person needs no sibling", async () => {
+    const configDir = await configDirWith({
+      ...sharedBinding("gmail", "contacts"),
+      params: { contactsPerson: PERSON },
+    });
+    const net = stubNetwork({
+      google: (url) =>
+        url.pathname === "/gmail/v1/users/me/profile"
+          ? Response.json({ error: { code: 403, message: "Forbidden" } }, { status: 403 })
+          : defaultGoogle(url),
+    });
+    const context = await brokeredContext(configDir);
+    const contacts = await createSource("google-contacts", configDir, context);
+    await expect(contacts.sync(null)).resolves.toBeDefined();
+    expect(
+      net
+        .google("gmail.googleapis.com")
+        .filter((c) => c.url.pathname === "/gmail/v1/users/me/profile"),
+    ).toHaveLength(0);
+  });
+
+  test("a Gmail that refuses is passed over for Calendar on the same connection", async () => {
+    const configDir = await configDirWith(sharedBinding("gmail", "calendar", "contacts"));
+    stubNetwork({
+      google: (url) =>
+        url.pathname === "/gmail/v1/users/me/profile"
+          ? Response.json({ error: { code: 403, message: "Forbidden" } }, { status: 403 })
+          : silentPeople(url),
+    });
+    const context = await brokeredContext(configDir);
+    const contacts = await createSource("google-contacts", configDir, context);
+    await expect(contacts.sync(null)).resolves.toBeDefined();
+  });
+
+  test("only Contacts links through a sibling: a Calendar that cannot name its account is refused", async () => {
+    stubNetwork({
+      google: (url) =>
+        url.pathname === "/calendar/v3/calendars/primary"
+          ? { id: "primary-calendar-id" }
+          : defaultGoogle(url),
+    });
+    await expect(
+      definition.broker!.resolveAccount(
+        new BrokeredCredentials(sharedBinding("gmail", "calendar"), BROKER),
+        {},
+      ),
+    ).rejects.toThrow(/linked .*Calendar connection/);
+  });
+});
