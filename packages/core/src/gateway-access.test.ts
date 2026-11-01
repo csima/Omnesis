@@ -14,6 +14,7 @@ import {
   gatewayAccessOrigin,
   installGatewayAccess,
   isCloudflareAccessRefusedError,
+  isCloudflareRefusalError,
   parseGatewayAccessCredentials,
   readGatewayAccessCredentials,
   removeGatewayAccessCredentials,
@@ -28,28 +29,35 @@ import type { AddressInfo } from "node:net";
 
 const CLIENT_ID = "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f.access";
 const CLIENT_SECRET = "s3cr3t-0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab";
-const CREDENTIALS = { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET };
+const GATEWAY = "https://omnesis.example.com";
+const CREDENTIALS = { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, gatewayOrigin: GATEWAY };
+const ENV_GATEWAY = { OMNESIS_ACCESS_GATEWAY_URL: GATEWAY };
 
 describe("parseGatewayAccessCredentials", () => {
   test("trims both values", () => {
-    expect(parseGatewayAccessCredentials(` ${CLIENT_ID}\n`, `${CLIENT_SECRET}\n`)).toEqual(
-      CREDENTIALS,
-    );
+    expect(
+      parseGatewayAccessCredentials(` ${CLIENT_ID}\n`, `${CLIENT_SECRET}\n`, `${GATEWAY}/`),
+    ).toEqual(CREDENTIALS);
   });
 
   test("refuses an empty or header-unsafe value without quoting it", () => {
-    expect(() => parseGatewayAccessCredentials("", CLIENT_SECRET)).toThrow(/client id/);
-    expect(() => parseGatewayAccessCredentials(CLIENT_ID, "")).toThrow(/client secret/);
+    expect(() => parseGatewayAccessCredentials("", CLIENT_SECRET, GATEWAY)).toThrow(/client id/);
+    expect(() => parseGatewayAccessCredentials(CLIENT_ID, "", GATEWAY)).toThrow(/client secret/);
+    expect(() =>
+      parseGatewayAccessCredentials(CLIENT_ID, CLIENT_SECRET, "http://omnesis.example.com"),
+    ).toThrow(/gateway URL it is for/);
     const mangled = `${CLIENT_SECRET} trailing`;
     let message = "";
     try {
-      parseGatewayAccessCredentials(CLIENT_ID, mangled);
+      parseGatewayAccessCredentials(CLIENT_ID, mangled, GATEWAY);
     } catch (err) {
       message = (err as Error).message;
     }
     expect(message).toMatch(/client secret/);
     expect(message).not.toContain(CLIENT_SECRET);
-    expect(() => parseGatewayAccessCredentials(CLIENT_ID, "line\r\nInjected: 1")).toThrow();
+    expect(() =>
+      parseGatewayAccessCredentials(CLIENT_ID, "line\r\nInjected: 1", GATEWAY),
+    ).toThrow();
   });
 });
 
@@ -79,6 +87,7 @@ describe("reading the service token", () => {
       await readGatewayAccessCredentials(dir, {
         OMNESIS_ACCESS_CLIENT_ID: CLIENT_ID,
         OMNESIS_ACCESS_CLIENT_SECRET: CLIENT_SECRET,
+        ...ENV_GATEWAY,
       }),
     ).toEqual({ ...CREDENTIALS, source: "env" });
     const secretFile = join(dir, "secret");
@@ -87,6 +96,7 @@ describe("reading the service token", () => {
       await readGatewayAccessCredentials(dir, {
         OMNESIS_ACCESS_CLIENT_ID: CLIENT_ID,
         OMNESIS_ACCESS_CLIENT_SECRET_FILE: secretFile,
+        ...ENV_GATEWAY,
       }),
     ).toEqual({ ...CREDENTIALS, source: "env" });
   });
@@ -132,10 +142,12 @@ describe("reading the service token", () => {
     await writeGatewayAccessCredentials(dir, {
       clientId: "saved.access",
       clientSecret: "saved-secret",
+      gatewayOrigin: GATEWAY,
     });
     const loaded = await readGatewayAccessCredentials(dir, {
       OMNESIS_ACCESS_CLIENT_ID: CLIENT_ID,
       OMNESIS_ACCESS_CLIENT_SECRET: CLIENT_SECRET,
+      ...ENV_GATEWAY,
     });
     expect(loaded?.clientId).toBe(CLIENT_ID);
   });
@@ -225,7 +237,7 @@ describe("the headers on the wire", () => {
       socket.destroy();
     });
     gatewayUrl = await listen(gateway);
-    await installGatewayAccess([gatewayUrl], CREDENTIALS);
+    await installGatewayAccess([gatewayUrl], { ...CREDENTIALS, gatewayOrigin: gatewayUrl });
   });
 
   afterAll(async () => {
@@ -275,9 +287,12 @@ describe("the headers on the wire", () => {
   });
 
   test("a plain-http gateway elsewhere is never sent the secret", async () => {
-    expect(await installGatewayAccess(["http://omnesis.example.com:7600"], CREDENTIALS)).toEqual(
-      [],
-    );
+    expect(
+      await installGatewayAccess(["http://omnesis.example.com:7600"], {
+        ...CREDENTIALS,
+        gatewayOrigin: gatewayUrl,
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -325,6 +340,7 @@ describe("enableGatewayAccess", () => {
     const result = await enableGatewayAccess(["https://omnesis.example.com"], tmpdir(), {
       OMNESIS_ACCESS_CLIENT_ID: CLIENT_ID,
       OMNESIS_ACCESS_CLIENT_SECRET: CLIENT_SECRET,
+      ...ENV_GATEWAY,
     });
     expect(result).toEqual({
       clientId: CLIENT_ID,
@@ -342,13 +358,14 @@ describe("cloudflareAccessRefusal", () => {
     headers: new Headers(headers),
     ...extra,
   });
+  const ACCESS_MARK = { "cf-ray": "8f0e", "cf-access-domain": "omnesis.example.com" };
 
   afterEach(async () => {
     await resetGatewayAccessForTests();
   });
 
-  test("a redirect to the team's Access login page", () => {
-    const refusal = cloudflareAccessRefusal(
+  test("a redirect to the team's Access login page", async () => {
+    const refusal = await cloudflareAccessRefusal(
       url,
       response(302, {
         location: "https://fictional-team.cloudflareaccess.com/cdn-cgi/access/login/omnesis",
@@ -358,9 +375,9 @@ describe("cloudflareAccessRefusal", () => {
     expect(refusal?.message).toContain("Cloudflare Access refused this machine");
   });
 
-  test("the login page a followed redirect landed on", () => {
+  test("the login page a followed redirect landed on", async () => {
     expect(
-      cloudflareAccessRefusal(
+      await cloudflareAccessRefusal(
         url,
         response(
           200,
@@ -374,39 +391,40 @@ describe("cloudflareAccessRefusal", () => {
     ).not.toBeNull();
   });
 
-  test("a 403 Cloudflare answered itself, not the gateway's JSON 403", () => {
+  test("a 403 Cloudflare answered itself, not the gateway's JSON 403", async () => {
     expect(
-      cloudflareAccessRefusal(
+      await cloudflareAccessRefusal(
         url,
-        response(403, { "cf-ray": "8f0e", "content-type": "text/html" }),
+        response(403, { ...ACCESS_MARK, "content-type": "text/html" }),
       ),
-    ).not.toBeNull();
+    ).toBeInstanceOf(CloudflareAccessRefusedError);
     expect(
-      cloudflareAccessRefusal(
+      await cloudflareAccessRefusal(
         url,
         response(403, { "cf-ray": "8f0e", "content-type": "application/json" }),
       ),
     ).toBeNull();
     expect(
-      cloudflareAccessRefusal(url, response(403, { "content-type": "text/plain" })),
+      await cloudflareAccessRefusal(url, response(403, { "content-type": "text/plain" })),
     ).toBeNull();
     expect(
-      cloudflareAccessRefusal(url, response(200, { "content-type": "application/json" })),
+      await cloudflareAccessRefusal(url, response(200, { "content-type": "application/json" })),
     ).toBeNull();
   });
 
   test("names the service token it refused by client id, never by secret", async () => {
     await installGatewayAccess(["https://omnesis.example.com"], CREDENTIALS);
-    const refusal = cloudflareAccessRefusal(url, response(403, { "cf-ray": "8f0e" }));
+    const refusal = await cloudflareAccessRefusal(url, response(403, ACCESS_MARK));
     expect(refusal?.message).toContain("Cloudflare Access refused this machine's service token");
     expect(refusal?.message).toContain(CLIENT_ID);
     expect(refusal?.message).not.toContain(CLIENT_SECRET);
     expect(isCloudflareAccessRefusedError(new Error("wrapped", { cause: refusal }))).toBe(true);
+    expect(isCloudflareRefusalError(new Error("wrapped", { cause: refusal }))).toBe(true);
   });
 
-  test("without a token it says none is configured", () => {
-    const refusal = cloudflareAccessRefusal(url, response(403, { "cf-ray": "8f0e" }));
-    expect(refusal?.message).toContain("no service token is configured here");
+  test("without a token it says none is configured", async () => {
+    const refusal = await cloudflareAccessRefusal(url, response(403, ACCESS_MARK));
+    expect(refusal?.message).toContain("no service token for it is configured here");
     expect(refusal?.message).toContain("omnesis gateway access-token set");
   });
 });

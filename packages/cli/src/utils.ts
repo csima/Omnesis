@@ -154,7 +154,9 @@ export async function gatewayFetch(path: string, init: RequestInit = {}): Promis
     );
   }
   const url = path.startsWith("http") ? path : `${GATEWAY_REQUEST_URL}${path}`;
+  // Never followed: a 307 or 308 would resend the request to whatever it names.
   const res = await fetch(url, {
+    redirect: "manual",
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -163,9 +165,9 @@ export async function gatewayFetch(path: string, init: RequestInit = {}): Promis
       ...(init.headers ?? {}),
     },
   });
-  const refusal = cloudflareAccessRefusal(url, res);
+  const refusal = await cloudflareAccessRefusal(url, res);
   if (refusal) {
-    await res.body?.cancel().catch(() => undefined);
+    if (!res.bodyUsed) await res.body?.cancel().catch(() => undefined);
     throw new CliError(refusal.message, EXIT_AUTH);
   }
   return res;

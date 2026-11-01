@@ -12266,7 +12266,9 @@
     {
       "value": "Cloudflare Access",
       "paths": [
+        "packages/collector/src/auth-subprocess-env.test.ts",
         "packages/collector/src/e2e/cloudflare-access.e2e.test.ts",
+        "packages/core/src/gateway-access-binding.test.ts",
         "packages/core/src/gateway-access.test.ts",
         "packages/gateway-client/src/gateway-access.test.ts",
         "scripts/release/install-sh-collector.test.mjs"

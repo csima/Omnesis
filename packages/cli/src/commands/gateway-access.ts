@@ -60,6 +60,12 @@ const setCommand = defineCommand({
     description: "Save the Cloudflare Access service token this machine reaches the gateway with",
   },
   args: {
+    "gateway-url": {
+      type: "string",
+      description:
+        "The gateway the token is for (its Cloudflare Access hostname); it is sent to no other",
+      required: true,
+    },
     id: {
       type: "string",
       description: "The service token's client id (CF-Access-Client-Id)",
@@ -73,6 +79,7 @@ const setCommand = defineCommand({
   },
   async run(ctx) {
     const id = typeof ctx.args.id === "string" ? ctx.args.id : "";
+    const gatewayUrl = typeof ctx.args["gateway-url"] === "string" ? ctx.args["gateway-url"] : "";
     const source = typeof ctx.args["secret-file"] === "string" ? ctx.args["secret-file"] : "";
     if (!source) {
       throw new CliError(
@@ -82,7 +89,7 @@ const setCommand = defineCommand({
     }
     let credentials;
     try {
-      credentials = parseGatewayAccessCredentials(id, readSecretSource(source));
+      credentials = parseGatewayAccessCredentials(id, readSecretSource(source), gatewayUrl);
     } catch (err) {
       if (err instanceof GatewayAccessConfigError) {
         throw new CliError(`${c.red}${err.message}${c.reset}`, EXIT_USER_ERROR);
@@ -101,12 +108,21 @@ const setCommand = defineCommand({
     }
     if (isJSON) {
       console.log(
-        JSON.stringify({ saved: true, clientId: credentials.clientId, ...saved }, null, 2),
+        JSON.stringify(
+          {
+            saved: true,
+            clientId: credentials.clientId,
+            gatewayOrigin: credentials.gatewayOrigin,
+            ...saved,
+          },
+          null,
+          2,
+        ),
       );
       return;
     }
     console.log(
-      `Saved Cloudflare Access service token ${c.bold}${credentials.clientId}${c.reset} to ${saved.path}` +
+      `Saved Cloudflare Access service token ${c.bold}${credentials.clientId}${c.reset} for ${credentials.gatewayOrigin} to ${saved.path}` +
         (saved.encrypted ? " (sealed with this install's root key)." : " (mode 0600)."),
     );
     const hint = restartHint(dir);
@@ -136,6 +152,7 @@ const showCommand = defineCommand({
       ? {
           configured: true,
           clientId: loaded.clientId,
+          gatewayOrigin: loaded.gatewayOrigin,
           source: loaded.source,
           ...(loaded.path ? { path: loaded.path } : {}),
         }
@@ -149,7 +166,7 @@ const showCommand = defineCommand({
       return;
     }
     console.log(
-      `Cloudflare Access service token ${c.bold}${loaded.clientId}${c.reset}, from ` +
+      `Cloudflare Access service token ${c.bold}${loaded.clientId}${c.reset} for ${loaded.gatewayOrigin}, from ` +
         (loaded.source === "env" ? "the environment" : loaded.path) +
         ".",
     );

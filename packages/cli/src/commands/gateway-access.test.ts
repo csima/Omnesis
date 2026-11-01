@@ -17,6 +17,7 @@ const { readGatewayAccessCredentials } = await import("@omnesis/core");
 
 const CLIENT_ID = "5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b.access";
 const CLIENT_SECRET = "fictional-cli-secret-00112233445566778899aabbccddeeff";
+const GATEWAY = "https://omnesis.example.com";
 
 let output: string[] = [];
 
@@ -46,12 +47,13 @@ describe("omnesis gateway access-token", () => {
   test("set saves the token read from a file and never prints the secret", async () => {
     const secretFile = join(directory, "secret.txt");
     writeFileSync(secretFile, `${CLIENT_SECRET}\n`);
-    await run("set", "--id", CLIENT_ID, "--secret-file", secretFile);
+    await run("set", "--gateway-url", GATEWAY, "--id", CLIENT_ID, "--secret-file", secretFile);
 
     const saved = await readGatewayAccessCredentials(configDir, {});
     expect(saved).toMatchObject({
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
+      gatewayOrigin: GATEWAY,
       source: "file",
     });
     expect(output.join("\n")).toContain(CLIENT_ID);
@@ -61,17 +63,30 @@ describe("omnesis gateway access-token", () => {
   test("show names the client id and where it came from, never the secret", async () => {
     const secretFile = join(directory, "secret.txt");
     writeFileSync(secretFile, CLIENT_SECRET);
-    await run("set", "--id", CLIENT_ID, "--secret-file", secretFile);
+    await run("set", "--gateway-url", GATEWAY, "--id", CLIENT_ID, "--secret-file", secretFile);
     output = [];
     await run("show");
     const shown = JSON.parse(output.join("\n")) as Record<string, unknown>;
-    expect(shown).toMatchObject({ configured: true, clientId: CLIENT_ID, source: "file" });
+    expect(shown).toMatchObject({
+      configured: true,
+      clientId: CLIENT_ID,
+      gatewayOrigin: GATEWAY,
+      source: "file",
+    });
     expect(output.join("\n")).not.toContain(CLIENT_SECRET);
   });
 
   test("an unreadable secret file is a usage error that writes nothing", async () => {
     await expect(
-      run("set", "--id", CLIENT_ID, "--secret-file", join(directory, "missing")),
+      run(
+        "set",
+        "--gateway-url",
+        GATEWAY,
+        "--id",
+        CLIENT_ID,
+        "--secret-file",
+        join(directory, "missing"),
+      ),
     ).rejects.toThrow(/Could not read the client secret/);
     expect(existsSync(join(configDir, "gateway-access-credentials.json"))).toBe(false);
   });
@@ -79,18 +94,43 @@ describe("omnesis gateway access-token", () => {
   test("a secret with a space in it is refused without being quoted back", async () => {
     const secretFile = join(directory, "bad.txt");
     writeFileSync(secretFile, `${CLIENT_SECRET} extra`);
-    const err = await run("set", "--id", CLIENT_ID, "--secret-file", secretFile).catch(
-      (e: unknown) => e as Error,
-    );
+    const err = await run(
+      "set",
+      "--gateway-url",
+      GATEWAY,
+      "--id",
+      CLIENT_ID,
+      "--secret-file",
+      secretFile,
+    ).catch((e: unknown) => e as Error);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("client secret");
     expect((err as Error).message).not.toContain(CLIENT_SECRET);
   });
 
+  test("a gateway URL that could not carry the token safely is refused", async () => {
+    const secretFile = join(directory, "secret.txt");
+    writeFileSync(secretFile, CLIENT_SECRET);
+    await expect(
+      runCommand(gatewayAccessTokenCommand, {
+        rawArgs: [
+          "set",
+          "--gateway-url",
+          "http://omnesis.example.com",
+          "--id",
+          CLIENT_ID,
+          "--secret-file",
+          secretFile,
+        ],
+      }),
+    ).rejects.toThrow(/gateway URL it is for/);
+    expect(existsSync(join(configDir, "gateway-access-credentials.json"))).toBe(false);
+  });
+
   test("clear removes the saved token", async () => {
     const secretFile = join(directory, "secret.txt");
     writeFileSync(secretFile, CLIENT_SECRET);
-    await run("set", "--id", CLIENT_ID, "--secret-file", secretFile);
+    await run("set", "--gateway-url", GATEWAY, "--id", CLIENT_ID, "--secret-file", secretFile);
     const path = join(configDir, "gateway-access-credentials.json");
     expect(readFileSync(path, "utf8")).toBeTruthy();
     await run("clear");

@@ -51,9 +51,13 @@ beforeAll(async () => {
       c.req.header("cf-access-client-secret") !== CLIENT_SECRET
     ) {
       refused.push(path);
-      return c.html("<html><body>Forbidden</body></html>", 403, {
-        "cf-ray": "8f0e1d2c3b4a5968-SJC",
-      });
+      return c.html(
+        '<html><body>Forbidden <a href="/cdn-cgi/access/logout">Sign out</a></body></html>',
+        403,
+        {
+          "cf-ray": "8f0e1d2c3b4a5968-SJC",
+        },
+      );
     }
     admitted.push(path);
     await next();
@@ -106,14 +110,22 @@ afterAll(async () => {
 
 describe("HttpGatewayClient behind Cloudflare Access", () => {
   test("sends the service token with every request", async () => {
-    await installGatewayAccess([gatewayUrl], { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
+    await installGatewayAccess([gatewayUrl], {
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      gatewayOrigin: gatewayUrl,
+    });
     const client = new HttpGatewayClient(gatewayUrl, DEVICE_TOKEN);
     await expect(client.getConfig()).resolves.toEqual({ config: {}, version: 7 });
     expect(admitted).toEqual(["/config"]);
   });
 
   test("a refusal is named as Access refusing this machine, once, and without the secret", async () => {
-    await installGatewayAccess([gatewayUrl], { clientId: CLIENT_ID, clientSecret: "wrong-secret" });
+    await installGatewayAccess([gatewayUrl], {
+      clientId: CLIENT_ID,
+      clientSecret: "wrong-secret",
+      gatewayOrigin: gatewayUrl,
+    });
     const client = new HttpGatewayClient(gatewayUrl, DEVICE_TOKEN);
     const err = await client.getConfig().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CloudflareAccessRefusedError);
@@ -140,14 +152,18 @@ describe("HttpGatewayClient behind Cloudflare Access", () => {
     );
     const client = new HttpGatewayClient("https://omnesis.example.com", DEVICE_TOKEN);
     await expect(client.getConfig()).rejects.toThrow(
-      /Cloudflare Access refused this machine for https:\/\/omnesis\.example\.com: .*no service token is configured/,
+      /Cloudflare Access refused this machine for https:\/\/omnesis\.example\.com: .*no service token for it is configured/,
     );
   });
 });
 
 describe("GatewayWsClient behind Cloudflare Access", () => {
   test("the WebSocket upgrade carries the service token, so the hello is answered", async () => {
-    await installGatewayAccess([gatewayUrl], { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
+    await installGatewayAccess([gatewayUrl], {
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      gatewayOrigin: gatewayUrl,
+    });
     const client = new GatewayWsClient(gatewayUrl, DEVICE_TOKEN, { reconnectDelay: 50 });
     client.connect();
     try {

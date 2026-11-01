@@ -75,7 +75,7 @@ function startAccessEdge(
     if (decision === "forbid") {
       log.forbidden.push(path);
       res.writeHead(403, { "content-type": "text/html", "cf-ray": "8f0e1d2c3b4a5968-SJC" });
-      res.end("<html><body>Forbidden</body></html>");
+      res.end('<html><body>Forbidden <a href="/cdn-cgi/access/logout">Sign out</a></body></html>');
       return;
     }
     log.admitted.push(path);
@@ -188,6 +188,8 @@ describe("a gateway behind Cloudflare Access", () => {
       "gateway",
       "access-token",
       "set",
+      "--gateway-url",
+      edge.url,
       "--id",
       CLIENT_ID,
       "--secret-file",
@@ -229,7 +231,7 @@ describe("a gateway behind Cloudflare Access", () => {
     expect(run.exitCode).not.toBe(0);
     const said = `${run.stdout}${run.stderr}`;
     expect(said).toContain("Cloudflare Access refused this machine");
-    expect(said).toContain("no service token is configured here");
+    expect(said).toContain("no service token for it is configured here");
     expect(log.redirected).toContain("/devices/pair");
   }, 90_000);
 
@@ -317,7 +319,11 @@ describe("a gateway behind Cloudflare Access", () => {
   }, 120_000);
 
   test("a sync push with a revoked token is refused as Access, without retrying", async () => {
-    await installGatewayAccess([edge.url], { clientId: CLIENT_ID, clientSecret: WRONG_SECRET });
+    await installGatewayAccess([edge.url], {
+      clientId: CLIENT_ID,
+      clientSecret: WRONG_SECRET,
+      gatewayOrigin: edge.url,
+    });
     const forbiddenBefore = log.forbidden.length;
     const client = new HttpGatewayClient(edge.url, "omn_unused");
     const err = await client.getConfig().catch((e: unknown) => e);

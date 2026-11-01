@@ -584,11 +584,16 @@ omnesis.example.com {
           so traffic is decrypted there before the tunnel carries it to the gateway.
         </p>
         <p>
-          A collector or CLI with a service token sends it as the
-          <code>CF-Access-Client-Id</code> and <code>CF-Access-Client-Secret</code> headers on every
-          request to the gateway and on the WebSocket upgrade, and to no other address. It is sent
-          only over <code>https://</code>. Cloudflare's certificate chains to a public authority, so
-          pairing and the collector verify it without a pin. Leave out
+          A service token is saved together with the gateway URL it is for, and is sent to that
+          gateway alone: as the <code>CF-Access-Client-Id</code> and
+          <code>CF-Access-Client-Secret</code> headers on every request and on the WebSocket
+          upgrade, never to another URL the machine is later pointed at, never to a gateway found on
+          the local network, and never in a redirect. It is sent only over <code>https://</code>,
+          and is refused while certificate verification is off (<code
+            >NODE_TLS_REJECT_UNAUTHORIZED=0</code
+          >
+          or <code>OMNESIS_INSECURE_TLS</code>). Cloudflare's certificate chains to a public
+          authority, so pairing and the collector verify it without a pin. Leave out
           <code>--trust-fingerprint</code>: the fingerprint the gateway prints is of its own
           certificate, which the edge does not serve.
         </p>
@@ -609,16 +614,17 @@ omnesis.example.com {
           </div>
         </div>
         <p>
-          The role saves the token before it pairs, sealed by the host's root key like the device
-          token, and the collector service reads it on every start. To set it on a machine that is
-          already installed, or to replace a rotated one, run
+          The role saves the token, bound to <code>--gateway-url</code>, before it pairs, sealed by
+          the host's root key like the device token, and the collector service reads it on every
+          start. To set it on a machine that is already installed, or to replace a rotated one, run
           <code>omnesis gateway access-token set</code> and restart the collector;
           <code>--secret-file -</code> reads the secret from stdin.
-          <code>omnesis gateway access-token show</code> names the client id in use, never the
-          secret, and <code>clear</code> removes it. <code>OMNESIS_ACCESS_CLIENT_ID</code> with
-          <code>OMNESIS_ACCESS_CLIENT_SECRET</code> or
-          <code>OMNESIS_ACCESS_CLIENT_SECRET_FILE</code>
-          set the token for one process instead, and take precedence over the saved one.
+          <code>omnesis gateway access-token show</code> names the client id and its gateway, never
+          the secret, and <code>clear</code> removes it. <code>OMNESIS_ACCESS_CLIENT_ID</code> and
+          <code>OMNESIS_ACCESS_GATEWAY_URL</code> with <code>OMNESIS_ACCESS_CLIENT_SECRET</code> or
+          <code>OMNESIS_ACCESS_CLIENT_SECRET_FILE</code> set the token for one process instead, and
+          take precedence over the saved one; an inline secret is removed from the environment once
+          read, so no process the collector starts inherits it.
         </p>
         <div class="term">
           <div class="term-bar"><span></span><span></span><span></span></div>
@@ -626,8 +632,8 @@ omnesis.example.com {
             <p>
               <span class="t-prompt">❯</span>
               <span class="t-cmd"
-                >omnesis gateway access-token set --id &lt;client id&gt; --secret-file
-                ~/access-secret</span
+                >omnesis gateway access-token set --gateway-url https://omnesis.example.com --id
+                &lt;client id&gt; --secret-file ~/access-secret</span
               >
             </p>
             <p>
@@ -639,7 +645,8 @@ omnesis.example.com {
         <p>
           When Access refuses a request, by redirecting it to its login page or answering
           <code>403</code> itself, the CLI and the collector say so: Cloudflare Access refused this
-          machine's service token, naming its client id, or no service token is configured. The
+          machine's service token, naming its client id, or no service token is configured. A
+          request a Cloudflare firewall rule blocks is named as that instead, with its ray ID. The
           pairing code is not spent by a refused redeem, so retry it once the token is fixed.
         </p>
 

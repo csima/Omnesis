@@ -128,18 +128,35 @@ function ocrEnabledFromConfig(config: OmnesisConfig): boolean {
  * trust flow as the first-sight fingerprint — a non-interactive collector on
  * a fresh host can then trust the discovered gateway without a TTY prompt.
  */
-export async function resolveGatewayUrl(): Promise<{ url: string; fingerprint?: string }> {
-  const override = process.env.OMNESIS_GATEWAY_URL;
-  if (override) return { url: override };
+export interface GatewayUrlResolution {
+  url: string;
+  /** Where the URL came from: the operator's setting, the LAN, or the built-in default. */
+  source: "env" | "mdns" | "default";
+  fingerprint?: string;
+}
 
-  if (process.env.OMNESIS_MDNS_DISABLE === "1") return { url: DEFAULT_GATEWAY_URL };
+export async function resolveGatewayUrl(): Promise<GatewayUrlResolution> {
+  const override = process.env.OMNESIS_GATEWAY_URL;
+  if (override) return { url: override, source: "env" };
+
+  if (process.env.OMNESIS_MDNS_DISABLE === "1")
+    return { url: DEFAULT_GATEWAY_URL, source: "default" };
 
   const discovered = await discoverGatewayViaMdns({ timeoutMs: 3000 });
   if (discovered) {
     log.info(`Discovered gateway via mDNS at ${discovered.url}`);
-    return { url: discovered.url, fingerprint: discovered.fingerprint };
+    return { url: discovered.url, source: "mdns", fingerprint: discovered.fingerprint };
   }
-  return { url: DEFAULT_GATEWAY_URL };
+  return { url: DEFAULT_GATEWAY_URL, source: "default" };
+}
+
+/**
+ * The gateway URLs the Cloudflare Access service token may be offered to:
+ * only one the operator named. A gateway found over mDNS is whatever answered
+ * on the LAN, and the default is this machine, which Access never fronts.
+ */
+export function gatewayAccessTargets(resolution: GatewayUrlResolution): string[] {
+  return resolution.source === "env" ? [resolution.url] : [];
 }
 
 /** Convert the engine's source-id buckets into the numeric WS acknowledgement contract. */
@@ -246,9 +263,9 @@ export async function waitForGateway(
       const res = await fetch(`${gatewayUrl}/health`);
       // Access answers a refused request with its login page, a 200 that is
       // not the gateway; the gateway is only up when it answers itself.
-      const refusal = cloudflareAccessRefusal(`${gatewayUrl}/health`, res);
+      const refusal = await cloudflareAccessRefusal(`${gatewayUrl}/health`, res);
       accessRefused = refusal?.message ?? null;
-      if (refusal) await res.body?.cancel().catch(() => undefined);
+      if (refusal && !res.bodyUsed) await res.body?.cancel().catch(() => undefined);
       else if (res.ok) return gatewayUrl;
     } catch (err) {
       if (isTlsCertError(err) && Date.now() >= nextTrustAttempt) {
@@ -300,11 +317,11 @@ async function probeTokenStatus(gatewayUrl: string, token: string): Promise<numb
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    await res.body?.cancel().catch(() => undefined);
-    // Access turning the probe away says nothing about the device token: the
-    // gateway never saw it, so it is no answer rather than a 401 or a 200.
-    if (cloudflareAccessRefusal(`${gatewayUrl}/config`, res)) return null;
-    return res.status;
+    // Cloudflare turning the probe away says nothing about the device token:
+    // the gateway never saw it, so it is no answer rather than a 401 or a 200.
+    const refused = (await cloudflareAccessRefusal(`${gatewayUrl}/config`, res)) !== null;
+    if (!res.bodyUsed) await res.body?.cancel().catch(() => undefined);
+    return refused ? null : res.status;
   } catch {
     return null;
   }
@@ -513,7 +530,8 @@ export async function main() {
     process.exit(1);
   });
 
-  const { url: requestedGatewayUrl, fingerprint } = await resolveGatewayUrl();
+  const resolution = await resolveGatewayUrl();
+  const { url: requestedGatewayUrl, fingerprint } = resolution;
 
   // A gateway discovered over mDNS publishes its TLS fingerprint in the
   // service TXT record. It stands in for OMNESIS_TRUST_FINGERPRINT on first
@@ -525,7 +543,7 @@ export async function main() {
   // token on every request and on the WebSocket upgrade. Read before the first
   // request, so the trust probe below already carries it.
   try {
-    await enableGatewayAccess([requestedGatewayUrl], configDir);
+    await enableGatewayAccess(gatewayAccessTargets(resolution), configDir);
   } catch (err) {
     log.error(`Cannot start: ${toErrorMessage(err)}`);
     await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));

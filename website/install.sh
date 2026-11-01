@@ -134,8 +134,8 @@
 #   --access-client-secret-file <file>
 #                                  (--collector) a file holding that token's
 #                                  client secret. It is saved like the device
-#                                  token and sent on every request and on the
-#                                  WebSocket upgrade to the gateway.
+#                                  token, bound to --gateway-url, and sent on
+#                                  every request and WebSocket upgrade to it.
 #   --docker                       run the gateway and collector as containers on
 #                                  this machine instead of as user services. The
 #                                  daemons come from published, version-tagged
@@ -4266,7 +4266,7 @@ validate_access_flags() {
   [ "$COLLECTOR" = 1 ] || \
     fail "--access-client-id and --access-client-secret-file are only meaningful with --collector."
   [ "$DOCKER" = 0 ] || \
-    fail "--access-client-id and --access-client-secret-file configure a native collector; under --docker, set OMNESIS_ACCESS_CLIENT_ID and OMNESIS_ACCESS_CLIENT_SECRET_FILE for the collector container instead."
+    fail "--access-client-id and --access-client-secret-file configure a native collector; under --docker, set OMNESIS_ACCESS_CLIENT_ID, OMNESIS_ACCESS_CLIENT_SECRET_FILE and OMNESIS_ACCESS_GATEWAY_URL for the collector container instead."
   [ -n "$ACCESS_CLIENT_ID" ] || fail "--access-client-secret-file needs --access-client-id, the token's client id."
   [ -n "$ACCESS_CLIENT_SECRET_FILE" ] || \
     fail "--access-client-id needs --access-client-secret-file, a file holding the token's client secret."
@@ -4277,13 +4277,15 @@ validate_access_flags() {
 }
 
 # Save the Access service token before anything dials the gateway, so the
-# redeem and the collector daemon both send it. After the keyring step, so the
-# saved secret is sealed by this host's root key when there is one.
+# redeem and the collector daemon both send it, bound to the gateway named
+# here: no other URL this machine is later pointed at receives it. After the
+# keyring step, so the saved secret is sealed by this host's root key when
+# there is one.
 collector_save_access_token() {
   [ -n "$ACCESS_CLIENT_ID" ] || return 0
   info "Saving the Cloudflare Access service token $ACCESS_CLIENT_ID..."
-  "$OMNESIS_BIN" gateway access-token set --id "$ACCESS_CLIENT_ID" \
-    --secret-file "$ACCESS_CLIENT_SECRET_FILE" </dev/null || \
+  "$OMNESIS_BIN" gateway access-token set --gateway-url "$PAIR_GATEWAY_URL" \
+    --id "$ACCESS_CLIENT_ID" --secret-file "$ACCESS_CLIENT_SECRET_FILE" </dev/null || \
     fail "Could not save the Cloudflare Access service token; nothing was paired. Its message above says why."
 }
 

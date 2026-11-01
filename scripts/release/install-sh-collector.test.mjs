@@ -532,7 +532,7 @@ describe("install.sh --collector: a gateway behind Cloudflare Access", () => {
       { OMNESIS_TEST_COLLECTOR_ONLINE: ACCESS_URL },
     );
     expect(run.status, run.output).toBe(0);
-    const set = `gateway access-token set --id ${ACCESS_ID} --secret-file ${secret}`;
+    const set = `gateway access-token set --gateway-url ${ACCESS_URL} --id ${ACCESS_ID} --secret-file ${secret}`;
     expect(callStartingWith(run.calls, "gateway access-token")).toBe(set);
     expect(run.calls.indexOf(set)).toBeLessThan(
       run.calls.findIndex((call) => call.startsWith("pair ")),

@@ -972,9 +972,9 @@ export async function redeemPairingCode(
           body: JSON.stringify(body),
         }),
       );
-      const refusal = cloudflareAccessRefusal(`${gatewayUrl}/devices/pair`, res);
+      const refusal = await cloudflareAccessRefusal(`${gatewayUrl}/devices/pair`, res);
       if (refusal) {
-        await res.body?.cancel().catch(() => undefined);
+        if (!res.bodyUsed) await res.body?.cancel().catch(() => undefined);
         throw new CliError(`${c.red}${refusal.message}${c.reset}`, EXIT_AUTH);
       }
       failureStatus = res.ok ? null : res.status;
