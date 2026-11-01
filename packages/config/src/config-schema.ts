@@ -3679,10 +3679,43 @@ const multiDevice = z
   })
   .strict();
 
+/**
+ * A `webCapture.ownSites` entry as a bare lowercase host, or `""` when it names
+ * none. Accepts a pasted URL, a leading `*.` or dot, a single-label LAN host
+ * (`agents`), an IPv4 address and a bracketed IPv6 address (`[fd00::1]`).
+ */
+export function normalizeWebCaptureSite(input: string): string {
+  let value = input.trim().toLowerCase();
+  if (value.startsWith("*.")) value = value.slice(2);
+  value = value.replace(/^\.+/, "");
+  if (!value) return "";
+  let host: string;
+  try {
+    host = new URL(/^[a-z][a-z0-9+.-]*:\/\//.test(value) ? value : `https://${value}`).hostname;
+  } catch {
+    return "";
+  }
+  host = host.replace(/\.+$/, "");
+  if (!host || host.length > 253) return "";
+  if (host.startsWith("[") || /^\d+(?:\.\d+){3}$/.test(host)) return host;
+  return host
+    .split(".")
+    .every((label) => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+    ? host
+    : "";
+}
+
 const webCapture = z
   .object({
     ownSites: z
-      .array(z.string().max(253))
+      .array(
+        z
+          .string()
+          .max(253)
+          .refine((entry) => normalizeWebCaptureSite(entry) !== "", {
+            message: "not a host name (agents.example.com, a URL, *.example.com or [fd00::1])",
+          }),
+      )
       .default([])
       .describe(
         "Hosts of your own tools that no paired browser captures, such as an agent host and the web apps its agents serve (agents.example.com, apps.example.com). Each entry also covers its subdomains. Every browser reads the list from the gateway, and a browser cannot remove an entry.",

@@ -54,7 +54,8 @@ import { SyntheticE2EHarness } from "./synth-harness.js";
  *   (8) the operator's own sites, set once in the gateway's config, are in the
  *       policy every browser reads, and the built-in mail, messaging and
  *       password-manager sites and credential paths are refused with no
- *       policy entry at all;
+ *       policy entry at all — by the browser's judge and again by the
+ *       gateway on ingest;
  *   (9) a page pushed with credentials in its text — by a browser that did not
  *       redact them — is stored with them redacted, on both planes.
  *
@@ -649,6 +650,24 @@ describe("Browser-capture push path (spawned gateway)", () => {
       allowed: false,
       reason: "built-in-domain",
     });
+    // The gateway applies the same verdicts on ingest: a browser that ignored
+    // them gets its page turned away, like one deleted for good.
+    const pusher = newClient(new MemStore());
+    for (const url of ["https://agents.example.net/browser", "https://vault.bitwarden.com/vault"]) {
+      await pusher.enqueueDocument(
+        await buildWebPageDocument({
+          normalizedUrl: url,
+          title: `Invented page at ${url}`,
+          text: `Invented body for ${url}, long enough to be kept by the extractor.`,
+          contentHash: await hashText(url),
+          visitedAt: new Date().toISOString(),
+          browserProfile,
+        }),
+      );
+    }
+    const before = await webDocCount();
+    expect(await pusher.drain()).toMatchObject({ delivered: 0, suppressed: 2 });
+    expect(await webDocCount()).toBe(before);
     for (const url of [
       "https://code.example.org/settings/tokens",
       "https://cloud.example.org/account/api-keys",

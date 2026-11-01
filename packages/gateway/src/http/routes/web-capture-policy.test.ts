@@ -522,3 +522,120 @@ describe("secret redaction on ingest", () => {
     expect(rows.map((row) => String(row[0]))).toEqual(["Runbook [redacted]"]);
   });
 });
+
+describe("the backstop on ingest", () => {
+  /** Invented credential, assembled at run time so no scanner matches this file. */
+  const token = ["gh", "p_", "Q7rT2mX9pL4vN8kB3cZ6wY1hJ5dF0sGaAbCd"].join("");
+  const visitsSchema: AnalyticsTableSchema = {
+    tableName: "page_visits",
+    displayName: "Page visits",
+    description: "Invented visits",
+    columns: [
+      { name: "url", type: "VARCHAR", description: "Page URL", references: "url" },
+      { name: "title", type: "VARCHAR", description: "Title", nullable: true },
+      { name: "visited_at", type: "TIMESTAMPTZ", description: "When" },
+    ],
+    primaryKey: ["url", "visited_at"],
+    semanticTimeColumn: "visited_at",
+    record: { titleColumns: ["title", "url"], keyColumns: ["url", "visited_at"] },
+  };
+
+  test("a browser token cannot write web:<account> documents or visits", async () => {
+    const page = { ...webPage("https://a.example/alt"), sourceId: "web:alt", title: `T ${token}` };
+    const docs = await call("/documents", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ documents: [page] }),
+    });
+    expect(docs.status).toBe(403);
+    const visits = await call("/analytics/ingest", browserToken, {
+      method: "POST",
+      body: JSON.stringify({
+        tableName: "page_visits",
+        sourceId: "web:alt",
+        schema: visitsSchema,
+        records: [
+          { url: "https://a.example/alt", title: `T ${token}`, visited_at: "2026-01-15T10:00:00Z" },
+        ],
+      }),
+    });
+    expect(visits.status).toBe(403);
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM documents WHERE source_id LIKE 'web%'").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  test("pages and visits the capture policy refuses are turned away, named as suppressed", async () => {
+    app = createServer(db, undefined, {
+      analyticsDb,
+      config: { webCapture: { ownSites: ["agents.example.net"] } } as OmnesisConfig,
+    });
+    expect(
+      (
+        await call("/web-capture-policy/excluded-domains", browserToken, {
+          method: "POST",
+          body: JSON.stringify({ domain: "bank.example" }),
+        })
+      ).status,
+    ).toBe(200);
+    const refused = [
+      "https://vault.bitwarden.com/vault",
+      "https://agents.example.net/browser",
+      "https://online.bank.example/statements",
+      "https://code.example.org/settings/tokens",
+    ];
+    const result = await pushPages(...refused, "https://blog.example.org/post");
+    expect(result.ingested).toBe(1);
+    expect(result.suppressed).toEqual(refused.map((url) => `id-${url}`));
+    expect(webDocUrls()).toEqual(["https://blog.example.org/post"]);
+
+    const visits = await call("/analytics/ingest", browserToken, {
+      method: "POST",
+      body: JSON.stringify({
+        tableName: "page_visits",
+        sourceId: "web",
+        schema: visitsSchema,
+        records: [
+          {
+            url: "https://agents.example.net/browser",
+            title: "Agents",
+            visited_at: "2026-01-15T10:00:00Z",
+          },
+          {
+            url: "https://blog.example.org/post",
+            title: "Post",
+            visited_at: "2026-01-15T10:00:00Z",
+          },
+        ],
+      }),
+    });
+    expect(visits.status).toBe(200);
+    const rows = (await analyticsDb.executeQuery("SELECT url FROM page_visits", { limit: 10 }))
+      .rows;
+    expect(rows.map((row) => String(row[0]))).toEqual(["https://blog.example.org/post"]);
+  });
+
+  test("a page's address and metadata are redacted before they are stored", async () => {
+    const page = {
+      ...webPage("https://maya:hunter-two@a.example/#/cb?access_token=abc&tab=2"),
+      metadata: {
+        sourceUrl: "https://maya:hunter-two@a.example/#/cb?access_token=abc&tab=2",
+        tags: [`tag ${token}`],
+        extra: { browserProfileLabel: `Work ${token}` },
+      },
+    };
+    const res = await call("/documents", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ documents: [page] }),
+    });
+    expect(res.status).toBe(200);
+    const stored = db
+      .prepare<[], { source_url: string; metadata: string }>(
+        "SELECT source_url, metadata FROM documents WHERE source_id = 'web'",
+      )
+      .get()!;
+    expect(stored.source_url).toBe("https://a.example/#/cb?tab=2");
+    expect(stored.metadata).not.toContain(token);
+    expect(stored.metadata).not.toContain("access_token");
+    expect(stored.metadata).not.toContain("hunter-two");
+  });
+});

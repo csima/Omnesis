@@ -757,8 +757,9 @@ omnesis.example.com {
           others) are skipped, so a page is not captured twice. A collector announces those sites
           when it starts, so until one has connected, none are skipped, and duplicates are removed
           at search time instead. Mail, messaging and password-manager sites (Gmail, Outlook, Proton
-          Mail, Slack, WhatsApp Web, Telegram, Discord, 1Password, Bitwarden and others) are skipped
-          from the start, whether or not a collector has connected. The extension never captures:
+          Mail, Slack, WhatsApp Web, Telegram, Discord, 1Password, Bitwarden and others), and the
+          message pages of Facebook and LinkedIn, are skipped from the start, whether or not a
+          collector has connected. The extension never captures:
         </p>
         <ul>
           <li>pages in incognito or private windows, and any page that is not HTTPS;</li>
@@ -780,8 +781,10 @@ omnesis.example.com {
         <p>
           <strong>Your own sites.</strong> To keep the browser away from your own tools, such as an
           agent host and the web apps its agents serve, list their hosts once on the gateway; each
-          entry also covers its subdomains, and every paired browser skips them. A browser cannot
-          remove an entry.
+          entry also covers its subdomains, and every paired browser skips them. An entry is a host
+          name (a leading <code>*.</code> is allowed), a single-label LAN name, an IP address or a
+          pasted URL; the gateway refuses a configuration with an entry that names no host. A
+          browser cannot remove an entry.
         </p>
         <div class="term">
           <div class="term-bar"><span></span><span></span><span></span></div>
@@ -804,10 +807,14 @@ omnesis.example.com {
           before it is recorded. Credentials shown on the page itself are replaced with
           <code>[redacted]</code> in the title and text before the page leaves the browser: bearer
           tokens, JSON Web Tokens, private keys, API keys with a known prefix (OpenAI and Anthropic
-          <code>sk-</code>, AWS, GitHub, GitLab, Google, Slack and Stripe), and a value written
-          after a name such as <code>password:</code> or <code>api_key=</code>. The gateway redacts
-          every captured page again when it arrives, so a browser that did not redact a credential
-          cannot store it either.
+          <code>sk-</code>, AWS, Azure, GitHub, GitLab, Google, Hugging Face, npm, PyPI, SendGrid,
+          Slack, Stripe, Discord and Telegram), the password in a URL or a
+          <code>curl -u</code> argument, the key in a connection string, a value written after a
+          name such as <code>password:</code>, <code>DB_PASSWORD=</code>,
+          <code>"api_key": </code> or <code>Authorization: Basic</code>, and the cells under a table
+          column named for a password, token or key. When a page arrives, the gateway redacts it
+          again, its address and metadata included, and turns away a page the capture settings
+          refuse, so a browser that missed either cannot store the page.
         </p>
         <p>
           The capture token can add pages but cannot search or read. The extension loads no remote

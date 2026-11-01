@@ -3,34 +3,54 @@
 
 /**
  * The fields that make a page one the extension never records: a password, a
- * one-time code, or a payment card's number, expiry or security code. Pages
- * that carry them are sign-in, verification, checkout and account pages,
- * whose text is about the user's credentials rather than content worth
+ * one-time code or PIN, or a payment card's number, expiry or security code.
+ * Pages that carry them are sign-in, verification, checkout and account
+ * pages, whose text is about the user's credentials rather than content worth
  * indexing.
  *
- * Inputs are recognised by what the page declares about them — the
- * `autocomplete` tokens the HTML standard defines for these fields
- * (`one-time-code`, `cc-number`, `cc-csc`, …) — and, for card forms that
- * declare nothing, by the name or id a card field conventionally carries.
+ * An input is recognised by what the page declares about it — its `type`, and
+ * the `autocomplete` tokens the HTML standard defines for these fields
+ * (`one-time-code`, `current-password`, `cc-number`, `cc-csc`, …), compared
+ * token by token — and, for forms that declare nothing, by the words in its
+ * name or id (`cardNumber`, `cc_num`, `security-code`, `otp`, `pin`). Words
+ * are matched whole, after splitting camelCase, so `discvc` or a
+ * `section-acc-1` autocomplete section is not mistaken for a card field.
  */
-export const SENSITIVE_FIELD_SELECTOR = [
-  'input[type="password" i]',
-  'input[autocomplete~="one-time-code" i]',
-  'input[autocomplete~="current-password" i]',
-  'input[autocomplete~="new-password" i]',
-  'input[autocomplete*="cc-" i]',
-  'input[name*="cardnumber" i]',
-  'input[name*="card-number" i]',
-  'input[name*="card_number" i]',
-  'input[id*="cardnumber" i]',
-  'input[name*="cvc" i]',
-  'input[name*="cvv" i]',
-  'input[id*="cvc" i]',
-  'input[id*="cvv" i]',
-].join(",");
+
+/** `autocomplete` tokens that name a credential or payment-card field outright. */
+const SENSITIVE_AUTOCOMPLETE = new Set(["one-time-code", "current-password", "new-password"]);
+
+/** Card-number spellings found inside longer names (`creditCardNumber`, `ccnum`). */
+const CARD_NUMBER_INSIDE = /card[_-]?number|cc[_-]?num/;
+
+/** Words that name a code or card field when they stand alone in a name or id. */
+const SENSITIVE_WORD =
+  /(?:^|[^a-z])(?:cvc|cvv|csc|otp|pin|security[_-]?code|verification[_-]?code)(?=$|[^a-z])/;
+
+/** A name or id split at camelCase humps and lowercased: `cardCvc` → `card_cvc`, `OTPCode` → `otp_code`. */
+function words(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+/** Whether one input is a password, one-time-code, PIN or payment-card field. */
+export function isSensitiveInput(input: Element): boolean {
+  if ((input.getAttribute("type") ?? "").trim().toLowerCase() === "password") return true;
+  const tokens = (input.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
+  if (tokens.some((token) => SENSITIVE_AUTOCOMPLETE.has(token) || token.startsWith("cc-"))) {
+    return true;
+  }
+  for (const attribute of ["name", "id"]) {
+    const value = words(input.getAttribute(attribute) ?? "");
+    if (value && (CARD_NUMBER_INSIDE.test(value) || SENSITIVE_WORD.test(value))) return true;
+  }
+  return false;
+}
 
 /** A document or an open shadow root: anything a selector can be run against. */
-type FieldRoot = Pick<ParentNode, "querySelector" | "querySelectorAll">;
+type FieldRoot = Pick<ParentNode, "querySelectorAll">;
 
 /**
  * Whether `root` carries a sensitive field, looking through every open shadow
@@ -38,7 +58,8 @@ type FieldRoot = Pick<ParentNode, "querySelector" | "querySelectorAll">;
  * by design, and so is their content: the extractor cannot read it either.
  */
 export function hasSensitiveField(root: FieldRoot): boolean {
-  if (root.querySelector(SENSITIVE_FIELD_SELECTOR)) return true;
+  const inputs = root.querySelectorAll("input");
+  for (let i = 0; i < inputs.length; i++) if (isSensitiveInput(inputs[i]!)) return true;
   const elements = root.querySelectorAll("*");
   for (let i = 0; i < elements.length; i++) {
     const shadow = (elements[i] as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;

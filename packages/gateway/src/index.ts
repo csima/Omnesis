@@ -43,6 +43,7 @@ import { ReleaseCheckService } from "./release-check/service.js";
 import { createReleaseCheckTask } from "./release-check/task.js";
 import { GatewayHttpShutdown } from "./gateway-http-shutdown.js";
 import { seedWebSourceMeta } from "./sources/web/source-meta.js";
+import { redactStoredWebVisits } from "./sources/web/backfill.js";
 import { dictationFeatureStatus } from "./dictation/index.js";
 import { documentsAwaitingTranscription } from "./voice-notes/index.js";
 import {
@@ -1153,6 +1154,13 @@ const analyticsDb = new AnalyticsDb(analyticsDbPath, {
   onFatal: () => requestShutdown(1),
 });
 await analyticsDb.open();
+// Visits captured before ingest redacted them are redacted in the background,
+// a page of rows per write turn; once done, each later boot finds nothing to change.
+void redactStoredWebVisits(analyticsDb).catch((error: unknown) =>
+  log.warn(
+    `Redacting stored page visits failed: ${error instanceof Error ? error.message : String(error)}`,
+  ),
+);
 // Cross-store search hydration: a hit whose source declares a
 // `boundDocument` carries its co-described analytics row when the request sets
 // `includeBoundRow`. Wired here (not at pipeline construction) because the

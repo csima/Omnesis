@@ -3,6 +3,7 @@
 
 import { z } from "zod";
 import { createLogger, hostIsOwned } from "@omnesis/core";
+import { normalizeWebCaptureSite } from "@omnesis/config";
 import { SourceId, type DeviceId, type Scope } from "@omnesis/types";
 import {
   DEFAULT_WEB_CAPTURE_RULES,
@@ -88,6 +89,26 @@ export class WebCapturePolicyService {
     return this.deps.now?.() ?? Date.now();
   }
 
+  /**
+   * The policy ingest judges captured pages by: the settings, owned domains,
+   * own sites and rules, without the removed-pages list (ingest refuses those
+   * pages through their tombstones) and without the pause (a page captured
+   * before a pause began is still delivered).
+   */
+  ingestPolicy(): WebCapturePolicy {
+    const stored = this.storedSettings();
+    return {
+      updatedAt: stored.updatedAt,
+      pause: null,
+      excludedDomains: stored.excludedDomains,
+      ownedDomains: [...this.deps.ownedDomains()],
+      ownSites: this.ownSites(),
+      rules: DEFAULT_WEB_CAPTURE_RULES,
+      removedPages: [],
+      removedPagesTruncated: false,
+    };
+  }
+
   /** The policy every paired browser enforces. */
   read(): WebCapturePolicy {
     const stored = this.storedSettings();
@@ -161,7 +182,7 @@ export class WebCapturePolicyService {
   private ownSites(): string[] {
     const sites = new Set<string>();
     for (const entry of this.deps.ownSites?.() ?? []) {
-      const domain = normalizeCaptureDomain(entry);
+      const domain = normalizeWebCaptureSite(entry);
       if (domain) sites.add(domain);
       else log.warn(`Ignoring webCapture.ownSites entry "${entry}": not a valid host`);
     }

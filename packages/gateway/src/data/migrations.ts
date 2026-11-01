@@ -89,6 +89,7 @@ import {
 import { createTranscriptionVocabularyState } from "../transcribe/vocabulary/rebuild.js";
 import { installTranscriptionVocabulary } from "../transcribe/vocabulary/storage.js";
 import { createNoteAgentTables } from "../brain/note-agent/storage.js";
+import { redactStoredWebPages } from "../sources/web/backfill.js";
 import { migrateV152AccessGrants } from "./migration-152-access-grants.js";
 import { migrateV153AccessPolicyFamilies } from "./migration-153-access-policy-families.js";
 import { markLinkStatsDirty } from "./DirtyMarks.js";
@@ -4880,6 +4881,13 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 206,
     description: "agent hosts that say who is calling, and the access level of each host agent",
     up: createHostAgentGrantTables,
+  },
+  {
+    version: 207,
+    description: "redact credentials from the web pages captured before ingest redacted them",
+    up(db) {
+      redactStoredWebPages(db);
+    },
   },
 ];
 

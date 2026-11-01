@@ -11,6 +11,7 @@ import {
   changedPathsFromPatch,
   toJsonPointer,
   resolveSourceSettings,
+  normalizeWebCaptureSite,
   type OmnesisConfig,
 } from "./config-schema.js";
 
@@ -135,6 +136,31 @@ describe("validateConfig — releaseCheck", () => {
       expect(validateConfig({ releaseCheck }).ok).toBe(false);
     },
   );
+});
+
+describe("validateConfig — webCapture.ownSites", () => {
+  test.each([
+    ["agents.example.com", "agents.example.com"],
+    ["https://Apps.Example.com/browser", "apps.example.com"],
+    ["*.apps.example.com", "apps.example.com"],
+    [".apps.example.com.", "apps.example.com"],
+    ["agents", "agents"],
+    ["192.0.2.10", "192.0.2.10"],
+    ["[fd00::1]", "[fd00::1]"],
+    ["https://[fd00::1]:8443/", "[fd00::1]"],
+  ])("normalizes %s to %s", (input, host) => {
+    expect(normalizeWebCaptureSite(input)).toBe(host);
+  });
+
+  test("accepts valid entries and rejects one that names no host", () => {
+    expect(validateConfig({ webCapture: { ownSites: ["*.apps.example.com", "agents"] } }).ok).toBe(
+      true,
+    );
+    for (const entry of ["not a host", "", "*.", "-bad-.example.com"]) {
+      const result = validateConfig({ webCapture: { ownSites: [entry] } });
+      expect(result.ok, entry).toBe(false);
+    }
+  });
 });
 
 describe("validateConfig — gateway.pushRelay", () => {

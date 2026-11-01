@@ -181,6 +181,15 @@ export class AnalyticsDb {
     return this.tables.insertRecords(tableName, records, primaryKey);
   }
 
+  /** See `AnalyticsTableManager.rewriteTextColumns`. */
+  async rewriteTextColumns(
+    tableName: string,
+    columns: readonly string[],
+    rewrite: (value: string) => string,
+  ): Promise<number> {
+    return this.tables.rewriteTextColumns(tableName, columns, rewrite);
+  }
+
   async deleteRecords(tableName: string, ids: string[], pkColumn: string): Promise<number> {
     return this.tables.deleteRecords(tableName, ids, pkColumn);
   }

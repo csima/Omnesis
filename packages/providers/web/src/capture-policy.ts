@@ -94,14 +94,19 @@ export const DEFAULT_WEB_CAPTURE_RULES: WebCaptureRules = {
     "saml",
     "mfa",
     "2fa",
+    "two-factor",
     "credentials",
+    "security_credentials",
+    "token",
     "tokens",
+    "api-tokens",
     "access-tokens",
     "personal-access-tokens",
     "secrets",
     "api-keys",
     "apikeys",
     "api_keys",
+    "keys",
     "checkout",
     "payment",
     "payments",
@@ -132,17 +137,30 @@ export const BUILT_IN_SKIP_DOMAINS: readonly string[] = [
   "protonmail.com",
   "icloud.com",
   "fastmail.com",
-  "hooks.slack.com",
+  "outlook.cloud.microsoft",
+  "teams.live.com",
+  "slack.com",
   "web.whatsapp.com",
   "web.telegram.org",
   "messenger.com",
-  "app.slack.com",
   "discord.com",
+  "discordapp.com",
   "1password.com",
+  "my.1password.eu",
   "bitwarden.com",
+  "vault.bitwarden.eu",
   "lastpass.com",
   "dashlane.com",
   "keepersecurity.com",
+];
+
+/**
+ * Sites whose private messages live under one path of an otherwise public
+ * site: every browser skips that path, on the site and its subdomains.
+ */
+export const BUILT_IN_SKIP_PAGES: ReadonlyArray<readonly [domain: string, pathPrefix: string]> = [
+  ["facebook.com", "/messages"],
+  ["linkedin.com", "/messaging"],
 ];
 
 /** Cloudflare Access's sign-in and token exchange, which lives under one path on any host. */
@@ -154,11 +172,27 @@ const CLOUDFLARE_ACCESS_PATH = /\/cdn-cgi\/access(?:[/.]|$)/i;
  * `/reset/<token>` or `/verify-email/<token>`. The token is the long segment
  * after the keyword.
  */
-const TOKEN_LINK_PATH = /\/(?:reset|verify|invite|magic)[\w-]*\/[^/]{16,}/i;
+const TOKEN_LINK_PATH =
+  /\/(?:reset|verify|invite|magic|accept-invitation|activate)[\w-]*\/[^/]{16,}/i;
 
 /** Whether `pathname` is one every browser skips on its shape alone, whatever the policy. */
 export function pathIsSecretLink(pathname: string): boolean {
-  return CLOUDFLARE_ACCESS_PATH.test(pathname) || TOKEN_LINK_PATH.test(pathname);
+  const path = decodePath(pathname);
+  return CLOUDFLARE_ACCESS_PATH.test(path) || TOKEN_LINK_PATH.test(path);
+}
+
+/** `pathname` with its percent-escapes decoded; a malformed escape leaves it as it is. */
+function decodePath(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
+}
+
+/** A host as the rules compare it: lowercase, without the trailing dot of a fully qualified name. */
+export function comparableHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.+$/, "");
 }
 
 /** Upper bound on `removedPages` in one policy response. */
@@ -212,19 +246,21 @@ export function pauseRemainingMs(pause: WebCapturePause | null, now: number): nu
 
 /**
  * Whether any path segment of `pathname` equals one of `segments`
- * (case-insensitive), with or without a file extension: `/login` and
- * `/login.php` both match `login`.
+ * (case-insensitive, after decoding), with or without a file extension or
+ * matrix parameters: `/login`, `/%4Cogin`, `/login.php` and
+ * `/login;jsessionid=x` all match `login`.
  */
 export function pathHasSkippedSegment(pathname: string, segments: readonly string[]): boolean {
   if (segments.length === 0) return false;
   const wanted = new Set(segments.map((segment) => segment.toLowerCase()));
   for (const raw of pathname.split("/")) {
-    let segment = raw.toLowerCase();
+    let segment = raw;
     try {
       segment = decodeURIComponent(segment);
     } catch {
       // A malformed escape is compared literally.
     }
+    segment = segment.toLowerCase().split(";")[0]!;
     if (!segment) continue;
     if (wanted.has(segment)) return true;
     const dot = segment.indexOf(".");
@@ -235,15 +271,33 @@ export function pathHasSkippedSegment(pathname: string, segments: readonly strin
 
 /**
  * The paths a page is judged by: its own, and for a single-page app that
- * routes in the fragment (`/#/settings/tokens`), the routed path too.
+ * routes in the fragment (`/#/settings/tokens`, `/#!/settings/tokens`), the
+ * routed path too.
  */
 function judgedPaths(url: URL): string[] {
-  if (!url.hash.startsWith("#/")) return [url.pathname];
+  const route = url.hash.startsWith("#/")
+    ? url.hash.slice(1)
+    : url.hash.startsWith("#!/")
+      ? url.hash.slice(2)
+      : null;
+  if (route === null) return [url.pathname];
   try {
-    return [url.pathname, new URL(url.hash.slice(1), url.origin).pathname];
+    return [url.pathname, new URL(route, url.origin).pathname];
   } catch {
     return [url.pathname];
   }
+}
+
+/** Whether a path falls under one of the built-in private message paths of `host`. */
+function pageIsBuiltInSkip(host: string, paths: readonly string[]): boolean {
+  return BUILT_IN_SKIP_PAGES.some(
+    ([domain, prefix]) =>
+      hostIsOwned(host, [domain]) &&
+      paths.some((path) => {
+        const lower = decodePath(path).toLowerCase();
+        return lower === prefix || lower.startsWith(`${prefix}/`);
+      }),
+  );
 }
 
 /** Whether the path, or a fragment-routed path, is one no browser captures. */
@@ -287,14 +341,14 @@ export function judgeCaptureUrl(
   } catch {
     return { allowed: false, reason: "invalid-url" };
   }
-  const host = parsed.hostname.toLowerCase();
+  const host = comparableHost(parsed.hostname);
   if (hostIsOwned(host, [context.gatewayHost])) return { allowed: false, reason: "gateway-host" };
   if (hostIsOwned(host, policy.ownSites ?? [])) return { allowed: false, reason: "own-site" };
   if (hostIsOwned(host, policy.excludedDomains)) {
     return { allowed: false, reason: "excluded-domain" };
   }
   if (hostIsOwned(host, policy.ownedDomains)) return { allowed: false, reason: "owned-domain" };
-  if (hostIsOwned(host, BUILT_IN_SKIP_DOMAINS)) {
+  if (hostIsOwned(host, BUILT_IN_SKIP_DOMAINS) || pageIsBuiltInSkip(host, judgedPaths(parsed))) {
     return { allowed: false, reason: "built-in-domain" };
   }
   if (pathIsSkipped(parsed, policy.rules.skipPathSegments)) {

@@ -28,6 +28,16 @@ describe("hasSensitiveField", () => {
     ["a card number with an id for it", '<input id="cardnumber-field">'],
     ["a CVC named for it", '<input name="card_cvc">'],
     ["a CVV with an id for it", '<input id="checkout-cvv">'],
+    ["a camelCase CVC name", '<input name="cardCvc">'],
+    ["a card number inside a longer name", '<input name="creditCardNumber">'],
+    ["a cc_num name", '<input name="cc_num">'],
+    ["a ccnum id", '<input id="ccnum">'],
+    ["a security code name", '<input name="security-code">'],
+    ["a CSC name", '<input name="card_csc">'],
+    ["an OTP name", '<input name="otp">'],
+    ["an OTPCode id", '<input id="OTPCode">'],
+    ["a verification code name", '<input name="verification_code">'],
+    ["a PIN name", '<input name="pin">'],
   ])("finds %s", (_label, field) => {
     expect(hasSensitiveField(page(`<form>${field}</form>`))).toBe(true);
   });
@@ -40,6 +50,19 @@ describe("hasSensitiveField", () => {
     const inner = innerHost.attachShadow({ mode: "open" });
     inner.innerHTML = '<input autocomplete="cc-number">';
     expect(hasSensitiveField(doc)).toBe(true);
+  });
+
+  it.each([
+    [
+      "an autocomplete section that only contains cc-",
+      '<input autocomplete="section-acc-1 email">',
+    ],
+    ["a name with cvc inside a word", '<input name="discvc">'],
+    ["a shipping field", '<input name="shipping_method">'],
+    ["a spinner", '<input id="spinner">'],
+    ["an otpauth label", '<input name="otpauthor">'],
+  ])("does not mistake %s for a sensitive field", (_label, field) => {
+    expect(hasSensitiveField(page(`<form>${field}</form>`))).toBe(false);
   });
 
   it("passes an ordinary form and an ordinary shadow root", () => {

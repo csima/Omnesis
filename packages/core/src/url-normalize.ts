@@ -219,8 +219,42 @@ export const CREDENTIAL_PARAMS: ReadonlySet<string> = new Set([
 
 function isCredentialParam(key: string, keys: ReadonlySet<string>): boolean {
   const lower = key.toLowerCase();
-  if (CREDENTIAL_PARAMS.has(lower) || lower.startsWith("x-amz-")) return true;
+  if (
+    CREDENTIAL_PARAMS.has(lower) ||
+    lower.endsWith("_token") ||
+    lower.startsWith("x-amz-") ||
+    lower.startsWith("x-goog-")
+  ) {
+    return true;
+  }
   return (lower === "code" || lower === "state") && keys.has("code") && keys.has("state");
+}
+
+/**
+ * Remove credential params from a query string carried in a fragment, as an
+ * OAuth implicit flow or a single-page app's router returns it:
+ * `#/callback?access_token=…` or `#access_token=…&state=…`. The fragment is
+ * rewritten only when a param goes, so every other routed fragment keeps its
+ * exact spelling, and with it its identity.
+ */
+function stripFragmentCredentials(hash: string): string {
+  const body = hash.slice(1);
+  const query = body.indexOf("?");
+  const [route, search] =
+    query >= 0
+      ? [body.slice(0, query + 1), body.slice(query + 1)]
+      : body.includes("=") && !body.includes("/")
+        ? ["", body]
+        : [body, ""];
+  if (!search) return hash;
+  const params = new URLSearchParams(search);
+  const keys = new Set([...params.keys()].map((key) => key.toLowerCase()));
+  const credentials = [...params.keys()].filter((key) => isCredentialParam(key, keys));
+  if (credentials.length === 0) return hash;
+  for (const key of credentials) params.delete(key);
+  const kept = params.toString();
+  const rebuilt = kept ? `${route}${kept}` : route.replace(/\?$/, "");
+  return rebuilt ? `#${rebuilt}` : "";
 }
 
 /**
@@ -229,7 +263,8 @@ function isCredentialParam(key: string, keys: ReadonlySet<string>): boolean {
  * Generic rules (no source-specific knowledge):
  * - Lowercase hostname
  * - Strip well-known tracking params ({@link TRACKING_PARAMS}) and
- *   credential-bearing params ({@link CREDENTIAL_PARAMS})
+ *   credential-bearing params ({@link CREDENTIAL_PARAMS}, any `*_token`,
+ *   `x-amz-*` and `x-goog-*`), in the query and in a fragment's query string
  * - Strip anchor-like fragments (`#section`, `#top`) but PRESERVE path-like
  *   fragments that contain a `/`. The latter are used as resource identifiers
  *   in some apps (Gmail, Calendar, single-page apps that route on the hash).
@@ -267,6 +302,9 @@ export function normalizeUrl(
 
     // Sort remaining params
     parsed.searchParams.sort();
+
+    // Credentials can ride in a fragment's own query string too.
+    if (parsed.hash) parsed.hash = stripFragmentCredentials(parsed.hash);
 
     // Strip the fragment only when it looks like an anchor — a single
     // token with no slash. A `/`-bearing fragment is treated as
@@ -362,16 +400,17 @@ export function buildCanonicalizerRegistry(
  * entry `d` when it equals `d` or is a subdomain of `d`
  * (`host.endsWith("." + d)`), so declaring `notion.so` also covers
  * `www.notion.so` and any `*.notion.so` workspace host. Matching is
- * case-insensitive; the host is folded to lowercase before comparison.
+ * case-insensitive; the host is folded to lowercase before comparison, and the
+ * trailing dot of a fully qualified name (`mail.example.com.`) is ignored.
  *
  * A pure function so both the gateway and the extension's capture engine can
  * call it against the same set with no source-specific logic.
  */
 export function hostIsOwned(host: string, ownedDomains: Iterable<string>): boolean {
-  const h = host.trim().toLowerCase();
+  const h = host.trim().toLowerCase().replace(/\.+$/, "");
   if (!h) return false;
   for (const raw of ownedDomains) {
-    const d = raw.trim().toLowerCase();
+    const d = raw.trim().toLowerCase().replace(/\.+$/, "");
     if (!d) continue;
     if (h === d || h.endsWith("." + d)) return true;
   }

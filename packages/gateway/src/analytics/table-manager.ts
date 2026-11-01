@@ -1101,6 +1101,58 @@ export class AnalyticsTableManager {
     );
   }
 
+  /**
+   * Rewrite text columns in place, a page of rows per write turn: each page is
+   * read and its changed rows updated under one write slot, then the slot is
+   * released, so other writers interleave. `rewrite` must be idempotent; a row
+   * whose values it leaves unchanged is not written. Returns the rows changed.
+   */
+  async rewriteTextColumns(
+    tableName: string,
+    columns: readonly string[],
+    rewrite: (value: string) => string,
+    pageSize = 500,
+  ): Promise<number> {
+    if (columns.length === 0) return 0;
+    const table = quoteIdent(tableName);
+    const selected = columns.map((column) => quoteIdent(column)).join(", ");
+    let after = -1n;
+    let changed = 0;
+    for (;;) {
+      const page = await this.pool.serializeWrite(() =>
+        this.pool.withConn(async ({ conn }) => {
+          const reader = await conn.runAndReadAll(
+            `SELECT rowid, ${selected} FROM ${table} WHERE rowid > ${after} ORDER BY rowid LIMIT ${pageSize}`,
+          );
+          const rows = reader.getRows() as unknown[][];
+          let pageChanged = 0;
+          for (const row of rows) {
+            const assignments: string[] = [];
+            columns.forEach((column, index) => {
+              const value = row[index + 1];
+              if (typeof value !== "string") return;
+              const next = rewrite(value);
+              if (next !== value) {
+                assignments.push(`${quoteIdent(column)} = '${escapeStr(next)}'`);
+              }
+            });
+            if (assignments.length === 0) continue;
+            await conn.run(
+              `UPDATE ${table} SET ${assignments.join(", ")} WHERE rowid = ${BigInt(row[0] as bigint)}`,
+            );
+            pageChanged += 1;
+          }
+          const last = rows.length > 0 ? BigInt(rows[rows.length - 1]![0] as bigint) : null;
+          return { last, pageChanged, size: rows.length };
+        }),
+      );
+      changed += page.pageChanged;
+      if (page.last === null || page.size < pageSize) break;
+      after = page.last;
+    }
+    return changed;
+  }
+
   /** Delete records by primary key values, across every stream and every source that shares the table. */
   async deleteRecords(tableName: string, ids: string[], pkColumn: string): Promise<number> {
     if (ids.length === 0) return 0;

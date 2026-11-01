@@ -140,6 +140,16 @@ describe("judgeCaptureUrl", () => {
     "https://team.example/cdn-cgi/access/login/team.example",
     "https://app.example/reset/Zm9yZ290LXBhc3N3b3JkLXRva2Vu",
     "https://app.example/#/settings/tokens",
+    "https://app.example/#!/settings/tokens",
+    "https://cloud.example/%4Cogin",
+    "https://cloud.example/login;jsessionid=abc",
+    "https://cloud.example/settings/two-factor",
+    "https://cloud.example/settings/api-tokens",
+    "https://cloud.example/oauth2/token/",
+    "https://code.example/settings/keys",
+    "https://cloud.example/iam/security_credentials",
+    "https://team.example/accept-invitation/Zm9yZ290LXBhc3N3b3Jk",
+    "https://team.example/activate/Zm9yZ290LXBhc3N3b3Jk",
   ])("refuses the credential path %s", (url) => {
     expect(judgeCaptureUrl(policy(), url, context)).toEqual({
       allowed: false,
@@ -161,7 +171,46 @@ describe("judgeCaptureUrl", () => {
     }
     expect(judgeCaptureUrl(policy(), "https://vault.bitwarden.com/", context).allowed).toBe(false);
     expect(judgeCaptureUrl(policy(), "https://notbitwarden.com/", context).allowed).toBe(true);
-    expect(BUILT_IN_SKIP_DOMAINS).toHaveLength(27);
+    for (const host of [
+      "workspace.slack.com",
+      "outlook.cloud.microsoft",
+      "teams.live.com",
+      "vault.bitwarden.eu",
+      "my.1password.eu",
+      "discordapp.com",
+      "mail.google.com.",
+    ]) {
+      expect(judgeCaptureUrl(policy(), `https://${host}/x`, context), host).toEqual({
+        allowed: false,
+        reason: "built-in-domain",
+      });
+    }
+  });
+  it("refuses the built-in private message paths of public sites, and nothing else there", () => {
+    for (const url of [
+      "https://www.facebook.com/messages/t/123",
+      "https://facebook.com/messages",
+      "https://www.linkedin.com/messaging/thread/abc",
+    ]) {
+      expect(judgeCaptureUrl(policy(), url, context), url).toEqual({
+        allowed: false,
+        reason: "built-in-domain",
+      });
+    }
+    expect(judgeCaptureUrl(policy(), "https://www.facebook.com/events", context).allowed).toBe(
+      true,
+    );
+    expect(
+      judgeCaptureUrl(policy(), "https://www.linkedin.com/messaging-tips", context).allowed,
+    ).toBe(true);
+  });
+  it("refuses an owned or excluded host written with a trailing dot", () => {
+    const p = policy({ excludedDomains: ["bank.example"], ownSites: ["agents.example.net"] });
+    expect(judgeCaptureUrl(p, "https://online.bank.example./x", context).allowed).toBe(false);
+    expect(judgeCaptureUrl(p, "https://agents.example.net./x", context)).toEqual({
+      allowed: false,
+      reason: "own-site",
+    });
   });
   it("refuses the operator's own sites and their subdomains", () => {
     const p = policy({ ownSites: ["agents.example.net", "apps.example.net"] });

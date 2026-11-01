@@ -765,10 +765,13 @@ export function createServer(
     sourceWriteEpochFence,
     cascadeCognitionFor: (documentIds) => cascadeCognitiveStateThroughGate(db, w, documentIds),
   });
+  // Bound once the capture policy service exists below; it needs this service to purge.
+  const webCapturePolicyRef: { current?: WebCapturePolicyService } = {};
   const documentService = new DocumentService({
     db,
     writeGate: w,
     events: eventService,
+    webCapturePolicy: () => webCapturePolicyRef.current?.ingestPolicy() ?? null,
     ingestYieldBatch: opts?.ingestYieldBatch,
     configStore: opts?.configStore,
     config: opts?.config,
@@ -1490,18 +1493,17 @@ export function createServer(
   // The capture policy every paired browser enforces (shared pause, excluded
   // domains, owned domains, the operator's own sites, privacy rules, pages
   // deleted for good).
-  mountWebCapturePolicyRoutes(
-    app,
-    new WebCapturePolicyService({
-      db,
-      writeGate: w,
-      sourceService,
-      documentService,
-      ownedDomains: getOwnedWebDomains,
-      ownSites: () => (opts?.configStore?.get() ?? opts?.config)?.webCapture?.ownSites,
-      onChanged: () => statusCache.bump(),
-    }),
-  );
+  const webCapturePolicy = new WebCapturePolicyService({
+    db,
+    writeGate: w,
+    sourceService,
+    documentService,
+    ownedDomains: getOwnedWebDomains,
+    ownSites: () => (opts?.configStore?.get() ?? opts?.config)?.webCapture?.ownSites,
+    onChanged: () => statusCache.bump(),
+  });
+  webCapturePolicyRef.current = webCapturePolicy;
+  mountWebCapturePolicyRoutes(app, webCapturePolicy);
 
   // Developer annotations (OMNESIS_DEV_MODE): the operator → engineer
   // data-quality feedback channel. Each handler 404s unless dev mode is on.
@@ -1846,6 +1848,7 @@ export function createServer(
     db,
     analyticsService,
     sourceService,
+    webCapturePolicy: () => webCapturePolicy.ingestPolicy(),
   });
 
   // Push status / test, used by `omnesis push status|test`. Shares the

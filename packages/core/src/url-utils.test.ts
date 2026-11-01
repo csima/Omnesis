@@ -102,6 +102,29 @@ describe("normalizeUrl", () => {
     );
   });
 
+  test("strips any *_token and x-goog-* param", () => {
+    expect(
+      normalizeUrl(
+        "https://files.example.com/a?csrf_token=t&X-Goog-Signature=s&X-Goog-Credential=c&v=2",
+      ),
+    ).toBe("https://files.example.com/a?v=2");
+  });
+
+  test("strips credential params from a fragment's query string, and leaves other fragments alone", () => {
+    expect(normalizeUrl("https://app.example.com/#/callback?access_token=abc&tab=2")).toBe(
+      "https://app.example.com/#/callback?tab=2",
+    );
+    expect(normalizeUrl("https://app.example.com/#/callback?access_token=abc")).toBe(
+      "https://app.example.com/#/callback",
+    );
+    expect(normalizeUrl("https://app.example.com/#access_token=abc&token_type=bearer")).toBe(
+      "https://app.example.com/",
+    );
+    expect(normalizeUrl("https://app.example.com/#/board?id=7&view=a+b")).toBe(
+      "https://app.example.com/#/board?id=7&view=a+b",
+    );
+  });
+
   test("drops code and state only together, the shape of an OAuth callback", () => {
     expect(normalizeUrl("https://app.example.com/callback?code=abc&state=xyz")).toBe(
       "https://app.example.com/callback",
@@ -352,6 +375,11 @@ describe("urlToExternalId", () => {
 });
 
 describe("hostIsOwned", () => {
+  test("ignores the trailing dot of a fully qualified host or entry", () => {
+    expect(hostIsOwned("mail.example.com.", ["example.com"])).toBe(true);
+    expect(hostIsOwned("mail.example.com", ["example.com."])).toBe(true);
+  });
+
   const owned = ["mail.google.com", "notion.so", "web.whatsapp.com"];
 
   test("exact host match is owned", () => {

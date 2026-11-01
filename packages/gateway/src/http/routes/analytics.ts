@@ -17,7 +17,12 @@ import { ScopedSqlDeniedError } from "../../analytics/sandbox-tables.js";
 import { validateJson } from "../validate.js";
 import { analyticsIngestBody, sqlBody } from "../schemas/index.js";
 import { BadRequestError, NotFoundError, ServiceUnavailableError } from "../errors.js";
-import { redactWebVisitRecords } from "../../sources/web/redact.js";
+import {
+  assertCanonicalWebSourceIds,
+  filterCapturableVisits,
+  redactWebVisitRecords,
+} from "../../sources/web/ingest.js";
+import type { WebCapturePolicy } from "@omnesis/provider-web/capture-policy";
 import type { RouteApp } from "./types.js";
 import type { AnalyticsService } from "../services/AnalyticsService.js";
 import type { SourceService } from "../services/SourceService.js";
@@ -31,6 +36,8 @@ export interface AnalyticsRoutesDeps {
   analyticsService: AnalyticsService | null;
   /** Authoritative push gate — rejects ingest for a removed/paused source. */
   sourceService: SourceService;
+  /** The capture policy web visit rows are judged by on ingest. */
+  webCapturePolicy?: () => WebCapturePolicy | null;
 }
 
 /**
@@ -38,7 +45,7 @@ export interface AnalyticsRoutesDeps {
  * Mirrors the original block at server.ts:3213-3421.
  */
 export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): void {
-  const { db, analyticsService, sourceService } = deps;
+  const { db, analyticsService, sourceService, webCapturePolicy } = deps;
 
   // Dedicated read-only handle for the /sql endpoint. better-sqlite3
   // enforces no writes at the engine level when `readonly: true`, so
@@ -96,14 +103,20 @@ export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): 
         pendingPageId?: string;
         writeOrdinal?: number;
       };
-      // Captured page titles are redacted here as a backstop to the extension's
-      // own redaction (see sources/web/redact.ts).
+      const auth = c.get("auth");
+      if (raw.sourceId) assertCanonicalWebSourceIds(auth.scopes, [raw.sourceId]);
+      // Web visit rows are redacted and judged against the capture policy here,
+      // as the backstop to the extension's own rules (see sources/web/ingest.ts).
       const body = {
         ...raw,
-        records: redactWebVisitRecords(raw.sourceId, raw.tableName, raw.records),
+        records: filterCapturableVisits(
+          raw.sourceId,
+          raw.tableName,
+          redactWebVisitRecords(raw.sourceId, raw.tableName, raw.records),
+          webCapturePolicy?.(),
+        ),
       };
 
-      const auth = c.get("auth");
       if (body.sourceId) enforceWriteScopeForSource(auth.scopes, body.sourceId);
       else enforceBroadWriteScope(auth.scopes);
       const broadWriter = scopeSatisfies(auth.scopes, SCOPE_WRITE_ALL);
