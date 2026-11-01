@@ -4,6 +4,7 @@
 import Defuddle from "defuddle";
 import TurndownService from "turndown";
 import { tables } from "turndown-plugin-gfm";
+import { redactSecrets } from "@omnesis/provider-web/redact-secrets";
 
 /**
  * Client-side readable-content extraction from a rendered DOM, as **Markdown**.
@@ -25,6 +26,10 @@ import { tables } from "turndown-plugin-gfm";
  *   2. If Defuddle returns nothing usable (an app shell, a dashboard, a very
  *      short page), fall back to the de-noised `<body>` converted to Markdown,
  *      so the page still yields structured readable content.
+ *
+ * Credentials in the title and text — tokens, keys, a private key, a value
+ * assigned to a password — are replaced by `redactSecrets` before anything is
+ * returned (see `@omnesis/provider-web/redact-secrets`).
  *
  * Pure w.r.t. the live page: takes a `Document`, returns strings, mutates
  * nothing the caller holds (Defuddle runs on a clone). Environment-agnostic —
@@ -134,7 +139,12 @@ export function extractReadableText(doc: Document, url: string): ExtractedConten
   if (text.length < MIN_EXTRACTED_CHARS) {
     text = toMarkdown(bodyHtml(doc));
   }
-  return { title: parsedTitle || fallbackTitle, text: capLength(text) };
+  // Credentials shown on the page never leave the browser. Redaction runs
+  // before the length cap so a cut cannot leave half a token unrecognised.
+  return {
+    title: redactSecrets(parsedTitle || fallbackTitle),
+    text: capLength(redactSecrets(text)),
+  };
 }
 
 /** Truncate to {@link MAX_EXTRACTED_CHARS} at the nearest line boundary below the cap. */

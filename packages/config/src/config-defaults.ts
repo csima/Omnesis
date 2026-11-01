@@ -371,6 +371,9 @@ export const CONFIG_DEFAULTS = {
   multiDevice: {
     leaseTtl: DEFAULT_SYNC_LEASE_TTL,
   },
+  webCapture: {
+    ownSites: [],
+  },
   nearDuplicates: {
     enabled: true,
     eligibleDocTypes: ["email", "attachment", "file", "document", "note", "conversation"],

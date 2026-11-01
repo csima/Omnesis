@@ -29,6 +29,7 @@ import { createDevice } from "../../data/repositories/DeviceRepository.js";
 import { getSource } from "../../data/repositories/SourceRepository.js";
 import { createToken } from "../../data/repositories/TokenRepository.js";
 import type { AnalyticsTableSchema } from "@omnesis/source-sdk";
+import type { OmnesisConfig } from "@omnesis/config";
 import type Database from "better-sqlite3";
 
 type Db = Database.Database;
@@ -132,6 +133,7 @@ describe("GET /web-capture-policy", () => {
       pause: null,
       excludedDomains: [],
       ownedDomains: ["mail.example.com", "notes.example"],
+      ownSites: [],
       rules: DEFAULT_WEB_CAPTURE_RULES,
       removedPages: [],
       removedPagesTruncated: false,
@@ -439,5 +441,84 @@ describe("a browser token's reach", () => {
     const res = await call("/documents/delete-all/source/web", browserToken, { method: "POST" });
     expect(res.status).toBe(403);
     expect(webDocUrls()).toEqual(["https://a.example/one"]);
+  });
+});
+
+describe("own sites", () => {
+  test("the operator's webCapture.ownSites are served normalized, and a bad entry is dropped", async () => {
+    app = createServer(db, undefined, {
+      analyticsDb,
+      config: {
+        webCapture: {
+          ownSites: ["Agents.Example.net", "https://apps.example.net/browser", "not a host"],
+        },
+      } as OmnesisConfig,
+    });
+    const policy = await policyFor(browserToken);
+    expect(policy.ownSites).toEqual(["agents.example.net", "apps.example.net"]);
+  });
+});
+
+describe("secret redaction on ingest", () => {
+  /** Invented credential, assembled at run time so no scanner matches this file. */
+  const token = ["gh", "p_", "Q7rT2mX9pL4vN8kB3cZ6wY1hJ5dF0sGaAbCd"].join("");
+
+  test("a captured page's title and text are redacted before they are stored", async () => {
+    const page = {
+      ...webPage("https://a.example/runbook"),
+      title: `Runbook ${token}`,
+      content: `Set DEPLOY_TOKEN=${token} and password: correct-horse before the fictional deploy.`,
+    };
+    const res = await call("/documents", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ documents: [page] }),
+    });
+    expect(res.status).toBe(200);
+    const stored = db
+      .prepare<[], { title: string; content: string; content_hash: string }>(
+        "SELECT title, content, content_hash FROM documents WHERE source_id = 'web'",
+      )
+      .get()!;
+    expect(stored.title).toBe("Runbook [redacted]");
+    expect(stored.content).toBe(
+      "Set DEPLOY_TOKEN=[redacted] and password: [redacted] before the fictional deploy.",
+    );
+    expect(stored.content).not.toContain(token);
+    expect(stored.content_hash).not.toBe(page.contentHash);
+  });
+
+  test("a page visit's title is redacted before it is stored", async () => {
+    const schema: AnalyticsTableSchema = {
+      tableName: "page_visits",
+      displayName: "Page visits",
+      description: "Invented visits",
+      columns: [
+        { name: "url", type: "VARCHAR", description: "Page URL", references: "url" },
+        { name: "title", type: "VARCHAR", description: "Title", nullable: true },
+        { name: "visited_at", type: "TIMESTAMPTZ", description: "When" },
+      ],
+      primaryKey: ["url", "visited_at"],
+      semanticTimeColumn: "visited_at",
+      record: { titleColumns: ["title", "url"], keyColumns: ["url", "visited_at"] },
+    };
+    const res = await call("/analytics/ingest", browserToken, {
+      method: "POST",
+      body: JSON.stringify({
+        tableName: "page_visits",
+        sourceId: "web",
+        schema,
+        records: [
+          {
+            url: "https://a.example/runbook",
+            title: `Runbook ${token}`,
+            visited_at: "2026-01-15T10:00:00Z",
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const rows = (await analyticsDb.executeQuery("SELECT title FROM page_visits", { limit: 10 }))
+      .rows;
+    expect(rows.map((row) => String(row[0]))).toEqual(["Runbook [redacted]"]);
   });
 });

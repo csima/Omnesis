@@ -390,7 +390,24 @@ describe("content script — page start", () => {
     const page = openPage({
       html: ARTICLE_HTML.replace("<nav>", '<form><input type="password"></form><nav>'),
     });
-    await waitForState(page, "excluded", "password-field");
+    await waitForState(page, "excluded", "sensitive-field");
+    expect(page.clock.pending()).toBe(0);
+  });
+
+  it.each([
+    ["a one-time-code field", '<form><input autocomplete="one-time-code"></form>'],
+    ["a card number field", '<form><input name="cardnumber"></form>'],
+  ])("treats a page that carries %s as excluded", async (_label, field) => {
+    const page = openPage({ html: ARTICLE_HTML.replace("<nav>", `${field}<nav>`) });
+    await waitForState(page, "excluded", "sensitive-field");
+    expect(page.clock.pending()).toBe(0);
+  });
+
+  it("treats a page with a card field inside an open shadow root as excluded", async () => {
+    const page = openPage({ html: ARTICLE_HTML.replace("<nav>", '<div id="pay"></div><nav>') });
+    const shadow = page.document.getElementById("pay")!.attachShadow({ mode: "open" });
+    shadow.innerHTML = '<input autocomplete="cc-csc">';
+    await waitForState(page, "excluded", "sensitive-field");
     expect(page.clock.pending()).toBe(0);
   });
 });

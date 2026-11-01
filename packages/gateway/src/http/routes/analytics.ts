@@ -17,6 +17,7 @@ import { ScopedSqlDeniedError } from "../../analytics/sandbox-tables.js";
 import { validateJson } from "../validate.js";
 import { analyticsIngestBody, sqlBody } from "../schemas/index.js";
 import { BadRequestError, NotFoundError, ServiceUnavailableError } from "../errors.js";
+import { redactWebVisitRecords } from "../../sources/web/redact.js";
 import type { RouteApp } from "./types.js";
 import type { AnalyticsService } from "../services/AnalyticsService.js";
 import type { SourceService } from "../services/SourceService.js";
@@ -80,7 +81,7 @@ export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): 
     ingestBodyLimit(ANALYTICS_INGEST_BODY_LIMIT_BYTES),
     validateJson(analyticsIngestBody),
     async (c) => {
-      const body = c.req.valid("json") as {
+      const raw = c.req.valid("json") as {
         tableName: string;
         records: Record<string, unknown>[];
         schema?: AnalyticsTableSchema;
@@ -94,6 +95,12 @@ export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): 
         observationId?: string;
         pendingPageId?: string;
         writeOrdinal?: number;
+      };
+      // Captured page titles are redacted here as a backstop to the extension's
+      // own redaction (see sources/web/redact.ts).
+      const body = {
+        ...raw,
+        records: redactWebVisitRecords(raw.sourceId, raw.tableName, raw.records),
       };
 
       const auth = c.get("auth");

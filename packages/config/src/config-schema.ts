@@ -3679,6 +3679,17 @@ const multiDevice = z
   })
   .strict();
 
+const webCapture = z
+  .object({
+    ownSites: z
+      .array(z.string().max(253))
+      .default([])
+      .describe(
+        "Hosts of your own tools that no paired browser captures, such as an agent host and the web apps its agents serve (agents.example.com, apps.example.com). Each entry also covers its subdomains. Every browser reads the list from the gateway, and a browser cannot remove an entry.",
+      ),
+  })
+  .strict();
+
 export const omnesisConfigSchema = z
   .object({
     self: self
@@ -3724,6 +3735,9 @@ export const omnesisConfigSchema = z
       )
       .optional(),
     multiDevice: multiDevice.describe("Sources hosted by several devices.").optional(),
+    webCapture: webCapture
+      .describe("Browser capture: sites the browser extension never captures.")
+      .optional(),
     agent: agent.describe("Agent tunables.").optional(),
     brain: brain.describe("Omnesis Brain / Cognition Steward tunables (experimental).").optional(),
     enrichment: enrichment.describe("Omnesis-derived enrichment signals.").optional(),

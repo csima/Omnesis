@@ -64,6 +64,7 @@ import {
   type AnalyticsRecentCursor,
 } from "../../analytics-db.js";
 import { epochScope, type SourceWriteEpochFence } from "../../source-write-epoch-fence.js";
+import { redactWebDocuments } from "../../sources/web/redact.js";
 import { SourceSyncStateService } from "./SourceSyncStateService.js";
 import type { SourceDataRemovalService } from "./SourceDataRemovalService.js";
 import type { SourcePageWriteAuthority } from "../../sync-lease.js";
@@ -417,7 +418,9 @@ export class DocumentService {
     // Pause ingestion under low disk before any write.
     this.assertDiskSpace();
 
-    const docs = this.applyMaxAgeCutoff(documents);
+    // Captured web pages are redacted again here, whichever route they came
+    // through, as the backstop to the extension's own redaction.
+    const docs = redactWebDocuments(this.applyMaxAgeCutoff(documents));
     this.assertDocumentBatchContracts(docs, streams, replicaVersionPolicies);
     const effectiveWriteEpochs: Record<string, number> = {};
     const rejectedSourceIds: string[] = [];
@@ -873,7 +876,10 @@ export class DocumentService {
     if (rawDocuments.length > 0) {
       this.enforceWriteScope(args.callerScopes, rawDocuments);
     }
-    const documents = rawDocuments.length > 0 ? this.applyMaxAgeCutoff(rawDocuments) : rawDocuments;
+    const documents =
+      rawDocuments.length > 0
+        ? redactWebDocuments(this.applyMaxAgeCutoff(rawDocuments))
+        : rawDocuments;
     this.assertDocumentBatchContracts(
       documents,
       { [body.sourceId]: args.streamId ?? "" },

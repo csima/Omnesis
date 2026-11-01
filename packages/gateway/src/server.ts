@@ -1488,7 +1488,8 @@ export function createServer(
   });
 
   // The capture policy every paired browser enforces (shared pause, excluded
-  // domains, owned domains, privacy rules, pages deleted for good).
+  // domains, owned domains, the operator's own sites, privacy rules, pages
+  // deleted for good).
   mountWebCapturePolicyRoutes(
     app,
     new WebCapturePolicyService({
@@ -1497,6 +1498,7 @@ export function createServer(
       sourceService,
       documentService,
       ownedDomains: getOwnedWebDomains,
+      ownSites: () => (opts?.configStore?.get() ?? opts?.config)?.webCapture?.ownSites,
       onChanged: () => statusCache.bump(),
     }),
   );

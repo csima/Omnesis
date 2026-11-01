@@ -23,7 +23,11 @@ export interface WebCapturePause {
 
 /** Built-in privacy rules every browser applies on top of the exclusion list. */
 export interface WebCaptureRules {
-  /** Skip a page whose DOM carries a password field: sign-in, checkout, account pages. */
+  /**
+   * Skip a page whose DOM carries a sensitive field: a password, a one-time
+   * code or a payment card field, in the document or in an open shadow root.
+   * Sign-in, verification, checkout and account pages carry them.
+   */
   skipPasswordForms: boolean;
   /** Skip a page whose URL path contains one of these segments (case-insensitive, whole segment). */
   skipPathSegments: string[];
@@ -42,6 +46,13 @@ export interface WebCapturePolicy extends WebCaptureSettings {
   updatedAt: string;
   /** Hosts a dedicated source already covers; the gateway aggregates them from the collector. */
   ownedDomains: string[];
+  /**
+   * Hosts of the operator's own tools — an agent host and the web apps its
+   * agents serve — that no browser captures, from the gateway's
+   * `webCapture.ownSites` setting. Each entry also covers its subdomains.
+   * Absent from older gateways, which read as none.
+   */
+  ownSites?: string[];
   rules: WebCaptureRules;
   /** External ids (SHA-256 of the normalized URL) of pages deleted with "never capture again". */
   removedPages: string[];
@@ -52,14 +63,18 @@ export interface WebCapturePolicy extends WebCaptureSettings {
 export const EMPTY_WEB_CAPTURE_SETTINGS: WebCaptureSettings = { pause: null, excludedDomains: [] };
 
 /**
- * Conservative defaults: path segments that name authentication, payment and
- * account-management flows, where the rendered page is a form about the user
- * rather than content worth indexing.
+ * Conservative defaults: path segments that name authentication, payment,
+ * account-management and credential flows — sign-in, multi-factor, API keys
+ * and access tokens — where the rendered page is a form about the user or
+ * shows a secret, rather than content worth indexing. Every browser applies
+ * these whatever list a gateway serves, so a gateway can add segments but
+ * never remove one.
  */
 export const DEFAULT_WEB_CAPTURE_RULES: WebCaptureRules = {
   skipPasswordForms: true,
   skipPathSegments: [
     "login",
+    "log-in",
     "logout",
     "signin",
     "sign-in",
@@ -71,13 +86,80 @@ export const DEFAULT_WEB_CAPTURE_RULES: WebCaptureRules = {
     "forgot-password",
     "oauth",
     "oauth2",
+    "auth",
+    "authorize",
+    "authorization",
+    "authenticate",
     "sso",
+    "saml",
+    "mfa",
+    "2fa",
+    "credentials",
+    "tokens",
+    "access-tokens",
+    "personal-access-tokens",
+    "secrets",
+    "api-keys",
+    "apikeys",
+    "api_keys",
     "checkout",
     "payment",
     "payments",
     "billing",
   ],
 };
+
+/**
+ * Sites every browser skips whatever the policy says, even before any
+ * collector has announced the domains its sources own: mail, messaging,
+ * sign-in and password-manager sites, whose pages are private correspondence
+ * or credentials. Each entry also covers its subdomains.
+ */
+export const BUILT_IN_SKIP_DOMAINS: readonly string[] = [
+  "mail.google.com",
+  "chat.google.com",
+  "messages.google.com",
+  "voice.google.com",
+  "accounts.google.com",
+  "outlook.live.com",
+  "outlook.office.com",
+  "outlook.office365.com",
+  "login.live.com",
+  "login.microsoftonline.com",
+  "teams.microsoft.com",
+  "mail.yahoo.com",
+  "proton.me",
+  "protonmail.com",
+  "icloud.com",
+  "fastmail.com",
+  "hooks.slack.com",
+  "web.whatsapp.com",
+  "web.telegram.org",
+  "messenger.com",
+  "app.slack.com",
+  "discord.com",
+  "1password.com",
+  "bitwarden.com",
+  "lastpass.com",
+  "dashlane.com",
+  "keepersecurity.com",
+];
+
+/** Cloudflare Access's sign-in and token exchange, which lives under one path on any host. */
+const CLOUDFLARE_ACCESS_PATH = /\/cdn-cgi\/access(?:[/.]|$)/i;
+
+/**
+ * A link that carries its own credential in the path: a password reset,
+ * an email verification, an invitation or a magic sign-in link, such as
+ * `/reset/<token>` or `/verify-email/<token>`. The token is the long segment
+ * after the keyword.
+ */
+const TOKEN_LINK_PATH = /\/(?:reset|verify|invite|magic)[\w-]*\/[^/]{16,}/i;
+
+/** Whether `pathname` is one every browser skips on its shape alone, whatever the policy. */
+export function pathIsSecretLink(pathname: string): boolean {
+  return CLOUDFLARE_ACCESS_PATH.test(pathname) || TOKEN_LINK_PATH.test(pathname);
+}
 
 /** Upper bound on `removedPages` in one policy response. */
 export const REMOVED_PAGES_RESPONSE_CAP = 5_000;
@@ -128,7 +210,11 @@ export function pauseRemainingMs(pause: WebCapturePause | null, now: number): nu
   return Math.max(0, pause.until - now);
 }
 
-/** Whether any path segment of `pathname` equals one of `segments` (case-insensitive). */
+/**
+ * Whether any path segment of `pathname` equals one of `segments`
+ * (case-insensitive), with or without a file extension: `/login` and
+ * `/login.php` both match `login`.
+ */
 export function pathHasSkippedSegment(pathname: string, segments: readonly string[]): boolean {
   if (segments.length === 0) return false;
   const wanted = new Set(segments.map((segment) => segment.toLowerCase()));
@@ -139,16 +225,42 @@ export function pathHasSkippedSegment(pathname: string, segments: readonly strin
     } catch {
       // A malformed escape is compared literally.
     }
-    if (segment && wanted.has(segment)) return true;
+    if (!segment) continue;
+    if (wanted.has(segment)) return true;
+    const dot = segment.indexOf(".");
+    if (dot > 0 && wanted.has(segment.slice(0, dot))) return true;
   }
   return false;
+}
+
+/**
+ * The paths a page is judged by: its own, and for a single-page app that
+ * routes in the fragment (`/#/settings/tokens`), the routed path too.
+ */
+function judgedPaths(url: URL): string[] {
+  if (!url.hash.startsWith("#/")) return [url.pathname];
+  try {
+    return [url.pathname, new URL(url.hash.slice(1), url.origin).pathname];
+  } catch {
+    return [url.pathname];
+  }
+}
+
+/** Whether the path, or a fragment-routed path, is one no browser captures. */
+function pathIsSkipped(url: URL, policySegments: readonly string[]): boolean {
+  const segments = [...DEFAULT_WEB_CAPTURE_RULES.skipPathSegments, ...policySegments];
+  return judgedPaths(url).some(
+    (path) => pathIsSecretLink(path) || pathHasSkippedSegment(path, segments),
+  );
 }
 
 export type CaptureRefusal =
   | "invalid-url"
   | "gateway-host"
+  | "own-site"
   | "excluded-domain"
   | "owned-domain"
+  | "built-in-domain"
   | "skipped-path"
   | "paused"
   | "removed-page";
@@ -157,7 +269,10 @@ export type CaptureVerdict = { allowed: true } | { allowed: false; reason: Captu
 
 /**
  * Judge one page URL against the policy. The gateway's own host is refused so
- * a browser never indexes the Omnesis portal into the corpus. `externalId` is
+ * a browser never indexes the Omnesis portal into the corpus, and so are the
+ * operator's own sites and the built-in mail, messaging and password-manager
+ * sites. A path that names a sign-in, payment or credential flow, or carries a
+ * token of its own, is refused whatever list the policy holds. `externalId` is
  * the page's content-plane id when the caller has computed it; without it the
  * removed-pages check is skipped.
  */
@@ -174,11 +289,15 @@ export function judgeCaptureUrl(
   }
   const host = parsed.hostname.toLowerCase();
   if (hostIsOwned(host, [context.gatewayHost])) return { allowed: false, reason: "gateway-host" };
+  if (hostIsOwned(host, policy.ownSites ?? [])) return { allowed: false, reason: "own-site" };
   if (hostIsOwned(host, policy.excludedDomains)) {
     return { allowed: false, reason: "excluded-domain" };
   }
   if (hostIsOwned(host, policy.ownedDomains)) return { allowed: false, reason: "owned-domain" };
-  if (pathHasSkippedSegment(parsed.pathname, policy.rules.skipPathSegments)) {
+  if (hostIsOwned(host, BUILT_IN_SKIP_DOMAINS)) {
+    return { allowed: false, reason: "built-in-domain" };
+  }
+  if (pathIsSkipped(parsed, policy.rules.skipPathSegments)) {
     return { allowed: false, reason: "skipped-path" };
   }
   if (pauseActive(policy.pause, context.now)) return { allowed: false, reason: "paused" };
@@ -214,6 +333,7 @@ export function isWebCapturePolicy(value: unknown): value is WebCapturePolicy {
     isPause(policy.pause) &&
     isStringArray(policy.excludedDomains) &&
     isStringArray(policy.ownedDomains) &&
+    (policy.ownSites === undefined || isStringArray(policy.ownSites)) &&
     isWebCaptureRules(policy.rules) &&
     isStringArray(policy.removedPages) &&
     typeof policy.removedPagesTruncated === "boolean"
