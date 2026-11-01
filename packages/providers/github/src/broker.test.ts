@@ -15,6 +15,7 @@ import {
 import { ProviderId } from "@omnesis/types";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { fakeProviderHost } from "@omnesis/source-sdk/testing";
+import { verifyGithubIdentity } from "./provider.js";
 import definition from "./index.js";
 
 const tmpDirs: string[] = [];
@@ -46,7 +47,13 @@ async function brokeredConfigDir(): Promise<string> {
  * The broker hands out each of `keys` in turn (the last one thereafter), as an
  * API key or an OAuth token; GitHub accepts only `accepted`.
  */
-function stubNetwork(opts: { keys: string[]; accepted?: string; oauth?: boolean }) {
+function stubNetwork(opts: {
+  keys: string[];
+  accepted?: string;
+  oauth?: boolean;
+  /** The login GitHub reports for a token, when not Maya's. */
+  logins?: Record<string, string>;
+}) {
   const calls: Array<{ url: string; authorization: string | null }> = [];
   let served = 0;
   vi.stubGlobal(
@@ -66,10 +73,12 @@ function stubNetwork(opts: { keys: string[]; accepted?: string; oauth?: boolean 
         );
       }
       const accepted = opts.accepted ?? opts.keys[0];
-      if (authorization !== `Bearer ${accepted}`) {
+      if (!authorization || authorization !== `Bearer ${accepted}`) {
         return Promise.resolve(Response.json({ message: "Bad credentials" }, { status: 401 }));
       }
-      return Promise.resolve(Response.json({ login: "Maya-Reeves", name: "Maya Reeves" }));
+      const login = opts.logins?.[authorization.slice("Bearer ".length)] ?? "Maya-Reeves";
+      if (!url.endsWith("/user")) return Promise.resolve(Response.json([]));
+      return Promise.resolve(Response.json({ login, name: login }));
     }),
   );
   return calls;
@@ -112,14 +121,23 @@ describe("GitHub with a brokered credential", () => {
 
   test("asks the broker again once when GitHub rejects a token it rotated", async () => {
     const configDir = await brokeredConfigDir();
-    const calls = stubNetwork({
-      keys: ["github_pat_old", "github_pat_new"],
-      accepted: "github_pat_new",
-    });
+    const network = { keys: ["github_pat_old", "github_pat_new"], accepted: "github_pat_old" };
+    const calls = stubNetwork(network);
     const context = await brokeredContext(configDir);
     await expect(context.client.getUser()).resolves.toMatchObject({ login: "Maya-Reeves" });
+    network.accepted = "github_pat_new";
+    await expect(context.client.getUser()).resolves.toMatchObject({ login: "Maya-Reeves" });
     expect(calls.filter((c) => c.url.startsWith(BROKER.url))).toHaveLength(2);
-    expect(calls.filter((c) => c.url.startsWith("https://api.github.com"))).toHaveLength(2);
+    // Each token is checked once, then used; the rotated-away one is refused once.
+    expect(
+      calls.filter((c) => c.url.startsWith("https://api.github.com")).map((c) => c.authorization),
+    ).toEqual([
+      "Bearer github_pat_old",
+      "Bearer github_pat_old",
+      "Bearer github_pat_old",
+      "Bearer github_pat_new",
+      "Bearer github_pat_new",
+    ]);
   });
 
   test("still reports a token GitHub keeps rejecting as an auth failure", async () => {
@@ -165,5 +183,88 @@ describe("GitHub with a brokered credential", () => {
     await expect(
       definition.broker!.resolveAccount(credentials, { accountLabel: "acme/org" }),
     ).rejects.toThrow(/not usable/);
+  });
+});
+
+describe("GitHub brokered connections are re-checked against the linked login", () => {
+  test("an unchanged login syncs, asking GitHub once per token who it is", async () => {
+    const configDir = await brokeredConfigDir();
+    const calls = stubNetwork({ keys: ["github_pat_brokered"] });
+    const context = await brokeredContext(configDir);
+    await expect(context.client.listAccessibleRepos()).resolves.toEqual([]);
+    await expect(context.client.listAccessibleRepos()).resolves.toEqual([]);
+    const github = calls.filter((c) => c.url.startsWith("https://api.github.com"));
+    expect(github.map((c) => new URL(c.url).pathname)).toEqual([
+      "/user",
+      "/user/repos",
+      "/user/repos",
+    ]);
+  });
+
+  test("a token that is now another user's stops with identity-changed before anything is read", async () => {
+    const configDir = await brokeredConfigDir();
+    const calls = stubNetwork({
+      keys: ["github_pat_swapped"],
+      logins: { github_pat_swapped: "jamie-lopez" },
+    });
+    const context = await brokeredContext(configDir);
+    const failure = await context.client.listAccessibleRepos().then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(failure).toMatchObject({
+      name: "BrokerCredentialError",
+      reason: "identity-changed",
+      kind: "auth",
+    });
+    expect((failure as Error).message).not.toContain("jamie-lopez");
+    expect(
+      calls
+        .filter((c) => c.url.startsWith("https://api.github.com"))
+        .map((c) => new URL(c.url).pathname),
+    ).toEqual(["/user"]);
+    expect(readdirSync(join(configDir, "github", ACCOUNT))).toEqual(["broker.json"]);
+  });
+
+  test("a failed check keeps its own kind and is never taken as a match", async () => {
+    const result = {
+      credential: { type: "api-key" as const, apiKey: "github_pat_brokered" },
+      connectionConfig: {},
+      metadata: {},
+    };
+    const failing = (respond: () => Promise<Response>) =>
+      verifyGithubIdentity(ACCOUNT, { fetchImpl: respond as typeof fetch, sleep: async () => {} });
+
+    await expect(
+      failing(() => Promise.reject(new TypeError("fetch failed")))("default", result),
+    ).rejects.toMatchObject({ kind: "network" });
+    await expect(
+      failing(() =>
+        Promise.resolve(Response.json({ message: "Bad credentials" }, { status: 401 })),
+      )("default", result),
+    ).rejects.toMatchObject({ kind: "auth" });
+    await expect(
+      failing(() => Promise.resolve(new Response("unavailable", { status: 503 })))(
+        "default",
+        result,
+      ),
+    ).rejects.not.toMatchObject({ reason: "identity-changed" });
+
+    // A verifier whose check failed asks again for the same token.
+    let up = false;
+    const fetchImpl = vi.fn(() =>
+      up
+        ? Promise.resolve(Response.json({ login: "maya-reeves" }))
+        : Promise.reject(new TypeError("fetch failed")),
+    );
+    const verify = verifyGithubIdentity(ACCOUNT, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+    });
+    await expect(verify("default", result)).rejects.toMatchObject({ kind: "network" });
+    up = true;
+    await expect(verify("default", result)).resolves.toBeUndefined();
+    await expect(verify("default", result)).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 });

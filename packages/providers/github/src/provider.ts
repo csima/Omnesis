@@ -3,6 +3,8 @@
 
 import { createHash } from "node:crypto";
 import {
+  brokerBearerToken,
+  BrokerCredentialError,
   clearProviderAccountAndLegacyCredentials,
   clearProviderAccountCredentials,
   createLogger,
@@ -15,6 +17,7 @@ import {
   loadOrAdoptProviderAccountCredentials,
   MissingCredentialsError,
   writeProviderAccountCredentials,
+  type BrokerCredentialResult,
 } from "@omnesis/core";
 import { AccountId } from "@omnesis/types";
 import {
@@ -26,7 +29,7 @@ import {
   type AuthSession,
   type SourceLifecycleContext,
 } from "@omnesis/source-sdk";
-import { GithubClient } from "./client.js";
+import { GithubClient, type GithubClientOptions } from "./client.js";
 import { githubCredentialsSpec } from "./credentials-spec.js";
 
 const log = createLogger("provider:github");
@@ -69,6 +72,33 @@ export function accountIdFor(login: string, label?: string): string {
 /** The login portion of an account id, with any label stripped. */
 export function accountLogin(accountId: string): string {
   return accountId.toLowerCase().split("@")[0];
+}
+
+/**
+ * Check each token the broker hands out still authenticates as the account's
+ * login, for {@link BrokeredCredentials}' `verify` option: a connection signed
+ * in again at the broker as another GitHub user, or a key swapped for one of
+ * theirs, would otherwise sync that user's repositories under this id. Asked
+ * of `GET /user` with the token alone, once per token; a failed request keeps
+ * the classification the client gives it and is not taken as a match.
+ */
+export function verifyGithubIdentity(
+  accountId: string,
+  opts: Pick<GithubClientOptions, "fetchImpl" | "sleep"> = {},
+): (purpose: string, result: BrokerCredentialResult) => Promise<void> {
+  let verified: string | undefined;
+  return async (_purpose, { credential }) => {
+    const token = brokerBearerToken(credential);
+    if (token === verified) return;
+    const { login } = await new GithubClient(token, opts).getUser();
+    if (typeof login !== "string" || login.toLowerCase() !== accountLogin(accountId)) {
+      throw new BrokerCredentialError(
+        "identity-changed",
+        `The broker's GitHub connection now belongs to another GitHub user, not ${accountLogin(accountId)}; link it again with \`omnesis broker link\``,
+      );
+    }
+    verified = token;
+  };
 }
 
 /** Load one account's stored token. */

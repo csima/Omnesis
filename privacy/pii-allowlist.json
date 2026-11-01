@@ -12202,7 +12202,6 @@
     {
       "value": "Maya Reeves",
       "paths": [
-        "packages/providers/github/src/broker.test.ts",
         "packages/providers/granola/src/broker.test.ts",
         "packages/providers/strava/src/broker.test.ts"
       ],
@@ -12237,6 +12236,26 @@
       "value": "Neither Microsoft",
       "paths": ["packages/providers/outlook/src/broker.test.ts"],
       "reason": "Start of a test comment sentence, not a name."
+    },
+    {
+      "value": "Google Contacts",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Product name in an expected error message."
+    },
+    {
+      "value": "Backend Error",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Google API error message text."
+    },
+    {
+      "value": "Invalid Credentials",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Google API error message text."
+    },
+    {
+      "value": "Rate Limit Exceeded",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Google API error message text."
     },
     {
       "value": "Neither Strava",

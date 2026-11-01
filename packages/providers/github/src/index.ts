@@ -21,6 +21,7 @@ import {
   discoverAccounts,
   hasCredentials,
   loadToken,
+  verifyGithubIdentity,
 } from "./provider.js";
 import { githubCredentialsSpec } from "./credentials-spec.js";
 import { githubCommitsDocumentProfile, githubThreadsDocumentProfile } from "./document-profiles.js";
@@ -219,7 +220,9 @@ export default defineProvider<GithubContext>({
     if (hasBrokerBinding("github", accountId, host?.configDir)) {
       // Asked of the broker per request and never written down: the binding
       // is all this account keeps on disk.
-      const credentials = await BrokeredCredentials.load("github", accountId, host?.configDir);
+      const credentials = await BrokeredCredentials.load("github", accountId, host?.configDir, {
+        verify: verifyGithubIdentity(accountId),
+      });
       client = new GithubClient(() => credentials.token(), {
         invalidateToken: () => credentials.invalidate(),
       });
