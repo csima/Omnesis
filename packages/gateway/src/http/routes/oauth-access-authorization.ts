@@ -28,6 +28,8 @@ import {
   accessExecutionBindingBody,
   accessExecutionReissueBody,
   accessGrantUpdateBody,
+  accessHostAgentBody,
+  accessHostIdentityBody,
   accessLevelCreateBody,
   accessLevelUpdateBody,
   accessLookupBody,
@@ -630,6 +632,84 @@ export function mountOAuthAuthorizationRoutes(
       return c.json(result.value);
     },
   );
+  // An agent host that calls through one connection for many agents says,
+  // per tool call, who is calling. Binding the connection to the host and
+  // giving each host agent its level are access decisions, so they are made
+  // from a portal session like the rest; reading them back is ordinary admin.
+  app.get("/admin/access/host-identity", noStore, scope.admin(), (c) =>
+    c.json(access.hostIdentity()),
+  );
+  app.put(
+    "/admin/access/connections/:id/host-identity",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostIdentityBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.bindHostIdentity({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        return c.json({ error: result.error }, result.error === "not-found" ? 404 : 400);
+      }
+      log.info(`Connection ${connectionId.data} bound to agent host ${result.value.issuer}`);
+      return c.json({ binding: result.value });
+    },
+  );
+  app.delete(
+    "/admin/access/connections/:id/host-identity",
+    noStore,
+    scope.portalAdmin(),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.unbindHostIdentity({
+        connectionId: connectionId.data,
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) return c.json({ error: result.error }, 404);
+      log.info(`Connection ${connectionId.data} no longer bound to an agent host`);
+      return c.json({ removed: true });
+    },
+  );
+  app.post(
+    "/admin/access/connections/:id/host-agents",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostAgentBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.grantHostAgent({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        const status =
+          result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
+        return c.json({ error: result.error }, status);
+      }
+      log.info(
+        `Host agent ${result.value.agent} on connection ${connectionId.data} given access level ${result.value.levelId}`,
+      );
+      return c.json({ agent: result.value }, 201);
+    },
+  );
+  app.delete("/admin/access/host-agents/:id", noStore, scope.portalAdmin(), async (c) => {
+    const grantId = oauthApprovalId.safeParse(c.req.param("id"));
+    if (!grantId.success) return c.json({ error: "not-found" }, 404);
+    const result = await access.revokeHostAgent({
+      grantId: grantId.data,
+      actorTokenId: c.get("auth").tokenId!,
+    });
+    if (!result.ok) return c.json({ error: result.error }, 404);
+    log.info(`Host agent grant ${grantId.data} revoked`);
+    return c.json({ revoked: true });
+  });
   // A device's access level decides what its `/answer` requests may read and
   // whether they are reviewed, so it is authored like every other access
   // decision: from a portal session, never with a bearer token.

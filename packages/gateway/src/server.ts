@@ -137,6 +137,8 @@ import { mountMcpStreamableRoutes, type McpHttpRuntime } from "./http/routes/mcp
 import { mountOAuthAccessRoutes } from "./http/routes/oauth-access.js";
 import { mountLegacyMcpCutoverRoute } from "./http/routes/legacy-mcp-cutover.js";
 import { AccessService } from "./access/service.js";
+import { HostCallAuthorizer } from "./access/host-call-authority.js";
+import { HostIdentityVerifier } from "./access/host-identity.js";
 import { resolveDeviceAnswerScope } from "./access/device-answer-scope.js";
 import { resolveMcpRequestResource, resolveOAuthUrls } from "./access/oauth-urls.js";
 import { mountSubscriptionRoutes } from "./http/routes/subscriptions.js";
@@ -1576,6 +1578,7 @@ export function createServer(
     publicBaseUrl: opts?.publicBaseUrl,
     mcpResourceUrls: opts?.mcpResourceUrls,
     recordMcpToolInvocation: (input) => accessService.recordMcpToolInvocation(input),
+    hostCalls: new HostCallAuthorizer(db, new HostIdentityVerifier()),
     recordDirectAuditEvent: async (input) => {
       await w.appendDirectAuditEvent(input);
     },

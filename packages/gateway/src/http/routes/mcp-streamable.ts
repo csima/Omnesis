@@ -51,6 +51,7 @@ import {
   DirectMcpRateLimitError,
   type DirectMcpExecutionBoundary,
 } from "../../mcp/direct-execution-boundary.js";
+import { HOST_IDENTITY_HEADER } from "../../access/host-identity.js";
 import { clientIp } from "./admin/internals.js";
 import { mapAnswerError } from "./agent.js";
 import type { AppendDirectAuditEventInput } from "../../privacy/store.js";
@@ -58,11 +59,13 @@ import type { OmnesisNotesRuntime } from "../../sources/omnesis-notes/index.js";
 import type { AnswerService } from "../../privacy/answer-service.js";
 import type {
   AccessCapability,
+  HostCallerAudit,
   McpInvocationAuditOutcome,
   McpToolInvocationAuditInput,
 } from "../../access/types.js";
+import type { HostCallAuthority, HostCallAuthorizer } from "../../access/host-call-authority.js";
 import type { MiddlewareHandler } from "hono";
-import type { AppEnv, AuthContext, RouteApp } from "./types.js";
+import type { AppEnv, AuthContext, PrincipalOAuthAuthContext, RouteApp } from "./types.js";
 
 const MCP_HTTP_BODY_LIMIT_BYTES = 64 * 1024;
 const MCP_TOOL_INPUT_ELEMENTS_LIMIT = 10_000;
@@ -91,6 +94,12 @@ export interface McpStreamableRoutesDeps {
    * a warning. Absent in tests that do not wire the privacy store.
    */
   recordDirectAuditEvent?: (input: AppendDirectAuditEventInput) => Promise<void>;
+  /**
+   * Reads an agent host's per-call identity assertion for a connection bound
+   * to that host. Every gateway wires it; without it a bound connection's
+   * calls release nothing, because the egress fence still refuses them.
+   */
+  hostCalls?: Pick<HostCallAuthorizer, "authorize">;
 }
 
 export function mountMcpStreamableRoutes(
@@ -174,8 +183,27 @@ export function mountMcpStreamableRoutes(
     rejectSessionState,
     limitBody,
     async (c) => {
+      const auth = c.get("auth") as PrincipalOAuthAuthContext;
+      const host: HostCallAuthority = deps.hostCalls
+        ? await deps.hostCalls.authorize({
+            connectionId: auth.principalId,
+            connectionCapabilities: auth.capabilities,
+            assertion: c.req.header(HOST_IDENTITY_HEADER),
+          })
+        : { kind: "unbound" };
+      if (host.kind === "refused") {
+        log.warn(`Agent host call refused on connection ${auth.principalId}: ${host.reason}`);
+        return c.json(
+          {
+            error: "The agent host's identity for this call was refused.",
+            code: "host_identity_refused",
+            reason: host.reason,
+          },
+          403,
+        );
+      }
       const response = await handler.fetch(c.req.raw, {
-        authInfo: authInfo(c.get("auth"), clientIp(c), c.get("requestId")),
+        authInfo: authInfo(auth, clientIp(c), c.get("requestId"), host),
       });
       return privateResponse(response);
     },
@@ -504,7 +532,12 @@ function createUnifiedHandler(deps: McpStreamableRoutesDeps): McpHttpHandler {
   );
 }
 
-function authInfo(auth: AuthContext, clientIpValue: string, requestId: string): AuthInfo {
+function authInfo(
+  auth: AuthContext,
+  clientIpValue: string,
+  requestId: string,
+  host: HostCallAuthority = { kind: "unbound" },
+): AuthInfo {
   if (auth.authMethod === "principal-oauth") {
     const identity = {
       principalId: auth.principalId,
@@ -513,9 +546,13 @@ function authInfo(auth: AuthContext, clientIpValue: string, requestId: string): 
       credentialId: auth.credentialId,
       accessTokenId: auth.accessTokenId,
     };
-    const answerAuthorization = createCorpusAuthorization(identity, auth.capabilities, "answer");
-    const directAuthorization = createCorpusAuthorization(identity, auth.capabilities, "direct");
-    const hasNotes = auth.capabilities.some((rule) => rule.capability === "notes");
+    // A verified host caller gets the connection's grant cut down to its own
+    // and its delegators' grants; an unidentified call through a bound
+    // connection keeps the connection's grant only to list tools.
+    const capabilities = host.kind === "authorized" ? host.capabilities : auth.capabilities;
+    const answerAuthorization = createCorpusAuthorization(identity, capabilities, "answer");
+    const directAuthorization = createCorpusAuthorization(identity, capabilities, "direct");
+    const hasNotes = capabilities.some((rule) => rule.capability === "notes");
     return {
       token: auth.accessTokenId,
       clientId: auth.principalId,
@@ -538,6 +575,8 @@ function authInfo(auth: AuthContext, clientIpValue: string, requestId: string): 
           ? { directAuthorization: serializeCorpusAuthorization(directAuthorization) }
           : {}),
         ...(auth.executionDeviceId ? { executionDeviceId: auth.executionDeviceId } : {}),
+        ...(host.kind === "authorized" ? { hostCaller: JSON.stringify(host.audit) } : {}),
+        ...(host.kind === "unidentified" ? { hostIdentity: "missing" } : {}),
         clientIp: clientIpValue,
         requestId,
       },
@@ -573,9 +612,13 @@ async function auditedInvocation<T>(
         ? ("all" as const)
         : (authorizationExtra(auth, `${capability}Authorization`, capability)
             .sourceMode as McpToolInvocationAuditInput["sourceMode"]),
+    ...hostCallerExtra(auth),
   };
   let result: T;
   try {
+    if (optionalStringExtra(auth, "hostIdentity") === "missing") {
+      throw new HostIdentityRequiredError();
+    }
     result = await invoke(
       auditAtEgress
         ? {
@@ -671,6 +714,26 @@ async function recordDirectTranscript(
     log.warn(
       `Failed to persist Direct transcript event: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+}
+
+/** A tool call through a connection bound to an agent host arrived without the host's assertion. */
+class HostIdentityRequiredError extends ForbiddenError {
+  constructor() {
+    super(
+      "This connection is bound to an agent host, so every tool call needs the host's identity assertion.",
+    );
+    this.name = "HostIdentityRequiredError";
+  }
+}
+
+function hostCallerExtra(auth: AuthInfo): { hostCaller?: HostCallerAudit } {
+  const serialized = optionalStringExtra(auth, "hostCaller");
+  if (!serialized) return {};
+  try {
+    return { hostCaller: JSON.parse(serialized) as HostCallerAudit };
+  } catch {
+    throw new ForbiddenError("Authenticated MCP request context is incomplete.");
   }
 }
 

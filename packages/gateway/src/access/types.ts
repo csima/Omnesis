@@ -109,6 +109,80 @@ export interface McpToolInvocationAuditInput {
   sourceMode: AccessSourceMode;
   /** Successful corpus results must still be authorized at their egress boundary. */
   requireActiveAuthority: boolean;
+  /**
+   * The agent host caller a bound connection's call was authorized for. Its
+   * grants are fenced at egress beside the connection's own: a grant revoked,
+   * or a level edited, while the call ran releases nothing.
+   */
+  hostCaller?: HostCallerAudit;
+}
+
+/** One host agent grant a call relied on, with the level revision it read. */
+export interface HostAgentAuthority {
+  grantId: string;
+  levelId: string;
+  levelRevision: number;
+}
+
+export interface HostCallerAudit {
+  agent: string;
+  /** The agents that asked it, most recent first, as the host recorded them. */
+  delegators: string[];
+  task: string | null;
+  grants: HostAgentAuthority[];
+}
+
+/**
+ * A connection an agent host calls through on behalf of its agents: the
+ * host's issuer, and the audience its identity assertions must name.
+ */
+export interface HostIdentityBinding {
+  connectionId: string;
+  issuer: string;
+  audience: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One agent of a bound host, acting for one person, on one access level. */
+export interface HostAgentGrant {
+  id: string;
+  connectionId: string;
+  person: string;
+  agent: string;
+  levelId: string;
+  levelName: string | null;
+  createdAt: number;
+  revokedAt: number | null;
+}
+
+export interface HostIdentityOverview {
+  bindings: Array<HostIdentityBinding & { agents: HostAgentGrant[] }>;
+}
+
+export interface HostIdentityBindingInput {
+  connectionId: string;
+  issuer: string;
+  audience: string;
+  actorTokenId: string;
+}
+
+export interface HostIdentityUnbindInput {
+  connectionId: string;
+  actorTokenId: string;
+}
+
+export interface HostAgentGrantCreateInput {
+  connectionId: string;
+  person: string;
+  agent: string;
+  levelId: string;
+  actorTokenId: string;
+}
+
+export interface HostAgentGrantRevokeInput {
+  grantId: string;
+  actorTokenId: string;
 }
 
 export interface OAuthClientRegistration {
