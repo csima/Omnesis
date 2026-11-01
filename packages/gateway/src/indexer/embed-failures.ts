@@ -14,7 +14,8 @@ export type EmbedFailureKind = "overflow" | "malformed" | "transient";
 /** Token-window overflow, across both embedder backends. */
 const OVERFLOW_PATTERNS = [
   "maximum context length", // vLLM / OpenAI-compatible HTTP embedder
-  "longer than the context size", // node-llama-cpp local embedder
+  "longer than the context size", // node-llama-cpp local embedder before 3.22
+  "longer than the usable context size", // node-llama-cpp local embedder 3.22+
 ];
 
 /** Tokenizer rejected the input outright (control bytes, invalid sequences). */
