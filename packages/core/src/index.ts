@@ -244,6 +244,39 @@ export {
   verifiesUnderSystemTrust,
 } from "./tofu.js";
 
+export {
+  ACCESS_CLIENT_ID_ENV,
+  ACCESS_CLIENT_ID_HEADER,
+  ACCESS_CLIENT_SECRET_ENV,
+  ACCESS_CLIENT_SECRET_FILE_ENV,
+  ACCESS_CLIENT_SECRET_HEADER,
+  ACCESS_GATEWAY_URL_ENV,
+  assertNotCloudflareAccessRefusal,
+  CloudflareAccessRefusedError,
+  CloudflareBlockedError,
+  CloudflareRefusalError,
+  cloudflareAccessRefusal,
+  enableGatewayAccess,
+  GATEWAY_ACCESS_CREDENTIALS_FILE,
+  GatewayAccessConfigError,
+  gatewayAccessClientIdFor,
+  gatewayAccessCredentialsPath,
+  gatewayAccessOrigin,
+  installGatewayAccess,
+  isCloudflareAccessRefusedError,
+  isCloudflareRefusalError,
+  parseGatewayAccessCredentials,
+  readGatewayAccessCredentials,
+  redactGatewayUrl,
+  removeGatewayAccessCredentials,
+  resetGatewayAccessForTests,
+  withGatewayAccessDispatcher,
+  withGatewayAccessHeaders,
+  writeGatewayAccessCredentials,
+  type GatewayAccessCredentials,
+  type LoadedGatewayAccessCredentials,
+} from "./gateway-access.js";
+
 export { retry, type RetryOptions } from "./retry.js";
 
 export {

@@ -2,13 +2,24 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname as osHostname } from "node:os";
-import { join as pathJoin, resolve as pathResolve } from "node:path";
+import { join as pathJoin } from "node:path";
 import { defineCommand } from "citty";
 import {
   DEFAULT_CONFIG_DIR,
+  cloudflareAccessRefusal,
+  parseDuration,
   discoverGatewayViaMdns,
+  enableGatewayAccess,
   ensureGatewayTrust,
   isTlsCertError,
   localDeviceUpdateCommands,
@@ -55,6 +66,7 @@ import {
   EXIT_GATEWAY_DOWN,
   EXIT_GATEWAY_ERROR,
   EXIT_USER_ERROR,
+  expandHomePath,
   pickGatewayExitCode,
   GATEWAY_REQUEST_URL,
 } from "../utils.js";
@@ -524,9 +536,48 @@ const devicesListCommand = defineCommand({
   },
 });
 
+/** Longest a pairing code may live: long enough for an unattended install to reach it. */
+export const MAX_PAIRING_TTL_MS = 2 * 60 * 60 * 1000;
+const MIN_PAIRING_TTL_MS = 60 * 1000;
+
+/**
+ * `--ttl` as milliseconds: a duration with a unit (`30m`, `2h`), from one
+ * minute to {@link MAX_PAIRING_TTL_MS}. A code is a credential until it is
+ * redeemed, so the ceiling is a refusal rather than a silent clamp.
+ */
+export function parsePairingTtl(raw: string): number {
+  const value = raw.trim();
+  let ms: number;
+  try {
+    if (!/[a-zA-Z]$/u.test(value)) throw new Error("no unit");
+    ms = parseDuration(value);
+  } catch {
+    throw new CliError(
+      `${c.red}--ttl '${raw}' is not a duration. Use a unit, for example 30m or 2h.${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  }
+  if (ms < MIN_PAIRING_TTL_MS || ms > MAX_PAIRING_TTL_MS) {
+    throw new CliError(
+      `${c.red}--ttl must be from 1m to 2h; a pairing code is a credential until it is redeemed.${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  }
+  return ms;
+}
+
 const devicesPairCommand = defineCommand({
   meta: { name: "pair", description: "Create a pairing code for a new device" },
   args: {
+    ttl: {
+      type: "string",
+      description:
+        "How long the code stays valid, from 1m to 2h (default: the gateway's, normally 10m)",
+    },
+    json: {
+      type: "boolean",
+      description: "Print {code, expiresAt, kind} as JSON instead of instructions",
+    },
     "repair-device": {
       type: "string",
       description: "Exact existing agent device ID to repair in place",
@@ -630,6 +681,8 @@ const devicesPairCommand = defineCommand({
     // rather than a gateway 400.
     const scopes =
       typeof ctx.args.scopes === "string" ? parsePairingScopes(ctx.args.scopes) : undefined;
+    const ttlMs = typeof ctx.args.ttl === "string" ? parsePairingTtl(ctx.args.ttl) : undefined;
+    const json = ctx.args.json === true;
 
     // Optional self annotation (legacy): staged on the pairing code and applied
     // to the device at redeem when `--self-email` / `--self-phone` is supplied.
@@ -650,6 +703,7 @@ const devicesPairCommand = defineCommand({
           kind,
           ...(name ? { name } : {}),
           ...(scopes ? { scopes } : {}),
+          ...(ttlMs !== undefined ? { ttlMs } : {}),
           // Omit empty selfEmails/selfPhones so the request carries no self
           // annotation when none was supplied.
           ...(selfEmails.length > 0 ? { selfEmails } : {}),
@@ -657,6 +711,20 @@ const devicesPairCommand = defineCommand({
         }),
       }),
     );
+    if (json) {
+      console.log(
+        JSON.stringify(
+          {
+            code: result.pairingCode,
+            expiresAt: new Date(result.expiresAt).toISOString(),
+            kind,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (selfEmails.length > 0 || selfPhones.length > 0) {
       console.log(
         `${c.dim}Will annotate the paired device with ${selfEmails.length} email(s) + ${selfPhones.length} phone(s).${c.reset}`,
@@ -886,6 +954,16 @@ export async function redeemPairingCode(
   trustConfigDir = DEFAULT_CONFIG_DIR,
   expectedFingerprint?: string,
 ): Promise<RedeemedPairing> {
+  // A gateway behind Cloudflare Access is reached with this machine's service
+  // token, the trust probe and the redeem alike.
+  try {
+    await enableGatewayAccess([gatewayUrl], trustConfigDir);
+  } catch (err) {
+    throw new CliError(
+      `${c.red}${err instanceof Error ? err.message : String(err)}${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  }
   // Trust is the join's FIRST network touch, and it sits outside the redeem's
   // own catch below. A connection that dies here therefore escaped this command
   // entirely and reached the runner, whose generic hint names
@@ -959,11 +1037,18 @@ export async function redeemPairingCode(
           body: JSON.stringify(body),
         }),
       );
+      const refusal = await cloudflareAccessRefusal(`${gatewayUrl}/devices/pair`, res);
+      if (refusal) {
+        if (!res.bodyUsed) await res.body?.cancel().catch(() => undefined);
+        throw new CliError(`${c.red}${refusal.message}${c.reset}`, EXIT_AUTH);
+      }
       failureStatus = res.ok ? null : res.status;
       if (res.ok) payload = await res.json();
     }
   } catch (err) {
-    if (err instanceof IntegrationHttpError) {
+    if (err instanceof CliError) {
+      throw err;
+    } else if (err instanceof IntegrationHttpError) {
       failureStatus = err.status;
     } else if (isTlsCertError(err)) {
       throw new CliError(
@@ -1201,6 +1286,60 @@ export async function redeemAgentIntegrationPairingCode(
   return parseRedeemedAgentIntegrationPairing(responsePayload, harness);
 }
 
+/**
+ * The pairing code from `--code-file`: a file only its owner can read, or `-`
+ * for stdin. A code on the command line is visible to every process on the
+ * host for as long as the redeem runs; read from here it never is.
+ */
+export function readPairingCodeFile(source: string): string {
+  if (source === "-") {
+    try {
+      return readFileSync(0, "utf8").trim();
+    } catch {
+      throw new CliError(
+        `${c.red}Could not read the pairing code from stdin.${c.reset}`,
+        EXIT_USER_ERROR,
+      );
+    }
+  }
+  const path = expandHomePath(source);
+  const fail = (reason: string): never => {
+    throw new CliError(
+      `${c.red}Could not read the pairing code from ${path} (${reason}).${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  };
+  // Opened once and checked through the descriptor, so the file that is read
+  // is the file that was checked, and a symlink is never followed.
+  let fd: number;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  } catch (err) {
+    return fail((err as NodeJS.ErrnoException).code ?? "unreadable");
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) fail("not a regular file");
+    if (process.platform !== "win32") {
+      if ((st.mode & 0o077) !== 0) {
+        throw new CliError(
+          `${c.red}${path} is open to other users; a pairing code file must be owner-only (chmod 600 ${path}).${c.reset}`,
+          EXIT_USER_ERROR,
+        );
+      }
+      if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+        fail("owned by another user");
+      }
+    }
+    return readFileSync(fd, "utf8").trim();
+  } catch (err) {
+    if (err instanceof CliError) throw err;
+    return fail((err as NodeJS.ErrnoException).code ?? "unreadable");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const devicesRedeemCommand = defineCommand({
   meta: {
     name: "redeem",
@@ -1209,8 +1348,13 @@ const devicesRedeemCommand = defineCommand({
   args: {
     code: {
       type: "positional",
-      description: "pairing code from `omnesis devices pair`",
-      required: true,
+      description: "pairing code from `omnesis devices pair` (or use --code-file)",
+      required: false,
+    },
+    "code-file": {
+      type: "string",
+      description:
+        "Read the pairing code from this file (owner-only), or - for stdin, so it stays off the command line",
     },
     "gateway-url": {
       type: "string",
@@ -1231,10 +1375,18 @@ const devicesRedeemCommand = defineCommand({
     },
   },
   async run(ctx) {
-    const code = typeof ctx.args.code === "string" ? ctx.args.code.trim() : "";
+    const positional = typeof ctx.args.code === "string" ? ctx.args.code.trim() : "";
+    const codeFile = typeof ctx.args["code-file"] === "string" ? ctx.args["code-file"] : undefined;
+    if (positional && codeFile !== undefined) {
+      throw new CliError(
+        `${c.red}Give the pairing code as an argument or with --code-file, not both.${c.reset}`,
+        EXIT_USER_ERROR,
+      );
+    }
+    const code = codeFile !== undefined ? readPairingCodeFile(codeFile) : positional;
     if (!code) {
       throw new CliError(
-        `${c.red}Usage: provide a pairing code — omnesis pair <code> (or omnesis devices redeem <code>) [--gateway-url <url>] [--trust-fingerprint sha256:…] [--save <path>] [--json]${c.reset}`,
+        `${c.red}Usage: provide a pairing code — omnesis pair <code> | --code-file <file|-> (or omnesis devices redeem) [--gateway-url <url>] [--trust-fingerprint sha256:…] [--save <path>] [--json]${c.reset}`,
         EXIT_USER_ERROR,
       );
     }
@@ -1887,17 +2039,6 @@ function hasAdminTokenFile(): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Resolve a user-supplied file path: expand a leading `~/` (the shell only
- * expands an unquoted tilde) and absolutize relative paths.
- */
-function expandHomePath(p: string): string {
-  if (p === "~" || p.startsWith("~/")) {
-    return pathJoin(process.env.HOME ?? "~", p.slice(2));
-  }
-  return pathResolve(p);
 }
 
 /**

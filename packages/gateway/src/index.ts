@@ -93,6 +93,7 @@ import { drainTranscriptEvictions } from "./brain/transcript-eviction.js";
 import { createActivityRetentionTask } from "./activity-retention/task.js";
 import { createAbsenceSweepTask } from "./absence/task.js";
 import { createOwnershipRepairTask } from "./analytics/ownership-repair-task.js";
+import { createTemporalProjectionRelinker } from "./analytics/projection-relink.js";
 import { directIndexWriteGate } from "./indexer/index-write-gate.js";
 import { cascadeCognitiveStateThroughGate } from "./brain/cognitive-state-cascade.js";
 import { resolveRelaySettings } from "./push/relay-settings.js";
@@ -1160,6 +1161,23 @@ const analyticsDb = new AnalyticsDb(analyticsDbPath, {
   onFatal: () => requestShutdown(1),
 });
 await analyticsDb.open();
+// A rekey changes temporal projection ids in DuckDB; the annotations linking
+// them live in SQLite and follow through the move ledger. Draining it at boot
+// finishes any rekey whose links a crash left behind.
+const temporalProjectionRelinker = createTemporalProjectionRelinker({
+  ledger: analyticsDb,
+  relink: (moves) => writeGate.relinkTemporalAnnotationProjections(moves),
+  log: log.child("analytics"),
+});
+const relinkMovedTemporalProjections = (): void => {
+  temporalProjectionRelinker.drain().catch((err: unknown) => {
+    log.warn(
+      `Temporal annotation relink failed; it retries at the next projection move or boot: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
+};
+analyticsDb.onTemporalProjectionsMoved(relinkMovedTemporalProjections);
+relinkMovedTemporalProjections();
 // Web pages and visits stored before ingest redacted them are redacted in the
 // background with the shaped rules, a page per writer turn; a recorded rules
 // version makes every later boot skip the pass.

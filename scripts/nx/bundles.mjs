@@ -110,6 +110,7 @@ export const bundles = {
       "sidecar-encryption.e2e.test.ts",
       "tofu.e2e.test.ts",
       "reverse-proxy.e2e.test.ts",
+      "cloudflare-access.e2e.test.ts",
       "mobile-permission-health.e2e.test.ts",
       "restart-durability.e2e.test.ts",
     ],

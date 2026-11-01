@@ -102,6 +102,13 @@ if [ "$SEEN" = 1 ]; then
       fi
       ;;
     pair)
+      prev=""
+      for arg in "$@"; do
+        if [ "$prev" = "--code-file" ]; then
+          printf '%s %s\n' "$(ls -ln "$arg" | cut -c1-10)" "$(cat "$arg")" >> "$OMNESIS_TEST_CALLS.codes"
+        fi
+        prev="$arg"
+      done
       if [ -t 0 ]; then printf 'pair stdin is a tty\n' >> "$OMNESIS_TEST_CALLS"; fi
       if [ -n "\${OMNESIS_TEST_PAIR_FAIL:-}" ]; then
         # The value is the exit status, so a test can drive the CLI's real
@@ -1440,6 +1447,8 @@ exit 0
         OMNESIS_LOG_LEVEL: "debug",
         OMNESIS_CONFIG_DIR: "/nowhere",
         OMNESIS_GATEWAY_URL: "https://localhost:7600",
+        OMNESIS_ACCESS_CLIENT_SECRET: "test-access-secret",
+        OMNESIS_ACCESS_CLIENT_SECRET_FILE: "/nowhere/access-secret",
       },
       encoding: "utf8",
     });
@@ -1457,6 +1466,10 @@ exit 0
     for (const shadowed of ["OMNESIS_CONFIG_DIR=", "OMNESIS_GATEWAY_URL="]) {
       expect(args.some((a) => a.startsWith(shadowed))).toBe(false);
     }
+    // A service-token secret never reaches the docker command line, where any local
+    // user could read it.
+    expect(args.some((a) => a.startsWith("OMNESIS_ACCESS_CLIENT_SECRET"))).toBe(false);
+    expect(args.some((a) => a.includes("test-access-secret"))).toBe(false);
     // Order, not just membership: the flags belong before the service name and
     // the caller's own arguments after the command.
     const service = args.indexOf("gateway");
@@ -1541,7 +1554,7 @@ describe("install.sh --docker --collector", () => {
     // The token lands in the collector's own config directory — the one its
     // daemon reads — and the wrapper runs the CLI in the collector container.
     expect(callStartingWith(run.calls, "pair ")).toBe(
-      `pair ${PAIRING_CODE} --gateway-url ${GATEWAY_URL} ` +
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
         `--trust-fingerprint sha256:${GATEWAY_FP} ` +
         `--save ${join(run.configDir, "collector", "collector-token")}`,
     );

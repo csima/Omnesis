@@ -127,6 +127,18 @@
 #                                  automation. Omitted, it is asked for on the
 #                                  terminal, so a single-use code stays out of
 #                                  shell history.
+#   --access-client-id <id>        (--collector) the Cloudflare Access service
+#                                  token's client id, for a gateway behind
+#                                  Cloudflare Access. Needs --gateway-url and
+#                                  --access-client-secret-file.
+#   --access-client-secret-file <file>
+#                                  (--collector) a file holding that token's
+#                                  client secret. It is saved like the device
+#                                  token, bound to --gateway-url, and sent on
+#                                  every request and WebSocket upgrade to it.
+#   --code-file <path>             (--collector) read the pairing code from a
+#                                  file only its owner can read, so it is on no
+#                                  command line (OMNESIS_PAIRING_CODE_FILE)
 #   --docker                       run the gateway and collector as containers on
 #                                  this machine instead of as user services. The
 #                                  daemons come from published, version-tagged
@@ -280,6 +292,14 @@ PAIR_FINGERPRINT=""
 PAIR_FINGERPRINT_FLAG=0
 PAIR_CODE=""
 PAIR_CODE_FLAG=0
+# A Cloudflare Access service token for a gateway behind Cloudflare Access.
+ACCESS_CLIENT_ID=""
+ACCESS_CLIENT_SECRET_FILE=""
+# A file holding the pairing code, and the private copy `omnesis pair` reads it
+# from, so the code reaches no command line.
+PAIR_CODE_FILE="${OMNESIS_PAIRING_CODE_FILE:-}"
+PAIR_CODE_FILE_FLAG=0
+PAIR_CODE_TMP=""
 # How long to wait for the freshly registered collector to be accepted by the
 # gateway. It builds nothing, so this is a network wait, not a boot wait.
 COLLECTOR_WAIT_SECONDS="${OMNESIS_COLLECTOR_WAIT_SECONDS:-90}"
@@ -570,6 +590,9 @@ cleanup_temp_files() {
   fi
   if [ -n "${PACKAGE_WRAPPER_TMP:-}" ] && [ -f "$PACKAGE_WRAPPER_TMP" ]; then
     rm -f "$PACKAGE_WRAPPER_TMP"
+  fi
+  if [ -n "${PAIR_CODE_TMP:-}" ] && [ -f "$PAIR_CODE_TMP" ]; then
+    rm -f "$PAIR_CODE_TMP"
   fi
   if [ -n "${UPDATE_LOCK_HELPER_TMP:-}" ] && [ -f "$UPDATE_LOCK_HELPER_TMP" ]; then
     rm -f "$UPDATE_LOCK_HELPER_TMP"
@@ -4227,6 +4250,45 @@ process.stdin.on("end", () => {
 });' "$1" 2>/dev/null || true
 }
 
+# The pairing code from --code-file (or OMNESIS_PAIRING_CODE_FILE), into
+# PAIR_CODE. Only the collector role redeems it with `omnesis pair`, which reads
+# it back from a private file; the variable alone is ignored by other roles.
+# The file must be its owner's alone: a code other users can read is a
+# credential they can redeem first.
+read_pairing_code_file() {
+  [ -n "$PAIR_CODE_FILE" ] || return 0
+  if [ "$COLLECTOR" != 1 ]; then
+    [ "$PAIR_CODE_FILE_FLAG" = 0 ] || fail "--code-file is only meaningful with --collector."
+    PAIR_CODE_FILE=""
+    return 0
+  fi
+  [ "$PAIR_CODE_FLAG" = 0 ] || fail "--code and --code-file both name the pairing code; give one."
+  [ -f "$PAIR_CODE_FILE" ] && [ -r "$PAIR_CODE_FILE" ] || \
+    fail "The pairing code file $PAIR_CODE_FILE is not a readable file."
+  PAIR_CODE_FILE_MODE="$(ls -ln "$PAIR_CODE_FILE" 2>/dev/null | cut -c5-10)"
+  case "$PAIR_CODE_FILE_MODE" in
+    ------) ;;
+    *) fail "The pairing code file $PAIR_CODE_FILE is open to other users; make it owner-only (chmod 600 $PAIR_CODE_FILE) and re-run." ;;
+  esac
+  PAIR_CODE="$(tr -d ' \t\r\n' < "$PAIR_CODE_FILE")"
+  [ -n "$PAIR_CODE" ] || fail "The pairing code file $PAIR_CODE_FILE is empty."
+  PAIR_CODE_FLAG=1
+}
+
+# Write PAIR_CODE to an owner-only file in $1 for `omnesis pair --code-file`,
+# into PAIR_CODE_TMP. Inside the config directory, which a Docker collector
+# also sees at the same path; removed once the redeem returns, and on exit.
+write_pairing_code_tmp() {
+  # mktemp creates the file exclusively, with a random name and mode 0600, so
+  # nothing planted at a guessable name in a directory another user can write
+  # (the Docker collector directory belongs to the container's user) is
+  # followed or overwritten.
+  PAIR_CODE_TMP="$( umask 077; mkdir -p "$1" && mktemp "$1/.pairing-code.XXXXXX" )" || \
+    fail "Could not create a private file for the pairing code in $1."
+  printf '%s\n' "$PAIR_CODE" > "$PAIR_CODE_TMP" || \
+    fail "Could not write the pairing code to a private file in $1."
+}
+
 # The single-use pairing code, into PAIR_CODE, for a device of the kind named
 # in $1. Read from the terminal by default: under `curl | sh` stdin is the
 # script, and a code passed on the command line lands in shell history, which
@@ -4245,10 +4307,43 @@ read_pairing_code() {
   [ -n "$PAIR_CODE" ] || fail "No pairing code entered. Re-run once you have one."
 }
 
+# A gateway behind Cloudflare Access answers only requests carrying a service
+# token. Both halves are needed, the secret only from a file (an argument would
+# land in shell history), and the gateway must be named: Access sits in front
+# of a public hostname, never one found by browsing the LAN.
+validate_access_flags() {
+  [ -n "$ACCESS_CLIENT_ID" ] || [ -n "$ACCESS_CLIENT_SECRET_FILE" ] || return 0
+  [ "$COLLECTOR" = 1 ] || \
+    fail "--access-client-id and --access-client-secret-file are only meaningful with --collector."
+  [ "$DOCKER" = 0 ] || \
+    fail "--access-client-id and --access-client-secret-file configure a native collector; under --docker, set OMNESIS_ACCESS_CLIENT_ID, OMNESIS_ACCESS_CLIENT_SECRET_FILE and OMNESIS_ACCESS_GATEWAY_URL for the collector container instead."
+  [ -n "$ACCESS_CLIENT_ID" ] || fail "--access-client-secret-file needs --access-client-id, the token's client id."
+  [ -n "$ACCESS_CLIENT_SECRET_FILE" ] || \
+    fail "--access-client-id needs --access-client-secret-file, a file holding the token's client secret."
+  [ -r "$ACCESS_CLIENT_SECRET_FILE" ] || \
+    fail "--access-client-secret-file $ACCESS_CLIENT_SECRET_FILE is not a readable file."
+  [ "$PAIR_GATEWAY_URL_FLAG" = 1 ] || \
+    fail "A Cloudflare Access service token needs --gateway-url: name the gateway's Access hostname, for example --gateway-url https://omnesis.example.com."
+}
+
+# Save the Access service token before anything dials the gateway, so the
+# redeem and the collector daemon both send it, bound to the gateway named
+# here: no other URL this machine is later pointed at receives it. After the
+# keyring step, so the saved secret is sealed by this host's root key when
+# there is one.
+collector_save_access_token() {
+  [ -n "$ACCESS_CLIENT_ID" ] || return 0
+  info "Saving the Cloudflare Access service token $ACCESS_CLIENT_ID..."
+  "$OMNESIS_BIN" gateway access-token set --gateway-url "$PAIR_GATEWAY_URL" \
+    --id "$ACCESS_CLIENT_ID" --secret-file "$ACCESS_CLIENT_SECRET_FILE" </dev/null || \
+    fail "Could not save the Cloudflare Access service token; nothing was paired. Its message above says why."
+}
+
 # Redeem the code and save the device token. The token file is what the
 # collector daemon authenticates with from here on.
 collector_pair() {
-  set -- pair "$PAIR_CODE" --gateway-url "$PAIR_GATEWAY_URL"
+  write_pairing_code_tmp "$CONFIG_DIR"
+  set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
   if [ -n "$PAIR_FINGERPRINT" ]; then
     set -- "$@" --trust-fingerprint "$PAIR_FINGERPRINT"
   fi
@@ -4264,6 +4359,7 @@ collector_pair() {
   else
     "$OMNESIS_BIN" "$@" </dev/null || PAIR_STATUS=$?
   fi
+  [ -z "$PAIR_CODE_TMP" ] || rm -f "$PAIR_CODE_TMP"
   PAIR_OK=0; [ "$PAIR_STATUS" = 0 ] && PAIR_OK=1
   if [ "$PAIR_OK" = 0 ]; then
     RETRY_FLAGS="--gateway-url $PAIR_GATEWAY_URL"
@@ -5871,6 +5967,11 @@ for NAME in $(env | sed -n 's/^\(OMNESIS_[A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
     OMNESIS_CONFIG_DIR|OMNESIS_GATEWAY_URL|OMNESIS_GATEWAY_PORT) continue ;;
     OMNESIS_DB_PATH|OMNESIS_INDEX_DB_PATH|OMNESIS_ANALYTICS_DB_PATH) continue ;;
     OMNESIS_LOG_FILE|OMNESIS_TLS_CERT|OMNESIS_TLS_KEY) continue ;;
+    # The Access service token is the collector container's, set in its compose
+    # environment. Forwarding a host copy would put the secret on the docker
+    # command line, where any local user can read it, and the secret file names
+    # a host path the container does not mount.
+    OMNESIS_ACCESS_CLIENT_SECRET|OMNESIS_ACCESS_CLIENT_SECRET_FILE) continue ;;
   esac
   # A value containing a newline makes `env` look like it listed another
   # variable; the default keeps that from ending the run under `set -u`.
@@ -5982,7 +6083,11 @@ docker_up() {
 # token lands in the collector's own config directory — the one the daemon
 # reads when it starts.
 docker_collector_pair() {
-  set -- pair "$PAIR_CODE" --gateway-url "$PAIR_GATEWAY_URL"
+  # The container reads the private copy as the daemon's user, which is not
+  # this one under root; the copy is then handed to that user alone.
+  write_pairing_code_tmp "$CONFIG_DIR/collector"
+  docker_own_path "$PAIR_CODE_TMP"
+  set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
   if [ -n "$PAIR_FINGERPRINT" ]; then
     set -- "$@" --trust-fingerprint "$PAIR_FINGERPRINT"
   fi
@@ -5994,6 +6099,7 @@ docker_collector_pair() {
   else
     "$OMNESIS_BIN" "$@" </dev/null || PAIR_STATUS=$?
   fi
+  [ -z "$PAIR_CODE_TMP" ] || rm -f "$PAIR_CODE_TMP"
   PAIR_OK=0; [ "$PAIR_STATUS" = 0 ] && PAIR_OK=1
   if [ "$PAIR_OK" = 0 ]; then
     RETRY_FLAGS="--docker --collector --gateway-url $PAIR_GATEWAY_URL"
@@ -6868,6 +6974,9 @@ parse_args() {
       --gateway-url) PAIR_GATEWAY_URL="$2"; PAIR_GATEWAY_URL_FLAG=1; shift 2 ;;
       --trust-fingerprint) PAIR_FINGERPRINT="$2"; PAIR_FINGERPRINT_FLAG=1; shift 2 ;;
       --code)       PAIR_CODE="$2"; PAIR_CODE_FLAG=1; shift 2 ;;
+      --access-client-id) ACCESS_CLIENT_ID="$2"; shift 2 ;;
+      --access-client-secret-file) ACCESS_CLIENT_SECRET_FILE="$2"; shift 2 ;;
+      --code-file)  PAIR_CODE_FILE="$2"; PAIR_CODE_FILE_FLAG=1; shift 2 ;;
       --docker)     DOCKER=1; shift ;;
       --combined) DOCKER_COMBINED=1; shift ;;
       --gateway-only) DOCKER_GATEWAY_ONLY=1; shift ;;
@@ -7025,9 +7134,11 @@ main() {
     [ "$PAIR_FINGERPRINT_FLAG" = 0 ] || fail "--trust-fingerprint is only meaningful with --collector, --openclaw or --hermes."
     [ "$PAIR_CODE_FLAG" = 0 ] || fail "--code is only meaningful with --collector, --openclaw or --hermes."
   fi
+  read_pairing_code_file
   if [ "$EMBEDDER_FLAG" = 1 ] && [ "$WANT_MODEL" = 0 ]; then
     fail "--embedder names a model to install; it cannot be combined with --no-model, --client-only, --collector, --openclaw or --hermes."
   fi
+  validate_access_flags
   if [ "$CLIENT_ONLY_FLAG" = 1 ]; then
     [ "$GATEWAY_PORT_EXPLICIT" = 0 ] || fail "--port cannot be used with --client-only."
     [ "$MKCERT_EXPLICIT" = 0 ] || fail "--mkcert cannot be used with --client-only."
@@ -7117,6 +7228,7 @@ main() {
     if [ "$COLLECTOR" = 1 ]; then
       setup_collector_storage_keys
       resolve_gateway
+      collector_save_access_token
       read_pairing_code collector
       collector_pair
       collector_register_service
