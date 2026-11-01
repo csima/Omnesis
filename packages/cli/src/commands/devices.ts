@@ -20,8 +20,10 @@ import {
   tokenFingerprint,
   writeCollectorPairingState,
   DEFAULT_CONFIG_DIR,
+  cloudflareAccessRefusal,
   parseDuration,
   discoverGatewayViaMdns,
+  enableGatewayAccess,
   ensureGatewayTrust,
   hasVersionState,
   isTlsCertError,
@@ -69,6 +71,7 @@ import {
   EXIT_GATEWAY_DOWN,
   EXIT_GATEWAY_ERROR,
   EXIT_USER_ERROR,
+  expandHomePath,
   pickGatewayExitCode,
   GATEWAY_REQUEST_URL,
 } from "../utils.js";
@@ -1012,6 +1015,16 @@ export async function redeemPairingCode(
   expectedFingerprint?: string,
   suggestedName: string = redeemSuggestedName(),
 ): Promise<RedeemedPairing> {
+  // A gateway behind Cloudflare Access is reached with this machine's service
+  // token, the trust probe and the redeem alike.
+  try {
+    await enableGatewayAccess([gatewayUrl], trustConfigDir);
+  } catch (err) {
+    throw new CliError(
+      `${c.red}${err instanceof Error ? err.message : String(err)}${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  }
   // Trust is the join's FIRST network touch, and it sits outside the redeem's
   // own catch below. A connection that dies here therefore escaped this command
   // entirely and reached the runner, whose generic hint names
@@ -1085,11 +1098,18 @@ export async function redeemPairingCode(
           body: JSON.stringify(body),
         }),
       );
+      const refusal = await cloudflareAccessRefusal(`${gatewayUrl}/devices/pair`, res);
+      if (refusal) {
+        if (!res.bodyUsed) await res.body?.cancel().catch(() => undefined);
+        throw new CliError(`${c.red}${refusal.message}${c.reset}`, EXIT_AUTH);
+      }
       failureStatus = res.ok ? null : res.status;
       if (res.ok) payload = await res.json();
     }
   } catch (err) {
-    if (err instanceof IntegrationHttpError) {
+    if (err instanceof CliError) {
+      throw err;
+    } else if (err instanceof IntegrationHttpError) {
       failureStatus = err.status;
     } else if (isTlsCertError(err)) {
       throw new CliError(
@@ -2133,17 +2153,6 @@ function hasAdminTokenFile(): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Resolve a user-supplied file path: expand a leading `~/` (the shell only
- * expands an unquoted tilde) and absolutize relative paths.
- */
-function expandHomePath(p: string): string {
-  if (p === "~" || p.startsWith("~/")) {
-    return pathJoin(process.env.HOME ?? "~", p.slice(2));
-  }
-  return pathResolve(p);
 }
 
 /**

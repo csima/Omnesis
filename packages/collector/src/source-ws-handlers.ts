@@ -324,50 +324,7 @@ export function createSourceWsHandlers(deps: SourceWsHandlerDeps): SourceWsHandl
     const args = [...entry.args, body.sourceType];
     if (body.params) args.push(JSON.stringify(body.params));
 
-    //
-    // Pass an explicit minimal env instead of inheriting
-    // process.env. The subprocess only needs PATH (find npx/node),
-    // HOME (token-cache lookups), LANG (locale-sensitive parsers),
-    // D-Bus session handles for OS keyring access on Linux, whatever the
-    // secret store declares it reads (`KEYRING_ENV_KEYS` — without those the
-    // child selects a backend it cannot open, so no keyring-encrypted store
-    // opens), and Omnesis's own configuration knobs. Anything else — random
-    // shell exports, unrelated cloud-credential env vars, debug
-    // tokens — could otherwise leak into a third-party OAuth client
-    // library. Mirrors the exec-runner.ts approach (#triggers/exec).
-    const env: Record<string, string> = {};
-    for (const key of [
-      "PATH",
-      "HOME",
-      "LANG",
-      "LC_ALL",
-      "TZ",
-      "TMPDIR",
-      "USER",
-      "LOGNAME",
-      "DBUS_SESSION_BUS_ADDRESS",
-      "XDG_RUNTIME_DIR",
-      ...KEYRING_ENV_KEYS,
-    ]) {
-      const v = process.env[key];
-      if (v !== undefined) env[key] = v;
-    }
-    // Forward the OMNESIS_* keys the auth subprocess actually
-    // consumes (config dir, gateway URL for callback delivery,
-    // credentials path overrides). Subprocess `process.env` reads
-    // beyond this set should fail loudly so we don't accidentally
-    // open new env-deps without auditing them.
-    for (const [key, value] of Object.entries(process.env)) {
-      if (!value) continue;
-      if (!key.startsWith("OMNESIS_")) continue;
-      // Withheld deliberately: the child's logger writes directly to this file
-      // when it is set, which would put provider log lines into the collector's
-      // log without passing the stderr redaction below. Unset, they arrive on
-      // stderr and are redacted.
-      if (key === "OMNESIS_LOG_FILE") continue;
-      env[key] = value;
-    }
-    env.OMNESIS_CONFIG_DIR = sourceManager.getConfigDir();
+    const env = buildAuthSubprocessEnv(process.env, sourceManager.getConfigDir());
 
     // Validate the pasted fields here rather than in the provider: this is the
     // only place that still holds the spec, and it is the last point at which a
@@ -974,4 +931,58 @@ export function terminateChild(proc: ChildProcess): Promise<void> {
     }, 5_000);
     killTimer.unref();
   });
+}
+
+/**
+ * The environment of the auth subprocess: an explicit minimal set instead of
+ * `source` inherited. The subprocess only needs PATH (find npx/node), HOME
+ * (token-cache lookups), LANG (locale-sensitive parsers), D-Bus session
+ * handles for OS keyring access on Linux, whatever the secret store declares
+ * it reads (`KEYRING_ENV_KEYS` — without those the child selects a backend it
+ * cannot open, so no keyring-encrypted store opens), and Omnesis's own
+ * configuration knobs. Anything else — random shell exports, unrelated
+ * cloud-credential env vars, debug tokens — could otherwise leak into a
+ * third-party OAuth client library. Mirrors the exec-runner.ts approach (#triggers/exec).
+ */
+export function buildAuthSubprocessEnv(
+  source: NodeJS.ProcessEnv,
+  configDir: string,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of [
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "TMPDIR",
+    "USER",
+    "LOGNAME",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+    ...KEYRING_ENV_KEYS,
+  ]) {
+    const v = source[key];
+    if (v !== undefined) env[key] = v;
+  }
+  // Forward the OMNESIS_* keys the auth subprocess actually
+  // consumes (config dir, gateway URL for callback delivery,
+  // credentials path overrides). Subprocess `process.env` reads
+  // beyond this set should fail loudly so we don't accidentally
+  // open new env-deps without auditing them.
+  for (const [key, value] of Object.entries(source)) {
+    if (!value) continue;
+    if (!key.startsWith("OMNESIS_")) continue;
+    // Withheld deliberately: the child's logger writes directly to this file
+    // when it is set, which would put provider log lines into the collector's
+    // log without passing the stderr redaction below. Unset, they arrive on
+    // stderr and are redacted.
+    if (key === "OMNESIS_LOG_FILE") continue;
+    // The Cloudflare Access service token is this collector's credential
+    // for its gateway, and a provider's auth flow has no use for it.
+    if (key.startsWith("OMNESIS_ACCESS_")) continue;
+    env[key] = value;
+  }
+  env.OMNESIS_CONFIG_DIR = configDir;
+  return env;
 }

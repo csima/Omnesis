@@ -1987,6 +1987,8 @@ exit 0
         OMNESIS_LOG_LEVEL: "debug",
         OMNESIS_CONFIG_DIR: "/nowhere",
         OMNESIS_GATEWAY_URL: "https://localhost:7600",
+        OMNESIS_ACCESS_CLIENT_SECRET: "test-access-secret",
+        OMNESIS_ACCESS_CLIENT_SECRET_FILE: "/nowhere/access-secret",
       },
       encoding: "utf8",
     });
@@ -2004,6 +2006,10 @@ exit 0
     for (const shadowed of ["OMNESIS_CONFIG_DIR=", "OMNESIS_GATEWAY_URL="]) {
       expect(args.some((a) => a.startsWith(shadowed))).toBe(false);
     }
+    // A service-token secret never reaches the docker command line, where any local
+    // user could read it.
+    expect(args.some((a) => a.startsWith("OMNESIS_ACCESS_CLIENT_SECRET"))).toBe(false);
+    expect(args.some((a) => a.includes("test-access-secret"))).toBe(false);
     // Order, not just membership: the flags belong before the service name and
     // the caller's own arguments after the command.
     const service = args.indexOf("gateway");

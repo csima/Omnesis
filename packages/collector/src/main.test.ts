@@ -29,6 +29,7 @@ import {
   handleSourceSyncCommand,
   registerSourceUpdatedCommand,
   resolveCollectorToken,
+  gatewayAccessTargets,
   resolveGatewayUrl,
   waitForGateway,
   withSelfPairRetries,
@@ -64,7 +65,7 @@ describe("resolveGatewayUrl", () => {
 
     const result = await resolveGatewayUrl();
 
-    expect(result).toEqual({ url: "https://gateway.example.com:7600" });
+    expect(result).toEqual({ url: "https://gateway.example.com:7600", source: "env" });
     expect(discoverMock).not.toHaveBeenCalled();
   });
 
@@ -73,7 +74,7 @@ describe("resolveGatewayUrl", () => {
 
     const result = await resolveGatewayUrl();
 
-    expect(result).toEqual({ url: "https://localhost:7600" });
+    expect(result).toEqual({ url: "https://localhost:7600", source: "default" });
     expect(discoverMock).not.toHaveBeenCalled();
   });
 
@@ -82,7 +83,11 @@ describe("resolveGatewayUrl", () => {
 
     const result = await resolveGatewayUrl();
 
-    expect(result).toEqual({ url: "https://192.168.1.20:7600", fingerprint: "cafef00d" });
+    expect(result).toEqual({
+      url: "https://192.168.1.20:7600",
+      source: "mdns",
+      fingerprint: "cafef00d",
+    });
     expect(discoverMock).toHaveBeenCalledWith({ timeoutMs: 3000 });
   });
 
@@ -91,7 +96,25 @@ describe("resolveGatewayUrl", () => {
 
     const result = await resolveGatewayUrl();
 
-    expect(result).toEqual({ url: "https://localhost:7600" });
+    expect(result).toEqual({ url: "https://localhost:7600", source: "default" });
+  });
+});
+
+describe("gatewayAccessTargets", () => {
+  test("the service token is offered only to a gateway the operator named", () => {
+    expect(gatewayAccessTargets({ url: "https://omnesis.example.com", source: "env" })).toEqual([
+      "https://omnesis.example.com",
+    ]);
+    // A gateway found on the LAN is whatever answered there, even when its
+    // record names the token's own gateway.
+    expect(
+      gatewayAccessTargets({
+        url: "https://omnesis.example.com",
+        source: "mdns",
+        fingerprint: "cafef00d",
+      }),
+    ).toEqual([]);
+    expect(gatewayAccessTargets({ url: "https://localhost:7600", source: "default" })).toEqual([]);
   });
 });
 
