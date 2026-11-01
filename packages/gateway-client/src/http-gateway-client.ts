@@ -5,8 +5,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import {
   MAX_TRANSCRIPTION_MS,
+  assertNotCloudflareAccessRefusal,
   createLogger,
   fetchAllowingSlowResponse,
+  isCloudflareAccessRefusedError,
   toErrorMessage,
 } from "@omnesis/core";
 import { SyncError } from "@omnesis/types";
@@ -193,6 +195,7 @@ export class HttpGatewayClient implements GatewayClient {
       try {
         await this.beforeRequest?.();
       } catch (err) {
+        if (isCloudflareAccessRefusedError(err)) throw err;
         const guardMessage = toErrorMessage(err);
         if (attempt < MAX_RETRIES && isTransportFailure(guardMessage)) {
           const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
@@ -205,7 +208,8 @@ export class HttpGatewayClient implements GatewayClient {
         throw err;
       }
       try {
-        const res = await fetch(`${this.baseUrl}${path}`, {
+        const url = `${this.baseUrl}${path}`;
+        const res = await fetch(url, {
           ...options,
           headers: {
             "Content-Type": "application/json",
@@ -214,6 +218,7 @@ export class HttpGatewayClient implements GatewayClient {
             ...options.headers,
           },
         });
+        await assertNotCloudflareAccessRefusal(url, res);
 
         if (!res.ok) {
           const body = await res.text();
@@ -257,6 +262,7 @@ export class HttpGatewayClient implements GatewayClient {
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         if (lastError instanceof GatewayResponseError) throw lastError;
+        if (isCloudflareAccessRefusedError(lastError)) throw lastError;
 
         // Network errors (fetch throws) are retryable. Read the whole cause
         // chain: `fetch()` rejects with a bare `TypeError: fetch failed` and
@@ -551,7 +557,9 @@ export class HttpGatewayClient implements GatewayClient {
         body: body as unknown as BodyInit,
         signal,
       });
+      await assertNotCloudflareAccessRefusal(`${this.baseUrl}${path}`, res);
     } catch (err) {
+      if (isCloudflareAccessRefusedError(err)) throw err;
       // Fetch rejection is transient; surface it so the caller applies its own
       // durability policy.
       const msg = err instanceof Error ? err.message : String(err);

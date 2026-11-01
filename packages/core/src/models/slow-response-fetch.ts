@@ -19,6 +19,8 @@
  * not follow `HTTP(S)_PROXY` settings that the built-in `fetch` can.
  */
 
+import { withGatewayAccessDispatcher } from "../gateway-access.js";
+
 type Undici = typeof import("undici");
 
 let client: Promise<{ fetch: Undici["fetch"]; dispatcher: InstanceType<Undici["Agent"]> }> | null =
@@ -38,6 +40,6 @@ export const fetchAllowingSlowResponse: typeof fetch = async (input, init) => {
   const { fetch: undiciFetch, dispatcher } = await undiciClient();
   return (await undiciFetch(input as Parameters<Undici["fetch"]>[0], {
     ...(init as Parameters<Undici["fetch"]>[1]),
-    dispatcher,
+    dispatcher: withGatewayAccessDispatcher(dispatcher),
   })) as unknown as Response;
 };

@@ -574,6 +574,75 @@ omnesis.example.com {
           to a public authority.
         </p>
 
+        <h3 id="cloudflare-access">Behind Cloudflare Access</h3>
+        <p>
+          A Cloudflare Tunnel is a reverse proxy run by Cloudflare: <code>cloudflared</code> on the
+          gateway host forwards a public hostname to the gateway on loopback, as the proxy above
+          does, and Cloudflare Access in front of the hostname turns away anything that does not
+          present a service token. Give each collector machine its own service token in a Service
+          Auth policy, so one machine can be revoked alone. Cloudflare terminates TLS at its edge,
+          so traffic is decrypted there before the tunnel carries it to the gateway.
+        </p>
+        <p>
+          A collector or CLI with a service token sends it as the
+          <code>CF-Access-Client-Id</code> and <code>CF-Access-Client-Secret</code> headers on every
+          request to the gateway and on the WebSocket upgrade, and to no other address. It is sent
+          only over <code>https://</code>. Cloudflare's certificate chains to a public authority, so
+          pairing and the collector verify it without a pin. Leave out
+          <code>--trust-fingerprint</code>: the fingerprint the gateway prints is of its own
+          certificate, which the edge does not serve.
+        </p>
+        <div class="term">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+          <div class="term-body">
+            <p class="t-dim">
+              # on the new machine — the secret is read from a file, never an argument
+            </p>
+            <p>
+              <span class="t-prompt">❯</span>
+              <span class="t-cmd"
+                >curl -fsSL https://omnesis.dev/install.sh | sh -s -- --collector --gateway-url
+                https://omnesis.example.com --access-client-id &lt;client id&gt;
+                --access-client-secret-file ~/access-secret</span
+              >
+            </p>
+          </div>
+        </div>
+        <p>
+          The role saves the token before it pairs, sealed by the host's root key like the device
+          token, and the collector service reads it on every start. To set it on a machine that is
+          already installed, or to replace a rotated one, run
+          <code>omnesis gateway access-token set</code> and restart the collector;
+          <code>--secret-file -</code> reads the secret from stdin.
+          <code>omnesis gateway access-token show</code> names the client id in use, never the
+          secret, and <code>clear</code> removes it. <code>OMNESIS_ACCESS_CLIENT_ID</code> with
+          <code>OMNESIS_ACCESS_CLIENT_SECRET</code> or
+          <code>OMNESIS_ACCESS_CLIENT_SECRET_FILE</code>
+          set the token for one process instead, and take precedence over the saved one.
+        </p>
+        <div class="term">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+          <div class="term-body">
+            <p>
+              <span class="t-prompt">❯</span>
+              <span class="t-cmd"
+                >omnesis gateway access-token set --id &lt;client id&gt; --secret-file
+                ~/access-secret</span
+              >
+            </p>
+            <p>
+              <span class="t-prompt">❯</span>
+              <span class="t-cmd">omnesis service restart collector</span>
+            </p>
+          </div>
+        </div>
+        <p>
+          When Access refuses a request, by redirecting it to its login page or answering
+          <code>403</code> itself, the CLI and the collector say so: Cloudflare Access refused this
+          machine's service token, naming its client id, or no service token is configured. The
+          pairing code is not spent by a refused redeem, so retry it once the token is fixed.
+        </p>
+
         <h2 id="collector">Collector on another machine</h2>
         <p>
           The installer runs a collector on the gateway machine, and it sets itself up: on first

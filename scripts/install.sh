@@ -127,6 +127,15 @@
 #                                  automation. Omitted, it is asked for on the
 #                                  terminal, so a single-use code stays out of
 #                                  shell history.
+#   --access-client-id <id>        (--collector) the Cloudflare Access service
+#                                  token's client id, for a gateway behind
+#                                  Cloudflare Access. Needs --gateway-url and
+#                                  --access-client-secret-file.
+#   --access-client-secret-file <file>
+#                                  (--collector) a file holding that token's
+#                                  client secret. It is saved like the device
+#                                  token and sent on every request and on the
+#                                  WebSocket upgrade to the gateway.
 #   --docker                       run the gateway and collector as containers on
 #                                  this machine instead of as user services. The
 #                                  daemons come from published, version-tagged
@@ -280,6 +289,9 @@ PAIR_FINGERPRINT=""
 PAIR_FINGERPRINT_FLAG=0
 PAIR_CODE=""
 PAIR_CODE_FLAG=0
+# A Cloudflare Access service token for a gateway behind Cloudflare Access.
+ACCESS_CLIENT_ID=""
+ACCESS_CLIENT_SECRET_FILE=""
 # How long to wait for the freshly registered collector to be accepted by the
 # gateway. It builds nothing, so this is a network wait, not a boot wait.
 COLLECTOR_WAIT_SECONDS="${OMNESIS_COLLECTOR_WAIT_SECONDS:-90}"
@@ -4245,6 +4257,36 @@ read_pairing_code() {
   [ -n "$PAIR_CODE" ] || fail "No pairing code entered. Re-run once you have one."
 }
 
+# A gateway behind Cloudflare Access answers only requests carrying a service
+# token. Both halves are needed, the secret only from a file (an argument would
+# land in shell history), and the gateway must be named: Access sits in front
+# of a public hostname, never one found by browsing the LAN.
+validate_access_flags() {
+  [ -n "$ACCESS_CLIENT_ID" ] || [ -n "$ACCESS_CLIENT_SECRET_FILE" ] || return 0
+  [ "$COLLECTOR" = 1 ] || \
+    fail "--access-client-id and --access-client-secret-file are only meaningful with --collector."
+  [ "$DOCKER" = 0 ] || \
+    fail "--access-client-id and --access-client-secret-file configure a native collector; under --docker, set OMNESIS_ACCESS_CLIENT_ID and OMNESIS_ACCESS_CLIENT_SECRET_FILE for the collector container instead."
+  [ -n "$ACCESS_CLIENT_ID" ] || fail "--access-client-secret-file needs --access-client-id, the token's client id."
+  [ -n "$ACCESS_CLIENT_SECRET_FILE" ] || \
+    fail "--access-client-id needs --access-client-secret-file, a file holding the token's client secret."
+  [ -r "$ACCESS_CLIENT_SECRET_FILE" ] || \
+    fail "--access-client-secret-file $ACCESS_CLIENT_SECRET_FILE is not a readable file."
+  [ "$PAIR_GATEWAY_URL_FLAG" = 1 ] || \
+    fail "A Cloudflare Access service token needs --gateway-url: name the gateway's Access hostname, for example --gateway-url https://omnesis.example.com."
+}
+
+# Save the Access service token before anything dials the gateway, so the
+# redeem and the collector daemon both send it. After the keyring step, so the
+# saved secret is sealed by this host's root key when there is one.
+collector_save_access_token() {
+  [ -n "$ACCESS_CLIENT_ID" ] || return 0
+  info "Saving the Cloudflare Access service token $ACCESS_CLIENT_ID..."
+  "$OMNESIS_BIN" gateway access-token set --id "$ACCESS_CLIENT_ID" \
+    --secret-file "$ACCESS_CLIENT_SECRET_FILE" </dev/null || \
+    fail "Could not save the Cloudflare Access service token; nothing was paired. Its message above says why."
+}
+
 # Redeem the code and save the device token. The token file is what the
 # collector daemon authenticates with from here on.
 collector_pair() {
@@ -6868,6 +6910,8 @@ parse_args() {
       --gateway-url) PAIR_GATEWAY_URL="$2"; PAIR_GATEWAY_URL_FLAG=1; shift 2 ;;
       --trust-fingerprint) PAIR_FINGERPRINT="$2"; PAIR_FINGERPRINT_FLAG=1; shift 2 ;;
       --code)       PAIR_CODE="$2"; PAIR_CODE_FLAG=1; shift 2 ;;
+      --access-client-id) ACCESS_CLIENT_ID="$2"; shift 2 ;;
+      --access-client-secret-file) ACCESS_CLIENT_SECRET_FILE="$2"; shift 2 ;;
       --docker)     DOCKER=1; shift ;;
       --combined) DOCKER_COMBINED=1; shift ;;
       --gateway-only) DOCKER_GATEWAY_ONLY=1; shift ;;
@@ -7028,6 +7072,7 @@ main() {
   if [ "$EMBEDDER_FLAG" = 1 ] && [ "$WANT_MODEL" = 0 ]; then
     fail "--embedder names a model to install; it cannot be combined with --no-model, --client-only, --collector, --openclaw or --hermes."
   fi
+  validate_access_flags
   if [ "$CLIENT_ONLY_FLAG" = 1 ]; then
     [ "$GATEWAY_PORT_EXPLICIT" = 0 ] || fail "--port cannot be used with --client-only."
     [ "$MKCERT_EXPLICIT" = 0 ] || fail "--mkcert cannot be used with --client-only."
@@ -7117,6 +7162,7 @@ main() {
     if [ "$COLLECTOR" = 1 ]; then
       setup_collector_storage_keys
       resolve_gateway
+      collector_save_access_token
       read_pairing_code collector
       collector_pair
       collector_register_service

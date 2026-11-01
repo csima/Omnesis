@@ -23,6 +23,7 @@ import {
   EXIT_USER_ERROR,
 } from "@omnesis/cli-shared";
 import {
+  cloudflareAccessRefusal,
   DEFAULT_CONFIG_DIR,
   localGatewayRequestUrl,
   readPackageVersion,
@@ -153,7 +154,7 @@ export async function gatewayFetch(path: string, init: RequestInit = {}): Promis
     );
   }
   const url = path.startsWith("http") ? path : `${GATEWAY_REQUEST_URL}${path}`;
-  return fetch(url, {
+  const res = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -162,6 +163,12 @@ export async function gatewayFetch(path: string, init: RequestInit = {}): Promis
       ...(init.headers ?? {}),
     },
   });
+  const refusal = cloudflareAccessRefusal(url, res);
+  if (refusal) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new CliError(refusal.message, EXIT_AUTH);
+  }
+  return res;
 }
 
 export async function gatewayJson<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -180,6 +187,17 @@ export function pickGatewayExitCode(status: number): number {
   if (status >= 500) return EXIT_GATEWAY_ERROR;
   if (status >= 400) return EXIT_USER_ERROR;
   return EXIT_FAILURE;
+}
+
+/**
+ * Resolve a user-supplied file path: expand a leading `~/` (the shell only
+ * expands an unquoted tilde) and absolutize relative paths.
+ */
+export function expandHomePath(p: string): string {
+  if (p === "~" || p.startsWith("~/")) {
+    return pathJoin(process.env.HOME ?? "~", p.slice(2));
+  }
+  return pathResolve(p);
 }
 
 /** Shorter alias used by the read-side commands (search/show/...). */

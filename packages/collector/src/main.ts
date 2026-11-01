@@ -7,6 +7,9 @@ import { pathToFileURL } from "node:url";
 import {
   applyPrivateUmask,
   acquireUpdateLock,
+  assertNotCloudflareAccessRefusal,
+  cloudflareAccessRefusal,
+  enableGatewayAccess,
   createLogger,
   toErrorMessage,
   DEFAULT_CONFIG_DIR,
@@ -223,6 +226,7 @@ export async function waitForGateway(
   let lastLog = 0;
   let nextTrustAttempt = 0;
   let certificateChanged: GatewayCertificateChangedError | null = null;
+  let accessRefused: string | null = null;
   while (true) {
     const local = localGatewayRequestUrl(gatewayUrl, configDir);
     if (local !== gatewayUrl) {
@@ -240,7 +244,12 @@ export async function waitForGateway(
     }
     try {
       const res = await fetch(`${gatewayUrl}/health`);
-      if (res.ok) return gatewayUrl;
+      // Access answers a refused request with its login page, a 200 that is
+      // not the gateway; the gateway is only up when it answers itself.
+      const refusal = cloudflareAccessRefusal(`${gatewayUrl}/health`, res);
+      accessRefused = refusal?.message ?? null;
+      if (refusal) await res.body?.cancel().catch(() => undefined);
+      else if (res.ok) return gatewayUrl;
     } catch (err) {
       if (isTlsCertError(err) && Date.now() >= nextTrustAttempt) {
         try {
@@ -266,11 +275,13 @@ export async function waitForGateway(
     }
     if (Date.now() - lastLog > deadlineLog) {
       const where = local === gatewayUrl ? gatewayUrl : `${gatewayUrl} (or ${local})`;
-      log.warn(
-        certificateChanged
-          ? `Waiting for gateway at ${where}: its certificate changed (sha256:${certificateChanged.servedFingerprint}) and is not trusted here`
-          : `Waiting for gateway at ${where}...`,
-      );
+      if (accessRefused) log.error(accessRefused);
+      else
+        log.warn(
+          certificateChanged
+            ? `Waiting for gateway at ${where}: its certificate changed (sha256:${certificateChanged.servedFingerprint}) and is not trusted here`
+            : `Waiting for gateway at ${where}...`,
+        );
       lastLog = Date.now();
     }
     await new Promise((r) => setTimeout(r, 1000));
@@ -290,6 +301,9 @@ async function probeTokenStatus(gatewayUrl: string, token: string): Promise<numb
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     await res.body?.cancel().catch(() => undefined);
+    // Access turning the probe away says nothing about the device token: the
+    // gateway never saw it, so it is no answer rather than a 401 or a 200.
+    if (cloudflareAccessRefusal(`${gatewayUrl}/config`, res)) return null;
     return res.status;
   } catch {
     return null;
@@ -384,6 +398,7 @@ export async function resolveCollectorToken(
       },
     }),
   });
+  await assertNotCloudflareAccessRefusal(`${gatewayUrl}/admin/devices`, res);
   if (!res.ok) {
     // The credential offered as bootstrap is not an admin one either. If some
     // credential here used to be accepted by this gateway, that is a revoke:
@@ -505,6 +520,17 @@ export async function main() {
   // sight, so the self-signed cert is accepted non-interactively — and for
   // first sight only: trust already saved is never moved by a LAN record.
   const discoveredFingerprint = fingerprint ?? undefined;
+
+  // A gateway behind Cloudflare Access is reached with this machine's service
+  // token on every request and on the WebSocket upgrade. Read before the first
+  // request, so the trust probe below already carries it.
+  try {
+    await enableGatewayAccess([requestedGatewayUrl], configDir);
+  } catch (err) {
+    log.error(`Cannot start: ${toErrorMessage(err)}`);
+    await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+    process.exit(1);
+  }
 
   try {
     const tofu = await ensureGatewayTrust({
