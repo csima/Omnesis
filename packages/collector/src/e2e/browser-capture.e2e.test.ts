@@ -50,7 +50,14 @@ import { SyntheticE2EHarness } from "./synth-harness.js";
  *   (7) the capture settings live on the gateway: an exclusion, a pause and a
  *       purge made through the policy client are what the gateway serves back,
  *       and a page deleted for good is named in the policy and refused on
- *       re-push, while a copy-only delete lets the page return.
+ *       re-push, while a copy-only delete lets the page return;
+ *   (8) the operator's own sites, set once in the gateway's config, are in the
+ *       policy every browser reads, and the built-in mail, messaging and
+ *       password-manager sites and credential paths are refused with no
+ *       policy entry at all — by the browser's judge and again by the
+ *       gateway on ingest;
+ *   (9) a page pushed with credentials in its text — by a browser that did not
+ *       redact them — is stored with them redacted, on both planes.
  *
  * All fixtures are invented (example.com hosts, fictional titles/text) — never
  * real corpus.
@@ -93,6 +100,19 @@ async function hashText(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The operator's own tools, as `webCapture.ownSites` in the gateway's config. */
+const OWN_SITES = ["agents.example.net", "apps.example.net"];
+
+/** Invented credentials, assembled at run time so no scanner matches this file. */
+const FAKE_GITHUB_TOKEN = ["gh", "p_", "Q7rT2mX9pL4vN8kB3cZ6wY1hJ5dF0sGaAbCd"].join("");
+const FAKE_JWT = [
+  "ey",
+  "JhbGciOiJIUzI1NiJ9",
+  ".ey",
+  "JzdWIiOiJmaWN0aW9uYWwifQ",
+  ".c2lnbmF0dXJl",
+].join("");
+
 describe("Browser-capture push path (spawned gateway)", () => {
   let harness: SyntheticE2EHarness;
   let gatewayUrl: string;
@@ -101,7 +121,10 @@ describe("Browser-capture push path (spawned gateway)", () => {
   let browserProfile: { deviceId: string; label: string };
 
   beforeAll(async () => {
-    harness = new SyntheticE2EHarness({ gatewayMode: "stable" });
+    harness = new SyntheticE2EHarness({
+      gatewayMode: "stable",
+      extraGatewayConfig: { webCapture: { ownSites: OWN_SITES } },
+    });
     await harness.start();
     gatewayUrl = harness.gatewayUrl;
 
@@ -606,5 +629,96 @@ describe("Browser-capture push path (spawned gateway)", () => {
         .delivered,
     ).toBe(1);
     expect((await searchDocs("soup recipe")).some((d) => d.source_id === "web")).toBe(true);
+  });
+
+  test("(8) own sites come from the gateway's config; built-in sites and credential paths need no entry", async () => {
+    const policy = await new CapturePolicyClient(gatewayUrl, webToken, nodeFetch).read();
+    expect(policy.ownSites).toEqual(OWN_SITES);
+    const context = { gatewayHost: new URL(gatewayUrl).hostname, now: Date.now() };
+    expect(judgeCaptureUrl(policy, "https://agents.example.net/browser", context)).toEqual({
+      allowed: false,
+      reason: "own-site",
+    });
+    expect(judgeCaptureUrl(policy, "https://notes-app.apps.example.net/", context)).toEqual({
+      allowed: false,
+      reason: "own-site",
+    });
+    // No source owns a password manager and the policy names none.
+    expect(policy.ownedDomains).not.toContain("bitwarden.com");
+    expect(policy.excludedDomains).not.toContain("bitwarden.com");
+    expect(judgeCaptureUrl(policy, "https://vault.bitwarden.com/#/vault", context)).toEqual({
+      allowed: false,
+      reason: "built-in-domain",
+    });
+    // The gateway applies the same verdicts on ingest: a browser that ignored
+    // them gets its page turned away, like one deleted for good.
+    const pusher = newClient(new MemStore());
+    for (const url of ["https://agents.example.net/browser", "https://vault.bitwarden.com/vault"]) {
+      await pusher.enqueueDocument(
+        await buildWebPageDocument({
+          normalizedUrl: url,
+          title: `Invented page at ${url}`,
+          text: `Invented body for ${url}, long enough to be kept by the extractor.`,
+          contentHash: await hashText(url),
+          visitedAt: new Date().toISOString(),
+          browserProfile,
+        }),
+      );
+    }
+    const before = await webDocCount();
+    expect(await pusher.drain()).toMatchObject({ delivered: 0, suppressed: 2 });
+    expect(await webDocCount()).toBe(before);
+    for (const url of [
+      "https://code.example.org/settings/tokens",
+      "https://cloud.example.org/account/api-keys",
+      "https://team.example.org/cdn-cgi/access/login/team.example.org",
+      "https://app.example.org/reset/Zm9yZ290LXBhc3N3b3JkLXRva2Vu",
+    ]) {
+      expect(judgeCaptureUrl(policy, url, context), url).toEqual({
+        allowed: false,
+        reason: "skipped-path",
+      });
+    }
+  });
+
+  test("(9) credentials a browser did not redact are redacted on ingest, on both planes", async () => {
+    const client = newClient(new MemStore());
+    const url = "https://wiki.example.org/runbooks/fictional-deploy";
+    const title = `Deploy runbook ${FAKE_GITHUB_TOKEN}`;
+    const text = `The invented Northstar deploy reads DEPLOY_TOKEN=${FAKE_GITHUB_TOKEN} and sends Authorization: Bearer ${FAKE_JWT} with every request.`;
+    const visitedAt = new Date().toISOString();
+    await client.enqueueDocument(
+      await buildWebPageDocument({
+        normalizedUrl: url,
+        title,
+        text,
+        contentHash: await hashText(text),
+        visitedAt,
+        browserProfile,
+      }),
+    );
+    await client.enqueueVisit(
+      buildPageVisit({ normalizedUrl: url, title, visitedAt, dwellMs: 6100, browserProfile }),
+    );
+    expect((await client.drain()).delivered).toBe(2);
+
+    const hit = (await searchDocs("Northstar deploy")).find((d) => d.source_id === "web");
+    expect(hit, "the redacted page is still searchable by its text").toBeDefined();
+    const stored = (await harness.gatewayJson(`/documents/${hit!.id}`)) as {
+      title: string;
+      content: string;
+      contentHash?: string;
+      content_hash?: string;
+    };
+    expect(stored.title).toBe("Deploy runbook [redacted]");
+    expect(stored.content).toBe(
+      "The invented Northstar deploy reads DEPLOY_TOKEN=[redacted] and sends Authorization: [redacted] with every request.",
+    );
+    expect(stored.content).not.toContain(FAKE_GITHUB_TOKEN);
+    expect(stored.content).not.toContain(FAKE_JWT);
+    expect(stored.contentHash ?? stored.content_hash).toBe(await hashText(stored.content));
+
+    const visits = await sql(`SELECT title FROM page_visits WHERE url = '${url}'`);
+    expect(visits.rows.map((row) => String(row[0]))).toEqual(["Deploy runbook [redacted]"]);
   });
 });

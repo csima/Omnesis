@@ -81,6 +81,7 @@ import type {
   SourceUrlRecanonicalizationCursor,
   SourceUrlRecanonicalizationPlan,
 } from "../domain/SourceUrlRecanonicalization.js";
+import type { WebRedactionCursor, WebRedactionPlan } from "../sources/web/backfill.js";
 
 import type { VocabularySettings, VocabularyDocument } from "../transcribe/vocabulary/types.js";
 
@@ -100,6 +101,8 @@ export interface IoGate {
     specs: readonly UrlCanonicalizerSpec[],
     cursor?: SourceUrlRecanonicalizationCursor,
   ): Promise<SourceUrlRecanonicalizationPlan>;
+  /** Read and redact the next page of stored web documents; see `sources/web/backfill.ts`. */
+  planWebRedactionPage(cursor?: WebRedactionCursor): Promise<WebRedactionPlan>;
   /**
    * The corpus month by month, split into what the lane has made of each
    * document. The hero picture of where the Brain stands — and a full grouped
@@ -459,6 +462,7 @@ const COMPUTE_OP_DEFS: readonly IoOpDef[] = [
   { name: "io.echo", priority: "background" },
   { name: "io.collectorRosterSnapshot", priority: "background" },
   { name: "io.planSourceUrlRecanonicalization", priority: "background" },
+  { name: "io.planWebRedactionPage", priority: "background" },
   { name: "io.countDocuments", priority: "background" },
   // Heavy budget: this one is a corpus scan by nature, so the slow-op alarm
   // should fire on a genuine outlier rather than on every call.
@@ -593,6 +597,7 @@ export function ioGateFromScheduler(scheduler: Scheduler): IoGate {
     collectorRosterSnapshot: () => call("io.collectorRosterSnapshot", []),
     planSourceUrlRecanonicalization: (specs, cursor) =>
       call("io.planSourceUrlRecanonicalization", [specs, cursor]),
+    planWebRedactionPage: (cursor) => call("io.planWebRedactionPage", [cursor]),
     countDocuments: () => call("io.countDocuments", []),
     bootstrapBacklog: (recencyFloor) => call("io.bootstrapBacklog", [recencyFloor]),
     knowledgeDiscoveryByMonth: (notBefore, excludedSources = []) =>

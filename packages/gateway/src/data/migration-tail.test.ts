@@ -63,6 +63,8 @@ const WOUND_BACK = [
   191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204,
   // 205 indexes and compacts knowledge_changes, which undoKnowledge drops.
   205, 206,
+  // 207 re-redacts stored web pages; it repairs data, not shape.
+  207,
 ];
 
 let dir: string;

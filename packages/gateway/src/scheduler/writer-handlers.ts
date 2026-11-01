@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Adrien Conrath
 
-import { upsertConversationDocument } from "../sources/omnesis-chat/document-writer.js";
-import { clearMorningBriefMessageItems } from "../brain/storage/morning-brief-items.js";
-
 import {
   type SyncIssue,
   type SyncIssueAssessment,
@@ -24,6 +21,8 @@ import {
   type MultiDeviceMode,
   type SyncRemediation,
 } from "@omnesis/types";
+import { upsertConversationDocument } from "../sources/omnesis-chat/document-writer.js";
+import { clearMorningBriefMessageItems } from "../brain/storage/morning-brief-items.js";
 
 /**
  * Single source of truth for every writer op the worker can dispatch.
@@ -45,7 +44,6 @@ import {
  * The other three places fail to compile until they're updated.
  */
 
-import type Database from "better-sqlite3";
 import { beginLinkDeclarationUpdate, finishLinkDeclarationUpdate } from "../data/list-revisions.js";
 type Db = Database.Database;
 
@@ -123,6 +121,7 @@ import { withdrawKnowledgeOwner } from "../brain/knowledge/owner-withdrawal.js";
 // `people.ts` (`runMergePass`, `collapseTransitiveChains`,
 // `upsertTransitiveCollapse`) keep their `../people.js` import below
 // — they move out under merge-service-decomposition.
+import { applyWebRedactionPage, type WebRedactionMutation } from "../sources/web/backfill.js";
 import {
   applySourceUrlRecanonicalizationPage,
   finishSourceUrlRecanonicalization,
@@ -850,6 +849,11 @@ export const writerHandlers = {
   ) => applySourceUrlRecanonicalizationPage(db, cursor, mutations),
   "db.finishSourceUrlRecanonicalization": (db: Db, cursor: SourceUrlRecanonicalizationCursor) =>
     finishSourceUrlRecanonicalization(db, cursor),
+  "db.applyWebRedactionPage": (
+    db: Db,
+    mutations: readonly WebRedactionMutation[],
+    finishedKey: string | null,
+  ) => applyWebRedactionPage(db, mutations, finishedKey),
   // Note: `db.upsertWithCursor` lives in `writerYieldableHandlers` —
   // it's the collector's hot ingest path (realtime priority), so we
   // want it to yield between doc chunks rather than park the writer
@@ -1991,6 +1995,7 @@ export const writerHandlers = {
  */
 import { advanceTranscriptionVocabularyRebuild } from "../transcribe/vocabulary/rebuild.js";
 import { applyTranscriptionVocabularyBatch } from "../transcribe/vocabulary/storage.js";
+import type Database from "better-sqlite3";
 import type { ConversationEvidenceProjection } from "../sources/omnesis-chat/evidence-projection.js";
 import type {
   ProposedTaskChange,

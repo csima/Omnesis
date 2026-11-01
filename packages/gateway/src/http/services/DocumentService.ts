@@ -64,7 +64,13 @@ import {
   type AnalyticsRecentCursor,
 } from "../../analytics-db.js";
 import { epochScope, type SourceWriteEpochFence } from "../../source-write-epoch-fence.js";
+import {
+  assertCanonicalWebSourceIds,
+  partitionCapturableDocuments,
+  redactWebDocuments,
+} from "../../sources/web/ingest.js";
 import { SourceSyncStateService } from "./SourceSyncStateService.js";
+import type { WebCapturePolicy } from "@omnesis/provider-web/capture-policy";
 import type { SourceDataRemovalService } from "./SourceDataRemovalService.js";
 import type { SourcePageWriteAuthority } from "../../sync-lease.js";
 import type { OmnesisConfig } from "@omnesis/config";
@@ -113,6 +119,11 @@ export interface DocumentServiceDeps {
   db: Db;
   writeGate: WriteGate;
   events: EventService;
+  /**
+   * The capture policy captured web pages are judged by on ingest, read when
+   * a batch arrives. Absent in tests that wire no policy; nothing is refused.
+   */
+  webCapturePolicy?: () => WebCapturePolicy | null;
   configStore?: ConfigStore;
   config?: OmnesisConfig;
   /**
@@ -310,6 +321,7 @@ export class DocumentService {
     const seenTypes = new Set<string>();
     for (const d of docs) {
       if (!d.sourceId) continue;
+      assertCanonicalWebSourceIds(scopes, [d.sourceId]);
       const sourceType = sourceTypeOf(d.sourceId);
       if (seenTypes.has(sourceType)) continue;
       seenTypes.add(sourceType);
@@ -417,7 +429,14 @@ export class DocumentService {
     // Pause ingestion under low disk before any write.
     this.assertDiskSpace();
 
-    const docs = this.applyMaxAgeCutoff(documents);
+    // Captured web pages are redacted and judged against the capture policy
+    // again here, whichever route they came through, as the backstop to the
+    // extension's own rules. A refused page is answered like one deleted for
+    // good: named as suppressed, and not written.
+    const { kept: docs, refused } = partitionCapturableDocuments(
+      redactWebDocuments(this.applyMaxAgeCutoff(documents)),
+      this.deps.webCapturePolicy?.(),
+    );
     this.assertDocumentBatchContracts(docs, streams, replicaVersionPolicies);
     const effectiveWriteEpochs: Record<string, number> = {};
     const rejectedSourceIds: string[] = [];
@@ -435,6 +454,7 @@ export class DocumentService {
       }
     }
     if (rejectedSourceIds.length > 0) return { ingested: 0, rejectedSourceIds };
+    const refusedIds = refused.map((document) => document.externalId);
 
     // Snapshot the projection of every pre-existing (providerId,
     // sourceId, externalId) tuple BEFORE the upsert so we can emit
@@ -494,6 +514,10 @@ export class DocumentService {
     if (writeResult.rejectedSourceIds.length > 0) {
       return { ingested: 0, rejectedSourceIds: writeResult.rejectedSourceIds };
     }
+    const suppressedIds = [
+      ...refusedIds,
+      ...writeResult.suppressedDocuments.map((document) => document.externalId),
+    ];
     const acceptedDocuments = omitDocuments(
       omitDocuments(docs, writeResult.ignoredReplicaDocuments),
       writeResult.suppressedDocuments,
@@ -522,9 +546,7 @@ export class DocumentService {
 
     return {
       ingested: acceptedDocuments.length,
-      ...(writeResult.suppressedDocuments.length > 0
-        ? { suppressed: writeResult.suppressedDocuments.map((document) => document.externalId) }
-        : {}),
+      ...(suppressedIds.length > 0 ? { suppressed: suppressedIds } : {}),
     };
   }
 
@@ -873,7 +895,13 @@ export class DocumentService {
     if (rawDocuments.length > 0) {
       this.enforceWriteScope(args.callerScopes, rawDocuments);
     }
-    const documents = rawDocuments.length > 0 ? this.applyMaxAgeCutoff(rawDocuments) : rawDocuments;
+    const documents =
+      rawDocuments.length > 0
+        ? partitionCapturableDocuments(
+            redactWebDocuments(this.applyMaxAgeCutoff(rawDocuments)),
+            this.deps.webCapturePolicy?.(),
+          ).kept
+        : rawDocuments;
     this.assertDocumentBatchContracts(
       documents,
       { [body.sourceId]: args.streamId ?? "" },

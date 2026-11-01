@@ -142,13 +142,15 @@
         </ul>
         <p>
           The extension does not run in incognito windows. Chrome-internal pages, pages on the
-          domains you exclude, pages you deleted for good, sign-in, registration, checkout and
-          payment pages, and pages carrying a password field are not captured. These capture
-          settings are stored on your paired gateway and apply to every browser paired with it.
-          Domains a dedicated Omnesis source already covers are also skipped, so a page is not
-          collected twice. These restrictions apply to automatic page capture. Tell Omnesis sends
-          only the note and quotation you explicitly submit, with their page context, even when
-          automatic capture is paused or the page is excluded.
+          domains you exclude, pages you deleted for good, mail, messaging and password-manager
+          sites, sign-in, registration, multi-factor, checkout and payment pages, pages that manage
+          API keys or tokens, links that carry their own token, and pages carrying a password,
+          one-time-code or payment-card field are not captured. These capture settings are stored on
+          your paired gateway and apply to every browser paired with it. Domains a dedicated Omnesis
+          source already covers are also skipped, so a page is not collected twice. These
+          restrictions apply to automatic page capture. Tell Omnesis sends only the note and
+          quotation you explicitly submit, with their page context, even when automatic capture is
+          paused or the page is excluded.
         </p>
         <p>
           Because a signed-in page can contain identifying details, communications, financial or
@@ -221,10 +223,13 @@
           evicts old entries when those limits are reached. Credential-bearing query parameters
           (tokens, signatures, one-time codes, passwords, session ids) are removed from a page's
           address before it is recorded, so a password-reset link or a signed download link is
-          stored without its secret. Pairing, notes and Find credentials remain until you unpair or
-          clear the extension's data. Notes drafts and submitted notes waiting for delivery are
-          stored locally; delivered notes are removed from the local delivery queue. A full notes
-          queue refuses new submissions instead of evicting previously submitted notes.
+          stored without its secret. Credentials shown on a page, such as API keys, access tokens
+          and private keys, are replaced with <code>[redacted]</code> in the captured title and text
+          before the page leaves the browser, and again by the gateway when it arrives. Pairing,
+          notes and Find credentials remain until you unpair or clear the extension's data. Notes
+          drafts and submitted notes waiting for delivery are stored locally; delivered notes are
+          removed from the local delivery queue. A full notes queue refuses new submissions instead
+          of evicting previously submitted notes.
         </p>
         <p>
           Find keeps the current results and bounded agent explanation locally when the Find page

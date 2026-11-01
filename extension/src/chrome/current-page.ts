@@ -34,8 +34,10 @@ export interface CurrentPageResult {
 const EXCLUSION_LABELS: Record<CaptureExclusionReason, string> = {
   "excluded-domain": "Excluded — this site is on your list",
   "owned-domain": "Covered by another source",
-  "skipped-path": "Sign-in or payment page",
-  "password-field": "Password field on this page",
+  "built-in-domain": "Mail, messaging or password site",
+  "own-site": "One of your own tools",
+  "skipped-path": "Sign-in, payment or credentials page",
+  "sensitive-field": "Password, code or card field on this page",
   "gateway-host": "This is your Omnesis gateway",
   "removed-page": "Deleted from your index",
   "invalid-url": "Not eligible",

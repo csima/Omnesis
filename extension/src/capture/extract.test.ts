@@ -209,4 +209,31 @@ describe("extractReadableText", () => {
     expect(out.text).toMatch(/\|\s*Length\s*\|\s*Signed\s*\|\s*Unsigned\s*\|/);
     expect(out.text).toMatch(/\|\s*8-bit\s*\|\s*i8\s*\|\s*u8\s*\|/);
   });
+
+  it("redacts credentials shown in the title and the text before they leave the page", () => {
+    // Assembled at run time so this file carries no string a secret scanner matches.
+    const token = ["gh", "p_", "Q7rT2mX9pL4vN8kB3cZ6wY1hJ5dF0sGaAbCd"].join("");
+    const key = ["s", "k-proj-", "Q7rT2mX9pL4vN8kB3cZ6wY1h"].join("");
+    const html = `<!doctype html><html><head><title>Deploy token ${token}</title></head>
+      <body><article>
+        <h1>Deploy notes for a fictional build</h1>
+        <p>The release runbook walks through the staging deploy step by step, with enough prose
+           that the content scorer keeps this node as the main body of the article.</p>
+        <pre><code>export DEPLOY_TOKEN=${token}
+OPENAI_KEY=${key}
+password: correct-horse-battery</code></pre>
+        <p>In prose the runner reads DEPLOY_TOKEN=${token}, which Markdown escapes.</p>
+        <p>A closing paragraph keeps the article long enough for the scorer to accept it.</p>
+      </article></body></html>`;
+    const out = extractReadableText(doc(html), URL);
+    expect(out.title).toBe("Deploy token [redacted]");
+    expect(out.text).toContain("reads DEPLOY\\_TOKEN=[redacted], which");
+    expect(out.text).toContain("DEPLOY_TOKEN=[redacted]");
+    expect(out.text).toContain("OPENAI_KEY=[redacted]");
+    expect(out.text).toContain("password: [redacted]");
+    expect(out.text).not.toContain(token);
+    expect(out.text).not.toContain(key);
+    expect(out.text).not.toContain("correct-horse-battery");
+    expect(out.text).toContain("staging deploy");
+  });
 });
