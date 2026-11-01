@@ -129,10 +129,27 @@ describe("the gate that decides whether the wizard opens", () => {
     expect(shouldOpenCredentialsWizard(undefined, undefined, false)).toBe(false);
   });
 
-  test("an account the credential broker holds never opens it", () => {
+  test("a brokered account not added yet skips it", () => {
     const brokered = { configured: false, brokeredAccounts: ["workspace-1"] };
     expect(shouldOpenCredentialsWizard({ required: true }, brokered, false)).toBe(false);
     expect(shouldOpenCredentialsWizard({ perAccount: true }, brokered, false)).toBe(false);
+    const isAdded = (accountId: string) => accountId === "workspace-1";
+    const two = { configured: false, brokeredAccounts: ["workspace-1", "workspace-2"] };
+    expect(shouldOpenCredentialsWizard({ perAccount: true }, two, false, isAdded)).toBe(false);
+  });
+
+  test("once every brokered account is added, a new account opens it as usual", () => {
+    // The CLI's rule: a brokered account already added says nothing about the
+    // account being added now, which is signed in here.
+    const isAdded = () => true;
+    const perAccount = { configured: true, brokeredAccounts: ["workspace-1"] };
+    expect(shouldOpenCredentialsWizard({ perAccount: true }, perAccount, false, isAdded)).toBe(
+      true,
+    );
+    const shared = { configured: false, brokeredAccounts: ["workspace-1"] };
+    expect(shouldOpenCredentialsWizard({ required: true }, shared, false, isAdded)).toBe(true);
+    const sharedSet = { configured: true, brokeredAccounts: ["workspace-1"] };
+    expect(shouldOpenCredentialsWizard({ required: true }, sharedSet, false, isAdded)).toBe(false);
   });
 
   test("an unknown fileKey never opens it", () => {
