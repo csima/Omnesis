@@ -102,6 +102,13 @@ if [ "$SEEN" = 1 ]; then
       fi
       ;;
     pair)
+      prev=""
+      for arg in "$@"; do
+        if [ "$prev" = "--code-file" ]; then
+          printf '%s %s\n' "$(ls -ln "$arg" | cut -c1-10)" "$(cat "$arg")" >> "$OMNESIS_TEST_CALLS.codes"
+        fi
+        prev="$arg"
+      done
       if [ -t 0 ]; then printf 'pair stdin is a tty\n' >> "$OMNESIS_TEST_CALLS"; fi
       if [ -n "\${OMNESIS_TEST_PAIR_FAIL:-}" ]; then
         # The value is the exit status, so a test can drive the CLI's real
@@ -1547,7 +1554,7 @@ describe("install.sh --docker --collector", () => {
     // The token lands in the collector's own config directory — the one its
     // daemon reads — and the wrapper runs the CLI in the collector container.
     expect(callStartingWith(run.calls, "pair ")).toBe(
-      `pair ${PAIRING_CODE} --gateway-url ${GATEWAY_URL} ` +
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
         `--trust-fingerprint sha256:${GATEWAY_FP} ` +
         `--save ${join(run.configDir, "collector", "collector-token")}`,
     );

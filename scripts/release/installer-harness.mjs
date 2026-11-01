@@ -538,16 +538,30 @@ export function prepareHome(name, { umask } = {}) {
   // planted beforehand keeps whatever modes the suite gave it.
   if (!existed && umask !== undefined) chmodSync(home, 0o777 & ~umask);
   writeFileSync(join(home, "cli-calls.log"), "");
+  rmSync(join(home, "cli-calls.log.codes"), { force: true });
   return home;
 }
 
 function resultOf(home, proc) {
-  const calls = readFileSync(join(home, "cli-calls.log"), "utf8").split("\n").filter(Boolean);
+  const rawCalls = readFileSync(join(home, "cli-calls.log"), "utf8").split("\n").filter(Boolean);
+  const codesLog = join(home, "cli-calls.log.codes");
+  // A pairing code reaches `omnesis pair` through a private file whose name
+  // changes per run; a shim records the file's mode and content, and the
+  // calls name it by role so a suite can assert the rest of the argv exactly.
+  const pairCodeFiles = existsSync(codesLog)
+    ? readFileSync(codesLog, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => ({ mode: line.slice(0, 10), code: line.slice(11) }))
+    : [];
+  const calls = rawCalls.map((call) => call.replace(/--code-file \S+/u, "--code-file <file>"));
   return {
     status: proc.status,
     output: `${proc.stdout ?? ""}${proc.stderr ?? ""}`,
     home,
     calls,
+    rawCalls,
+    pairCodeFiles,
     configDir: join(home, ".config", "omnesis"),
     wrapper: join(home, ".local", "bin", "omnesis"),
     envFile: () => {
