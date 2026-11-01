@@ -376,4 +376,5 @@ export const googleBrokerSpec: ProviderBrokerSpec = {
   purposes: [...GOOGLE_BROKER_PURPOSES],
   params: [{ name: "account", label: "Google account email", required: false }],
   resolveAccount: resolveGoogleBrokerAccount,
+  verify: (accountId, binding) => verifyGoogleIdentity(accountId, () => binding),
 };

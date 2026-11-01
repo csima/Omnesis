@@ -21,6 +21,7 @@ import {
   discoverAccounts,
   hasCredentials,
   loadToken,
+  GITHUB_USER_ID_PARAM,
   verifyGithubIdentity,
 } from "./provider.js";
 import { githubCredentialsSpec } from "./credentials-spec.js";
@@ -180,9 +181,13 @@ export default defineProvider<GithubContext>({
     // plus the label only the operator can supply, since no API the token can
     // call names the scope it was issued for (see `accountIdFor`).
     async resolveAccount(credentials, params) {
-      const { login } = await new GithubClient(() => credentials.token()).getUser();
-      return { accountId: accountIdFor(login, params.accountLabel) };
+      const { login, id } = await new GithubClient(() => credentials.token()).getUser();
+      return {
+        accountId: accountIdFor(login, params.accountLabel),
+        params: { [GITHUB_USER_ID_PARAM]: String(id) },
+      };
     },
+    verify: (accountId, binding) => verifyGithubIdentity(accountId, () => binding),
   },
 
   // An account id here is a login, optionally followed by the name of the
@@ -221,7 +226,7 @@ export default defineProvider<GithubContext>({
       // Asked of the broker per request and never written down: the binding
       // is all this account keeps on disk.
       const credentials = await BrokeredCredentials.load("github", accountId, host?.configDir, {
-        verify: verifyGithubIdentity(accountId),
+        verify: verifyGithubIdentity(accountId, () => credentials.binding),
       });
       client = new GithubClient(() => credentials.token(), {
         invalidateToken: () => credentials.invalidate(),

@@ -19,7 +19,12 @@
 
 import { BrokerCredentialError, DEFAULT_BROKER_PURPOSE } from "@omnesis/core";
 import { CoinbaseClient } from "./client.js";
-import { COINBASE_FILE_KEY, deriveAccountId, resolveKeyAccount } from "./provider.js";
+import {
+  COINBASE_FILE_KEY,
+  deriveAccountId,
+  keyPortfolioId,
+  resolveKeyAccount,
+} from "./provider.js";
 import type {
   BrokerBinding,
   BrokerCredential,
@@ -63,8 +68,8 @@ export async function brokeredSigningKey(
  * The key named at link time is recorded in the binding, and that key is
  * accepted as it stands. Any other key — one rotated or swapped at the broker,
  * or a binding linked before the name was recorded — is asked of Coinbase
- * with itself alone: it must still be View-only, and its portfolio must
- * derive the account id exactly as linking did. A key that passes is kept, so
+ * with itself alone: it must still be View-only, and its portfolio
+ * ({@link keyPortfolioId}, the rule linking uses) must derive the account id. A key that passes is kept, so
  * it is not asked about again; a failed request keeps the client's
  * classification and is not taken as a match.
  */
@@ -79,14 +84,16 @@ export function verifyCoinbaseIdentity(
     if (key.keyId === binding().params?.[COINBASE_KEY_NAME_PARAM]) return;
     if (verified?.keyId === key.keyId && verified.privateKeyPem === key.privateKeyPem) return;
 
-    const permissions = await new CoinbaseClient({ ...transport, ...key }).getKeyPermissions();
+    const client = new CoinbaseClient({ ...transport, ...key });
+    const permissions = await client.getKeyPermissions();
     if (!permissions.can_view || permissions.can_trade || permissions.can_transfer) {
       throw new BrokerCredentialError(
         "rejected",
         `The Coinbase key the broker now holds for ${accountId} is not View-only, and Omnesis only uses a View-only key`,
       );
     }
-    if (String(deriveAccountId(permissions.retail_portfolio_id, key.keyId)) !== accountId) {
+    const portfolioId = await keyPortfolioId(client, permissions);
+    if (String(deriveAccountId(portfolioId, key.keyId)) !== accountId) {
       throw new BrokerCredentialError(
         "identity-changed",
         `The Coinbase key the broker now holds is not the one ${accountId} was linked with, and Coinbase does not place it in that portfolio; link it again with \`omnesis broker link\``,
@@ -124,4 +131,5 @@ export const coinbaseBrokerSpec: ProviderBrokerSpec = {
     const { accountId } = await resolveKeyAccount(brokeredCoinbaseClient(credentials), key.keyId);
     return { accountId: String(accountId), params: { [COINBASE_KEY_NAME_PARAM]: key.keyId } };
   },
+  verify: (accountId, binding) => verifyCoinbaseIdentity(accountId, () => binding),
 };

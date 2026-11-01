@@ -343,6 +343,52 @@ describe("a brokered CDP key is re-checked against the linked portfolio", () => 
     ]);
   });
 
+  test("a key rotated within the portfolio is accepted when key_permissions names it only by portfolio_uuid", async () => {
+    const configDir = await brokeredConfigDir({ keyName: "organizations/x/apiKeys/retired" });
+    const net = stubNetwork({
+      keys: [cdpKey("maya-reeves-rotated")],
+      permissions: {
+        can_view: true,
+        can_trade: false,
+        can_transfer: false,
+        portfolio_uuid: OTHER_PORTFOLIO,
+        portfolio_type: "DEFAULT",
+      },
+      accounts: [{ uuid: "a1", currency: "BTC", retail_portfolio_id: PORTFOLIO_ID }],
+    });
+    const context = await brokeredContext(configDir);
+    await expect(context.client.getAccounts(1)).resolves.toBeDefined();
+    expect(net.coinbase().map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v3/brokerage/key_permissions",
+      "/api/v3/brokerage/accounts",
+      "/api/v3/brokerage/accounts",
+    ]);
+  });
+
+  test("the spec's verify is the check createContext runs", async () => {
+    stubNetwork({
+      keys: [KEY],
+      permissions: {
+        can_view: true,
+        can_trade: false,
+        can_transfer: false,
+        retail_portfolio_id: OTHER_PORTFOLIO,
+      },
+    });
+    const verify = definition.broker!.verify!(PORTFOLIO_ID, {
+      broker: "nango",
+      connections: { default: REF },
+      params: { keyName: "organizations/x/apiKeys/retired" },
+    });
+    await expect(
+      verify("default", {
+        credential: { type: "basic", username: KEY.keyId, password: KEY.pem },
+        connectionConfig: {},
+        metadata: {},
+      }),
+    ).rejects.toMatchObject({ reason: "identity-changed" });
+  });
+
   test("a key swapped for one of another portfolio stops with identity-changed and reads nothing", async () => {
     const configDir = await brokeredConfigDir();
     const swapped = cdpKey("jamie-lopez-view");

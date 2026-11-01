@@ -17,6 +17,7 @@ import {
   loadOrAdoptProviderAccountCredentials,
   MissingCredentialsError,
   writeProviderAccountCredentials,
+  type BrokerBinding,
   type BrokerCredentialResult,
 } from "@omnesis/core";
 import { AccountId } from "@omnesis/types";
@@ -75,23 +76,42 @@ export function accountLogin(accountId: string): string {
 }
 
 /**
- * Check each token the broker hands out still authenticates as the account's
- * login, for {@link BrokeredCredentials}' `verify` option: a connection signed
- * in again at the broker as another GitHub user, or a key swapped for one of
- * theirs, would otherwise sync that user's repositories under this id. Asked
- * of `GET /user` with the token alone, once per token; a failed request keeps
- * the classification the client gives it and is not taken as a match.
+ * The binding param that records the numeric GitHub user id the account was
+ * linked as. A login can be renamed and then claimed by someone else; the id
+ * cannot, so it is what each token is checked against.
+ */
+export const GITHUB_USER_ID_PARAM = "userId";
+
+/**
+ * Check each token the broker hands out still authenticates as the GitHub
+ * user the account was linked as, for {@link BrokeredCredentials}' `verify`
+ * option: a connection signed in again at the broker as another GitHub user,
+ * or a key swapped for one of theirs, would otherwise sync that user's
+ * repositories under this id. Asked of `GET /user` with the token alone, once
+ * per token, and compared by the numeric id recorded at link time, so a
+ * renamed user still matches and a recycled login does not. A binding linked
+ * before the id was recorded is refused until it is linked again. A failed
+ * request keeps the classification the client gives it and is not taken as a
+ * match.
  */
 export function verifyGithubIdentity(
   accountId: string,
+  binding: () => BrokerBinding,
   opts: Pick<GithubClientOptions, "fetchImpl" | "sleep"> = {},
 ): (purpose: string, result: BrokerCredentialResult) => Promise<void> {
   let verified: string | undefined;
   return async (_purpose, { credential }) => {
     const token = brokerBearerToken(credential);
     if (token === verified) return;
-    const { login } = await new GithubClient(token, opts).getUser();
-    if (typeof login !== "string" || login.toLowerCase() !== accountLogin(accountId)) {
+    const recorded = binding().params?.[GITHUB_USER_ID_PARAM];
+    if (!recorded) {
+      throw new BrokerCredentialError(
+        "identity-changed",
+        `The GitHub link for ${accountId} recorded no user id to check its token against; link it again with \`omnesis broker link\``,
+      );
+    }
+    const { id } = await new GithubClient(token, opts).getUser();
+    if (String(id) !== recorded) {
       throw new BrokerCredentialError(
         "identity-changed",
         `The broker's GitHub connection now belongs to another GitHub user, not ${accountLogin(accountId)}; link it again with \`omnesis broker link\``,

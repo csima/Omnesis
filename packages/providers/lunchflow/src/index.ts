@@ -100,6 +100,7 @@ export default defineProvider<LunchflowContext>({
     ],
     resolveAccount: (credentials, _params, ctx?: { configDir?: string }) =>
       resolveBrokeredAccount(credentials, ctx),
+    verify: (accountId, binding) => verifyLunchflowIdentity(accountId, () => binding),
   },
 
   // Resolve connected accounts offline; the collector derives accounts solely

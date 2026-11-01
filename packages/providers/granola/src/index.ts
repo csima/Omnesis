@@ -19,7 +19,6 @@ import {
   hasCredentials,
   loadApiKey,
   resolveBrokeredAccount,
-  verifyGranolaIdentity,
 } from "./provider.js";
 import { granolaCredentialsSpec } from "./credentials-spec.js";
 import { granolaIcon } from "./icons.js";
@@ -90,9 +89,7 @@ export default defineProvider<GranolaContext>({
     if (hasBrokerBinding("granola", accountId, host?.configDir)) {
       // Asked of the broker per request and never written down: the binding
       // is all this account keeps on disk.
-      const credentials = await BrokeredCredentials.load("granola", accountId, host?.configDir, {
-        verify: verifyGranolaIdentity(accountId),
-      });
+      const credentials = await BrokeredCredentials.load("granola", accountId, host?.configDir);
       client = new GranolaClient(() => credentials.token(), {
         invalidateApiKey: () => credentials.invalidate(),
       });

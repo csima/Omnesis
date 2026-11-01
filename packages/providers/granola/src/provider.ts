@@ -3,8 +3,6 @@
 
 import { createHash } from "node:crypto";
 import {
-  brokerBearerToken,
-  BrokerCredentialError,
   clearProviderAccountAndLegacyCredentials,
   clearProviderAccountCredentials,
   createLogger,
@@ -17,12 +15,11 @@ import {
   loadOrAdoptProviderAccountCredentials,
   MissingCredentialsError,
   writeProviderAccountCredentials,
-  type BrokerCredentialResult,
   type BrokeredCredentials,
 } from "@omnesis/core";
 import { AccountId, SyncError } from "@omnesis/types";
 import { AuthFailure, credentialsChallenge } from "@omnesis/source-sdk";
-import { GranolaClient, type GranolaClientOptions } from "./client.js";
+import { GranolaClient } from "./client.js";
 import { granolaCredentialsSpec } from "./credentials-spec.js";
 import type {
   AuthFlowCallbacks,
@@ -110,62 +107,6 @@ export async function resolveBrokeredAccount(
   const apiKey = (await credentials.token()).trim();
   const { ownerEmail } = await new GranolaClient(apiKey).probe();
   return { accountId: String(deriveAccountId(apiKey, ownerEmail).accountId) };
-}
-
-/** How many of the newest notes are read to find the key owner's. */
-const OWNER_CHECK_PAGE_SIZE = 30;
-
-/**
- * Check each key the broker hands out still belongs to the linked account,
- * for {@link BrokeredCredentials}' `verify` option.
- *
- * An account named after its owner's email accepts a key only when one of
- * the newest notes it lists is owned by that address: a key of another
- * Granola user lists their notes (and notes shared with them), not this
- * owner's. A key that lists no notes at all cannot show it is the owner's,
- * and is refused too: letting it through would sync whatever its owner
- * writes until the key is next fetched. An account named after its key's
- * fingerprint has no owner to compare, so
- * it accepts only that key. A key that passes is kept, so it is not asked
- * about again; a failed request keeps the client's classification and is not
- * taken as a match.
- */
-export function verifyGranolaIdentity(
-  accountId: string,
-  opts: Pick<GranolaClientOptions, "fetchImpl" | "sleep" | "baseUrl"> = {},
-): (purpose: string, result: BrokerCredentialResult) => Promise<void> {
-  let verified: string | undefined;
-  return async (_purpose, { credential }) => {
-    const apiKey = brokerBearerToken(credential).trim();
-    if (apiKey === verified) return;
-    if (isKeyFingerprintAccount(accountId)) {
-      if (String(deriveAccountId(apiKey).accountId) !== accountId) {
-        throw new BrokerCredentialError(
-          "identity-changed",
-          `The broker now holds another Granola key for ${accountId}, which was named after the key it was linked with, so Omnesis cannot confirm it is the same account; link it again with \`omnesis broker link\``,
-        );
-      }
-      verified = apiKey;
-      return;
-    }
-    const { notes } = await new GranolaClient(apiKey, opts).listNotes({
-      pageSize: OWNER_CHECK_PAGE_SIZE,
-    });
-    if (notes.length === 0) {
-      throw new BrokerCredentialError(
-        "identity-changed",
-        `The broker's Granola key lists no notes, so Omnesis cannot confirm it still belongs to ${accountId}; link it again with \`omnesis broker link\``,
-      );
-    }
-    const owner = accountId.toLowerCase();
-    if (!notes.some((note) => note.owner?.email?.toLowerCase() === owner)) {
-      throw new BrokerCredentialError(
-        "identity-changed",
-        `The broker's Granola key now belongs to another Granola user, not ${accountId}; link it again with \`omnesis broker link\``,
-      );
-    }
-    verified = apiKey;
-  };
 }
 
 /**
