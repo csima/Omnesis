@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Adrien Conrath
 
-import { assertGatewaySourceContract } from "@omnesis/core";
+import { assertGatewaySourceContract, assertNotCloudflareAccessRefusal } from "@omnesis/core";
 
 /** No cache: a gateway can be replaced while a collector remains running. */
 export async function requireGatewaySourceContract(gatewayUrl: string): Promise<void> {
@@ -18,6 +18,7 @@ export async function requireGatewaySourceContract(gatewayUrl: string): Promise<
     // Unnamed, it reads as though the source's own upstream stopped answering.
     throw new Error("Gateway source-contract check (GET /health) failed", { cause: err });
   }
+  await assertNotCloudflareAccessRefusal(`${gatewayUrl}/health`, response);
   if (!response.ok) {
     throw new Error(
       `Cannot verify gateway source contract: health returned HTTP ${response.status}`,

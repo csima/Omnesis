@@ -604,6 +604,89 @@ describe("install.sh --collector: degrading honestly", () => {
   });
 });
 
+describe("install.sh --collector: a gateway behind Cloudflare Access", () => {
+  const ACCESS_URL = "https://omnesis.example.com";
+  const ACCESS_ID = "0123456789abcdef0123456789abcdef.access";
+
+  function secretFile(name) {
+    const path = fixturePath(`access-secret-${name}`);
+    writeFileSync(path, "fictional-access-secret\n", { mode: 0o600 });
+    return path;
+  }
+
+  test("saves the service token before pairing, and pairs without a pin", () => {
+    const secret = secretFile("happy");
+    const run = runInstaller(
+      "access",
+      [
+        ...CODED,
+        "--gateway-url",
+        ACCESS_URL,
+        "--access-client-id",
+        ACCESS_ID,
+        "--access-client-secret-file",
+        secret,
+      ],
+      { OMNESIS_TEST_COLLECTOR_ONLINE: ACCESS_URL },
+    );
+    expect(run.status, run.output).toBe(0);
+    const set = `gateway access-token set --gateway-url ${ACCESS_URL} --id ${ACCESS_ID} --secret-file ${secret}`;
+    expect(callStartingWith(run.calls, "gateway access-token")).toBe(set);
+    expect(run.calls.indexOf(set)).toBeLessThan(
+      run.calls.findIndex((call) => call.startsWith("pair ")),
+    );
+    expect(callStartingWith(run.calls, "pair ")).toBe(
+      `pair --code-file <file> --gateway-url ${ACCESS_URL} ` +
+        `--save ${join(run.configDir, "collector-token")}`,
+    );
+    // The secret is read from its file by the CLI; it never reaches an argument.
+    expect(run.calls.join("\n")).not.toContain("fictional-access-secret");
+  });
+
+  test("half a token, no gateway URL, an unreadable file or no collector role is refused", () => {
+    const refuse = (name, args, needle) => {
+      const run = runInstaller(name, args);
+      expect(run.status).toBe(1);
+      expect(run.output).toContain(needle);
+      expect(run.calls).toEqual([]);
+    };
+    const secret = secretFile("refusals");
+    refuse(
+      "access-id-only",
+      [...CODED, "--gateway-url", ACCESS_URL, "--access-client-id", ACCESS_ID],
+      "--access-client-id needs --access-client-secret-file",
+    );
+    refuse(
+      "access-file-only",
+      [...CODED, "--gateway-url", ACCESS_URL, "--access-client-secret-file", secret],
+      "--access-client-secret-file needs --access-client-id",
+    );
+    refuse(
+      "access-no-url",
+      [...CODED, "--access-client-id", ACCESS_ID, "--access-client-secret-file", secret],
+      "needs --gateway-url",
+    );
+    refuse(
+      "access-unreadable",
+      [
+        ...CODED,
+        "--gateway-url",
+        ACCESS_URL,
+        "--access-client-id",
+        ACCESS_ID,
+        "--access-client-secret-file",
+        fixturePath("no-such-secret"),
+      ],
+      "is not a readable file",
+    );
+    refuse(
+      "access-no-role",
+      ["--access-client-id", ACCESS_ID, "--access-client-secret-file", secret],
+      "only meaningful with --collector",
+    );
+  });
+});
+
 describe("install.sh --collector: refused combinations", () => {
   const refusal = (name, args, needle, extraEnv = {}) => {
     const run = runInstaller(name, args, extraEnv);
@@ -693,6 +776,8 @@ describe("install.sh --collector: the script itself", () => {
     expect(help).toContain("--gateway-url <url>");
     expect(help).toContain("--trust-fingerprint sha256:");
     expect(help).toContain("--code <code>");
+    expect(help).toContain("--access-client-id <id>");
+    expect(help).toContain("--access-client-secret-file <file>");
     expect(help).toContain("--code-file <path>");
     expect(help.trimEnd().endsWith("# download executes nothing.")).toBe(true);
     expect(help).not.toContain("set -eu");
