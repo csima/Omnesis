@@ -38,14 +38,21 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   after a timeout reuses a stored idempotency key, so the gateway replays the first redemption
   instead of finding the code spent.
 - **Capture policy.** The capture settings live on the gateway: `GET /web-capture-policy` serves the
-  shared pause, the excluded domains, the hosts other sources own, the built-in privacy rules and
-  the pages the user deleted for good. The worker keeps a copy under `omnesis.capture.policy.v1`
+  shared pause, the excluded domains, the hosts other sources own, the operator's own sites
+  (`webCapture.ownSites` in the gateway's config), the built-in privacy rules and the pages the
+  user deleted for good. `judgeCaptureUrl` also applies rules no gateway can switch off: the
+  built-in mail, messaging and password-manager sites (`BUILT_IN_SKIP_DOMAINS`, in force before
+  any collector announces owned domains), the default credential path segments, Cloudflare Access
+  paths and token links, including in a fragment-routed path (`/#/settings/tokens`). The worker keeps a copy under `omnesis.capture.policy.v1`
   (15-minute TTL, refreshed on the drain alarm, on popup open and from each of its own edits) and
   captures nothing without one. Edits go through the worker to the gateway, so every paired browser
   shares them. The contract lives in `@omnesis/provider-web/capture-policy`.
 - **A page's life.** The content script asks the worker `capture-eligibility` for its URL, applies
-  the password-field rule itself, then runs `CaptureLifecycle`: five seconds of focused dwell,
-  Defuddle + Turndown extraction of the rendered DOM as Markdown, a content hash, an emission the
+  the sensitive-field rule itself (password, one-time-code and card inputs, through open shadow
+  roots: `capture/sensitive-fields.ts`), then runs `CaptureLifecycle`: five seconds of focused
+  dwell, Defuddle + Turndown extraction of the rendered DOM as Markdown with credentials replaced
+  by `[redacted]` (`@omnesis/provider-web/redact-secrets`; the gateway redacts every ingested web
+  page and `page_visits` title again), a content hash, an emission the
   worker turns into one `POST /documents` (a `webpage` document keyed on the SHA-256 of the
   normalized URL) and one `POST /analytics/ingest` row (`page_visits`). Mutations re-extract after
   a debounce and re-push only when the text or title changed. The emission is staged in

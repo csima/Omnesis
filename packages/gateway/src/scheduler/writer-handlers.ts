@@ -157,6 +157,7 @@ import { withdrawKnowledgeOwner } from "../brain/knowledge/owner-withdrawal.js";
 // `people.ts` (`runMergePass`, `collapseTransitiveChains`,
 // `upsertTransitiveCollapse`) keep their `../people.js` import below
 // — they move out under merge-service-decomposition.
+import { applyWebRedactionPage, type WebRedactionMutation } from "../sources/web/backfill.js";
 import {
   applySourceUrlRecanonicalizationPage,
   finishSourceUrlRecanonicalization,
@@ -889,6 +890,11 @@ export const writerHandlers = {
   ) => applySourceUrlRecanonicalizationPage(db, cursor, mutations),
   "db.finishSourceUrlRecanonicalization": (db: Db, cursor: SourceUrlRecanonicalizationCursor) =>
     finishSourceUrlRecanonicalization(db, cursor),
+  "db.applyWebRedactionPage": (
+    db: Db,
+    mutations: readonly WebRedactionMutation[],
+    finishedKey: string | null,
+  ) => applyWebRedactionPage(db, mutations, finishedKey),
   // Note: `db.upsertWithCursor` lives in `writerYieldableHandlers` —
   // it's the collector's hot ingest path (realtime priority), so we
   // want it to yield between doc chunks rather than park the writer

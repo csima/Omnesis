@@ -857,26 +857,74 @@ omnesis.example.com {
           the page focused. Sites that a dedicated source already covers (Gmail, Drive, Notion and
           others) are skipped, so a page is not captured twice. A collector announces those sites
           when it starts, so until one has connected, none are skipped, and duplicates are removed
-          at search time instead. The extension never captures:
+          at search time instead. Mail, messaging and password-manager sites (Gmail, Outlook, Proton
+          Mail, Slack, WhatsApp Web, Telegram, Discord, 1Password, Bitwarden and others), and the
+          message pages of Facebook, LinkedIn, X, Instagram and Reddit, are skipped from the start,
+          whether or not a collector has connected. The extension never captures:
         </p>
         <ul>
           <li>pages in incognito or private windows, and any page that is not HTTPS;</li>
           <li>Chrome's own pages, the extension's own pages, and the gateway's portal;</li>
           <li>
-            pages on excluded domains, on sites a dedicated source covers, and pages deleted for
-            good;
+            pages on excluded domains, on sites a dedicated source covers, on your own sites, and
+            pages deleted for good;
           </li>
           <li>
-            sign-in, registration, password, single-sign-on, checkout, payment and billing pages,
-            and any page with a password field.
+            sign-in, single-sign-on, multi-factor and API-key pages, wherever the address names
+            them; registration, password, checkout, payment, billing, token, key and secrets pages
+            where the address puts them at the top of a site or under its account settings, never on
+            a documentation, wiki or blog page or a file in a code repository; Cloudflare Access
+            pages; and links that carry their own token, such as a password-reset or invitation
+            link;
+          </li>
+          <li>
+            any page with a password, one-time-code or payment-card field, including fields inside a
+            page component's shadow DOM.
           </li>
         </ul>
+        <p>
+          <strong>Your own sites.</strong> To keep the browser away from your own tools, such as an
+          agent host and the web apps its agents serve, list their hosts once on the gateway; each
+          entry also covers its subdomains, and every paired browser skips them. An entry is a host
+          name (a leading <code>*.</code> is allowed), a single-label LAN name, an IP address or a
+          pasted URL; the gateway refuses a configuration with an entry that names no host. A
+          browser cannot remove an entry.
+        </p>
+        <div class="term">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+          <div class="term-body">
+            <p class="t-dim"># never capture your own tools, in any paired browser</p>
+            <p>
+              <span class="t-prompt">❯</span>
+              <span class="t-cmd"
+                >omnesis config set /webCapture/ownSites '["agents.example.com",
+                "apps.example.com"]'</span
+              >
+            </p>
+          </div>
+        </div>
         <p>
           Automatic capture sends the readable text as Markdown, the title, the URL, the visit time
           and how long the page was focused. Form values, drafts in editable fields, raw HTML,
           scripts, images and screenshots never do. Credentials in the address (tokens, signatures,
           one-time codes, passwords, session ids, an OAuth callback's code and state) are removed
-          before it is recorded.
+          before it is recorded. Credentials shown on the page itself are replaced with
+          <code>[redacted]</code> in the title and text before the page leaves the browser: bearer
+          tokens, JSON Web Tokens, private keys, API keys with a known prefix (OpenAI and Anthropic
+          <code>sk-</code>, AWS, Azure, GitHub, GitLab, Google, Hugging Face, npm, PyPI, SendGrid,
+          Slack, Stripe, Discord and Telegram), the password in a URL or a
+          <code>curl -u</code> argument, the key in a connection string, the credential in an
+          <code>Authorization</code> header, and a value that looks like a credential assigned to a
+          credential's own name: <code>password</code>, <code>secret</code>, <code>token</code>,
+          <code>api_key</code>, <code>accessToken</code> and the like, an environment name such as
+          <code>DB_PASSWORD</code> or <code>NPM_TOKEN</code>, a
+          <code>&lt;password&gt;</code> element or <code>define('DB_PASSWORD', …)</code>. A name
+          that only contains one (<code>token_endpoint</code>, <code>secret_name</code>), and a
+          type, a reference, a path or a placeholder after a name, is left as it is. When a page
+          arrives, the gateway redacts it again, its address and metadata included, and turns away a
+          page the capture settings refuse or that has no web address, so a browser that missed
+          either cannot store the page. After an upgrade, pages and visits already stored are
+          redacted once in the background, with the credential shapes only.
         </p>
         <p>
           The capture token can add pages but cannot search or read. The extension loads no remote
@@ -991,12 +1039,28 @@ omnesis.example.com {
                 <td>A dedicated source already syncs this site.</td>
               </tr>
               <tr>
-                <td>Sign-in or payment page</td>
-                <td>The address names a sign-in, password, checkout or payment step.</td>
+                <td>Mail, messaging or password site</td>
+                <td>
+                  The site is a mail, messaging or password-manager site, which is never captured.
+                </td>
               </tr>
               <tr>
-                <td>Password field on this page</td>
-                <td>The page has a password field, so nothing on it is captured.</td>
+                <td>One of your own tools</td>
+                <td>The site is one of your own sites, set on the gateway.</td>
+              </tr>
+              <tr>
+                <td>Sign-in, payment or credentials page</td>
+                <td>
+                  The address names a sign-in, password, multi-factor, checkout or payment step, a
+                  page that manages keys or tokens, or a link that carries its own token.
+                </td>
+              </tr>
+              <tr>
+                <td>Password, code or card field on this page</td>
+                <td>
+                  The page has a password, one-time-code or payment-card field, so nothing on it is
+                  captured.
+                </td>
               </tr>
               <tr>
                 <td>Capture paused</td>

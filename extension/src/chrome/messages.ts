@@ -61,10 +61,11 @@ export function isCaptureHandoffFailure(value: unknown): value is CaptureHandoff
 
 /**
  * Why the popup says a page is not being captured: every refusal the policy can
- * return, plus the one rule the page decides for itself — a password field in
- * the document, which no policy verdict describes.
+ * return, plus the one rule the page decides for itself — a password,
+ * one-time-code or card field in the document, which no policy verdict
+ * describes.
  */
-export type CaptureExclusionReason = CaptureIneligibility | "password-field";
+export type CaptureExclusionReason = CaptureIneligibility | "sensitive-field";
 
 export interface CaptureContentStatus {
   state: "checking" | "watching" | "excluded" | "handoff-delayed" | "policy-pending";

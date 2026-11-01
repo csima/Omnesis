@@ -5,6 +5,7 @@ import "./chrome-api.js";
 import { CaptureLifecycle, type CaptureEmission } from "../capture/lifecycle.js";
 import { CaptureHandoffQueue } from "../capture/handoff.js";
 import { extractReadableText } from "../capture/extract.js";
+import { hasSensitiveField } from "../capture/sensitive-fields.js";
 import { hashText } from "../capture/content-hash.js";
 import { messageWithTimeout } from "./message-timeout.js";
 import {
@@ -118,7 +119,7 @@ export function startContentScript(env: ContentScriptEnvironment): void {
   let authorizationGeneration = 0;
   let pageCaptureState: CaptureContentStatus["state"] = "checking";
   let pageCaptureReason: CaptureContentStatus["reason"];
-  /** The policy's password-field rule as the worker last reported it; on by default. */
+  /** The policy's sensitive-field rule as the worker last reported it; on by default. */
   let skipPasswordForms = true;
   const contentInstanceId = crypto.randomUUID();
   const handoffBindings = new WeakMap<CaptureEmission, Promise<HandoffBinding | null>>();
@@ -267,9 +268,9 @@ export function startContentScript(env: ContentScriptEnvironment): void {
     isFocused: () => document.visibilityState === "visible" && document.hasFocus(),
     extract: () => {
       // Only the page can see its own DOM, so this one policy rule is applied
-      // here: a page carrying a password field is a sign-in, checkout or account
-      // page, and is never recorded.
-      if (skipPasswordForms && hasPasswordField()) {
+      // here: a page carrying a password, one-time-code or card field is a
+      // sign-in, verification, checkout or account page, and is never recorded.
+      if (skipPasswordForms && hasSensitiveField(document)) {
         return Promise.resolve({ title: "", text: "", canonicalUrl: null, sensitive: true });
       }
       return Promise.resolve({
@@ -294,9 +295,9 @@ export function startContentScript(env: ContentScriptEnvironment): void {
           pageCaptureReason = res.reason;
           return true;
         }
-        if (skipPasswordForms && hasPasswordField()) {
+        if (skipPasswordForms && hasSensitiveField(document)) {
           pageCaptureState = "excluded";
-          pageCaptureReason = "password-field";
+          pageCaptureReason = "sensitive-field";
           return true;
         }
         pageCaptureState = "watching";
@@ -368,11 +369,6 @@ export function startContentScript(env: ContentScriptEnvironment): void {
   );
 
   // --- Wire browser events into the state machine -----------------------------
-
-  /** Whether the rendered page currently carries a password field. */
-  function hasPasswordField(): boolean {
-    return document.querySelector('input[type="password"]') !== null;
-  }
 
   /**
    * The page's `<link rel="canonical">` href (absolute — the DOM resolves it),

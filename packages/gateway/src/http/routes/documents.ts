@@ -47,6 +47,7 @@ import { getExtractedDatesForDocument } from "../../enrichment/dates/storage.js"
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { decodePageCursor, encodePageCursor } from "../pagination-cursor.js";
 import { documentsRateLimiter } from "../../rate-limit.js";
+import { assertCanonicalWebSourceIds } from "../../sources/web/ingest.js";
 import { clientIp, isLoopbackRequest } from "./admin/internals.js";
 import type { RouteApp } from "./types.js";
 import type { DocumentService } from "../services/DocumentService.js";
@@ -464,6 +465,7 @@ export function mountDocumentCoreRoutes(app: RouteApp, deps: DocumentRoutesDeps)
       // cursor row — so the lease is only ever taken by a device allowed to
       // write the source.
       enforceWriteScopeForSource(auth.scopes, body.sourceId);
+      assertCanonicalWebSourceIds(auth.scopes, [body.sourceId]);
       // A page carrying upserts, tombstones or a snapshot reconcile would
       // overwrite or suppress the read-only day mirror. Refuse before the
       // lease or cursor row is touched.

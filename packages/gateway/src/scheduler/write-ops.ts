@@ -174,6 +174,8 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   // finish is one fingerprint row. Neither parses metadata or runs regexes.
   { name: "db.applySourceUrlRecanonicalizationPage", priority: "background" },
   { name: "db.finishSourceUrlRecanonicalization", priority: "background" },
+  // Reader-planned web redaction: at most 50 indexed OCC updates per page.
+  { name: "db.applyWebRedactionPage", priority: "background" },
 
   // ── people.ts ──────────────────────────────────────────────────────
   { name: "people.findOrCreatePerson", priority: "realtime" },

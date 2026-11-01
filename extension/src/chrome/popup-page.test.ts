@@ -445,8 +445,10 @@ describe("popup — current page and the exclude control", () => {
   it.each([
     ["excluded-domain", "Excluded — this site is on your list"],
     ["owned-domain", "Covered by another source"],
-    ["skipped-path", "Sign-in or payment page"],
-    ["password-field", "Password field on this page"],
+    ["built-in-domain", "Mail, messaging or password site"],
+    ["own-site", "One of your own tools"],
+    ["skipped-path", "Sign-in, payment or credentials page"],
+    ["sensitive-field", "Password, code or card field on this page"],
     ["paused", "Capture paused"],
     ["removed-page", "Deleted from your index"],
     ["gateway-host", "This is your Omnesis gateway"],

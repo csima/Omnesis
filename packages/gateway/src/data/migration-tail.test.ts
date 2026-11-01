@@ -78,6 +78,8 @@ const WOUND_BACK = [
   212,
   // 213 creates the host agent grant tables, which undoHostAgentGrants drops.
   213,
+  // 214 re-redacts stored web pages; it repairs data, not shape.
+  214,
 ];
 
 let dir: string;
