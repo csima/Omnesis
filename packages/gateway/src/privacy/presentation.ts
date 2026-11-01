@@ -359,7 +359,7 @@ interface PrincipalOwnerIdentity {
 const LEGACY_PRINCIPAL_OWNER_PATTERN =
   /^principal:([^:]+):grant:([^:]+):revision:([1-9][0-9]*):credential:([^:]+):scope:[^:]+$/;
 const PRINCIPAL_OWNER_PATTERN =
-  /^principal:([^:]+):grant:([^:]+):credential:([^:]+):answer-scope:[^:]+$/;
+  /^principal:([^:]+):grant:([^:]+):credential:([^:]+):answer-scope:[^:]+(?::host:[^:]+)?$/;
 
 function parsePrincipalOwner(ownerId: string): PrincipalOwnerIdentity | null {
   const match = PRINCIPAL_OWNER_PATTERN.exec(ownerId);

@@ -62,7 +62,7 @@ const WOUND_BACK = [
   172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190,
   191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204,
   // 205 indexes and compacts knowledge_changes, which undoKnowledge drops.
-  205,
+  205, 206,
 ];
 
 let dir: string;
@@ -126,6 +126,12 @@ function undoVocabulary(db: Db): void {
     .all();
   if (pendingVoiceColumns.some((row) => row.name === "allow_vocabulary"))
     db.exec("ALTER TABLE voice_note_transcriptions DROP COLUMN allow_vocabulary");
+}
+
+/** Undo migration 206: no agent host bindings and no host agent grants. */
+function undoHostAgentGrants(db: Db): void {
+  db.exec("DROP TABLE IF EXISTS access_host_agent_grants");
+  db.exec("DROP TABLE IF EXISTS access_host_identity_bindings");
 }
 
 /** Undo migration 204: no interest ledger and no thumbs on brief items. */
@@ -245,6 +251,7 @@ function undoKnowledge(db: Db): void {
  * real code would have written.
  */
 function windBack(db: Db): void {
+  undoHostAgentGrants(db);
   undoInterest(db);
   undoDecisionAnchors(db);
   undoTaskSuggestions(db);

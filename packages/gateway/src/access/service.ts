@@ -13,6 +13,7 @@ import {
   getOAuthClient,
   listAccessAuditEvents,
   listAccessOverview,
+  listHostIdentity,
   listPendingAuthorizationRequests,
   lookupPrincipalAccessToken,
   preflightAuthorizationRequest,
@@ -44,6 +45,10 @@ import type {
   OAuthClientMetadataDocument,
   OAuthTokenExchangeInput,
   McpToolInvocationAuditInput,
+  HostAgentGrantCreateInput,
+  HostAgentGrantRevokeInput,
+  HostIdentityBindingInput,
+  HostIdentityUnbindInput,
 } from "./types.js";
 
 /** Keeps durable-before-egress audit writes from flooding the shared writer queue. */
@@ -209,6 +214,27 @@ export class AccessService {
 
   renamePrincipal(input: AccessPrincipalRenameInput) {
     return this.writer.renameAccessPrincipal(input);
+  }
+
+  /** Every connection bound to an agent host, with its live host agent grants. */
+  hostIdentity() {
+    return listHostIdentity(this.reader);
+  }
+
+  bindHostIdentity(input: HostIdentityBindingInput) {
+    return this.writer.setHostIdentityBinding(input);
+  }
+
+  unbindHostIdentity(input: HostIdentityUnbindInput) {
+    return this.writer.removeHostIdentityBinding(input);
+  }
+
+  grantHostAgent(input: HostAgentGrantCreateInput) {
+    return this.writer.createHostAgentGrant(input);
+  }
+
+  revokeHostAgent(input: HostAgentGrantRevokeInput) {
+    return this.writer.revokeHostAgentGrant(input);
   }
 
   revoke(input: AccessRevocationInput) {
