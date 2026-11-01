@@ -34,7 +34,9 @@
  * sees more than a window however it backtracks. The rules record the spans
  * they would replace; spans found in overlapping windows are merged before
  * anything is replaced, so a token on a window boundary is redacted whole and
- * once.
+ * once. A token longer than the overlap — a long JWT, a signed URL's token —
+ * is found by a separate linear scan over the whole line for runs of token
+ * characters that start like a credential.
  *
  * Dependency-free, so it bundles into the extension's content script unchanged.
  */
@@ -424,13 +426,59 @@ function shapedSpans(text: string): Span[] {
 }
 
 /**
+ * A run of the characters tokens are made of — base64 and base64url, a JWT's
+ * dots, Markdown's escaping backslash — that starts where no such character
+ * precedes it, so each run is scanned once. Only a run longer than the
+ * window overlap can be cut by a window boundary or outgrow a window.
+ */
+const LONG_TOKEN_RUN = new RegExp(
+  String.raw`(?<![\\A-Za-z0-9_.~+/=-])[\\A-Za-z0-9_.~+/=-]{${WINDOW_OVERLAP},}`,
+  "g",
+);
+
+/**
+ * How a long run starts when it is a credential with no length limit: a JWT
+ * (a header, its dot, then the payload's `eyJ`), a vendor prefix, or a bearer
+ * credential's token (judged by what precedes the run). Tested on the run's
+ * first characters only.
+ */
+const LONG_TOKEN_START = new RegExp(
+  String.raw`^(?:eyJ[A-Za-z0-9_\\-]{8,256}\.eyJ|gh[pousr]${US}|github${US}pat${US}|sk-(?:proj|svcacct|admin|ant)-|sk-[A-Za-z0-9]{20}|xox[abceoprs]-|xapp-|glpat-|ya29\.|hvs\.|AIza|npm${US}|hf${US}|pypi-AgEI|SG\.|dp\.(?:st|ct|sa|scim|audit)\.|lin${US}api${US}|ntn${US}|omn${US}|(?:ahk|bxt)${US}|[sr]k${US}(?:live|test)${US}|whsec${US}|GOCSPX-)`,
+);
+const BEARER_BEFORE = /(?:^|[^A-Za-z0-9])Bearer[ \t]+$/;
+
+/**
+ * Spans of credentials too long for the windows: every run of token
+ * characters longer than the window overlap whose start is a credential's,
+ * redacted as a whole run. Found by one linear scan over the whole line, so a
+ * JWT, signed token or bearer credential of any length is caught wherever the
+ * window boundaries fall.
+ */
+function longTokenSpans(line: string): Span[] {
+  if (line.length < WINDOW_OVERLAP) return [];
+  const spans: Span[] = [];
+  LONG_TOKEN_RUN.lastIndex = 0;
+  for (let match = LONG_TOKEN_RUN.exec(line); match; match = LONG_TOKEN_RUN.exec(line)) {
+    const run = match[0];
+    const head = run.slice(0, 320);
+    const bearer =
+      BEARER_BEFORE.test(line.slice(Math.max(0, match.index - 32), match.index)) &&
+      /[0-9]/.test(head);
+    if (bearer || LONG_TOKEN_START.test(head)) {
+      spans.push([match.index, match.index + run.length]);
+    }
+  }
+  return spans;
+}
+
+/**
  * The spans to redact in one line, found window by window. Each window
  * carries {@link WINDOW_CONTEXT} characters of the line before it for
  * lookbehinds; a match that starts in that context belongs to the previous
  * window and is skipped.
  */
 function lineSpans(line: string, withAssignments: boolean): Span[] {
-  const spans: Span[] = [];
+  const spans: Span[] = longTokenSpans(line);
   const step = WINDOW_CHARS - WINDOW_OVERLAP;
   for (let start = 0; start < line.length; start += step) {
     const from = Math.max(0, start - WINDOW_CONTEXT);

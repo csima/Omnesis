@@ -523,6 +523,53 @@ describe("windows over long lines", () => {
     }
   });
 
+  /** A JWT whose payload is `len` base64url characters, assembled at run time. */
+  const longJwt = (len: number): string => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const body = (n: number): string =>
+      Array.from({ length: n }, (_, i) => alphabet[(i * 7 + 3) % 64]).join("");
+    return join("ey", "JhbGciOiJSUzI1NiJ9.", "ey", "J", body(len), ".", body(342));
+  };
+
+  it.each([100, 600, 1_500, 3_000, 5_000, 12_000])(
+    "redacts a JWT with a %i-character payload wherever the window boundaries fall",
+    (len) => {
+      const jwt = longJwt(len);
+      const probe = jwt.slice(21, 70);
+      for (const pad of [0, 1_000, 3_000, 3_500, 3_800, 3_900, 4_000, 4_090, 7_000, 7_600]) {
+        const line = `${"x".repeat(pad)} ${jwt} tail`;
+        for (const redact of [redactSecrets, redactShapedSecrets]) {
+          const out = redact(line);
+          expect(out, `pad ${pad}`).not.toContain(probe);
+          expect(out.endsWith(` ${REDACTED_SECRET} tail`), `pad ${pad}`).toBe(true);
+          expect(redact(out)).toBe(out);
+        }
+      }
+    },
+  );
+
+  it("redacts a long token at the very end of a long line", () => {
+    const jwt = longJwt(3_000);
+    const out = redactSecrets(`${"a".repeat(4_000)} ${jwt}`);
+    expect(out).toBe(`${"a".repeat(4_000)} ${REDACTED_SECRET}`);
+  });
+
+  it("redacts a long bearer credential and a long prefixed key", () => {
+    const token = join("Q7rT2mX9pL4vN8kB", "3cZ6wY1hJ5dF0sGa".repeat(400));
+    for (const pad of [3_900, 7_000]) {
+      const bearer = redactSecrets(`${"x".repeat(pad)} Authorization: Bearer ${token} end`);
+      expect(bearer).not.toContain(token.slice(0, 40));
+      const key = redactShapedSecrets(`${"x".repeat(pad)} ${join("sk-", "proj-", token)} end`);
+      expect(key).not.toContain(token.slice(0, 40));
+    }
+  });
+
+  it("leaves a long base64 blob that is not a credential alone", () => {
+    const blob = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo".repeat(300);
+    const line = `data:image/png;base64,${blob}`;
+    expect(redactSecrets(line)).toBe(line);
+  });
+
   it("redacts every token on a minified line of many windows", () => {
     const token = join("gh", "p_", FILLER, "AbCd");
     const line = Array.from({ length: 40 }, (_, i) => `var t${i}="${token}";`).join(
