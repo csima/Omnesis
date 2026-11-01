@@ -323,14 +323,16 @@
           they share one source selection by default, and an advanced choice gives each its own.
         </p>
         <p>
-          A source-restricted Direct permission gets search, document fetch, URL lookup, analytics
-          schema discovery, and SQL only. Call <code>list_tables</code> before
-          <code>run_sql</code> to discover permitted tables and their columns. Follow the returned
-          <code>nextOffset</code> with another call using that <code>offset</code> until it is null;
-          each page defaults to 20 tables, with an optional <code>limit</code> from 1 to 100.
-          Discovery returns only the current grant’s permitted schema, without row data. Analytics
-          tables that several source accounts write to stay outside a source-restricted access
-          level, even when every contributing account is selected.
+          A source-restricted Direct permission gets search, document fetch, URL lookup, source
+          coverage, analytics schema discovery, and SQL only. <code>list_sources</code> names the
+          sources a connection may read, with each one's document count, date range and whether its
+          index is complete. Call <code>list_tables</code> before <code>run_sql</code> to discover
+          permitted tables and their columns. Follow the returned <code>nextOffset</code> with
+          another call using that <code>offset</code> until it is null; each page defaults to 20
+          tables, with an optional <code>limit</code> from 1 to 100. Discovery returns only the
+          current grant’s permitted schema, without row data. Analytics tables that several source
+          accounts write to stay outside a source-restricted access level, even when every
+          contributing account is selected.
         </p>
 
         <h3 id="notes">Notes</h3>
@@ -379,6 +381,64 @@
             every other connection working.
           </li>
         </ul>
+
+        <h3 id="agent-hosts">Agent hosts that say who is calling</h3>
+        <p>
+          An agent host runs many agents and calls Omnesis through one connection for all of them.
+          When the host attaches a signed caller identity to each tool call, you can bind that
+          connection to the host and give each of its agents its own access level. A bound
+          connection then answers a tool call only with the host's assertion, and only within the
+          level of the agent that makes the call; an agent you have not given a level, a person you
+          have not named, or an assertion that fails any check gets nothing. The connection's own
+          level stays the ceiling: an agent's level can narrow it but never widen it.
+        </p>
+        <p>
+          The assertion arrives in the <code>X-Agent-Host-Identity</code> header beside the
+          connection's access token. It is an ES256 JWT of type
+          <code>agent-host-identity+jwt</code> naming the person in <code>sub</code>, the calling
+          agent as <code>instance:&lt;id&gt;</code> in <code>act</code>, and each agent that asked
+          it nested inside as its own <code>act</code>. Omnesis checks the signature against the
+          keys the host publishes at <code>&lt;issuer&gt;/.well-known/jwks.json</code> (cached for
+          five minutes and fetched again for a key it has not seen), that the type, issuer and
+          audience are exactly the ones you configured, that it has not expired, allowing five
+          seconds of clock difference, that it lives no longer than two minutes, and that its
+          <code>jti</code> has not been used before. The issuer is an <code>https://</code> origin,
+          or an <code>http://</code> loopback origin for a host on the same machine; the audience is
+          one of this gateway's MCP URLs as the host saved it, without query, fragment or trailing
+          slash, and a binding to any other audience is refused. A person is compared lower-cased
+          and must be plain ASCII that Unicode NFKC normalization leaves unchanged; any other
+          <code>sub</code> is refused.
+        </p>
+        <p>
+          A call is granted by the calling agent and the person together. When other agents asked
+          it, the call gets only what every agent in that chain may read: a delegate never reaches
+          the wider level of the agent that asked it, and an agent in the chain without a level
+          leaves the call with nothing. Because an agent that misbehaves can leave earlier agents
+          out of the chain the host reports, give each agent a level that is safe on its own.
+          Without an assertion a bound connection can still list its tools, under the connection's
+          own level, but every tool call is refused. Revoking an agent's level or editing the level
+          applies to the next call, and a call already running releases nothing once its level
+          changes. Each agent, acting for each person, has Answer tasks and conversations of its
+          own: another agent of the same host cannot read or continue them, even on the same level.
+          Each tool call's entry in the access ledger (<code>GET /admin/access/audit</code>) names
+          the calling agent, the agents that asked it and the agent levels it used.
+        </p>
+        <p>
+          The binding and the agents' levels are set from a portal session: bind a connection with
+          <code>PUT /admin/access/connections/&lt;connection&gt;/host-identity</code> and a body of
+          <code
+            >{"issuer": "https://agents.example.com", "audience":
+            "https://omnesis.example.com/mcp"}</code
+          >; give an agent a level with
+          <code>POST /admin/access/connections/&lt;connection&gt;/host-agents</code> and
+          <code
+            >{"person": "maya.reeves@example.com", "agent": "instance:researcher-1", "levelId":
+            "&lt;level&gt;"}</code
+          >; revoke one with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>; and list them
+          with <code>GET /admin/access/host-identity</code>. Changing the issuer or audience, or
+          removing the binding with <code>DELETE</code> on the binding, revokes every agent's level,
+          and a level that an agent still uses cannot be deleted.
+        </p>
 
         <h2 id="privacy-policy">Privacy policy</h2>
         <p>

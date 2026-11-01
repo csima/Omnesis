@@ -254,7 +254,25 @@ export function unrestrictedInternalAuthorization(
   });
 }
 
-export function externalAnswerOwnerId(authorization: CorpusAuthorization): string {
+/** The verified agent host caller an Answer is asked by: the host, the person and the agent. */
+export interface HostAnswerCaller {
+  issuer: string;
+  person: string;
+  agent: string;
+}
+
+/**
+ * The Answer owner a connection's call works under. Each agent of a bound
+ * agent host, acting for each person, owns its own tasks and conversations:
+ * a `host` segment, a digest of the verified issuer, person and calling
+ * agent, follows the scope. A digest rather than the values keeps the owner
+ * id free of colons and of the person's address. A call without a host
+ * caller keeps the owner id it always had.
+ */
+export function externalAnswerOwnerId(
+  authorization: CorpusAuthorization,
+  hostCaller?: HostAnswerCaller,
+): string {
   if (authorization.capability !== "answer") {
     throw new Error("An external Answer owner requires Answer authorization.");
   }
@@ -267,5 +285,15 @@ export function externalAnswerOwnerId(authorization: CorpusAuthorization): strin
     authorization.credentialId,
     "answer-scope",
     answerOwnerScopeDigest(authorization),
+    ...(hostCaller ? ["host", hostAnswerCallerDigest(hostCaller)] : []),
   ].join(":");
+}
+
+function hostAnswerCallerDigest(caller: HostAnswerCaller): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({ v: 1, issuer: caller.issuer, person: caller.person, agent: caller.agent }),
+      "utf8",
+    )
+    .digest("base64url");
 }

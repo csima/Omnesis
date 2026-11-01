@@ -866,6 +866,7 @@ describe("gateway-hosted Streamable HTTP MCP", () => {
           "lookup_document_by_url",
           "run_sql",
           "list_tables",
+          "list_sources",
         ]);
         expect(all.client.getInstructions()).not.toContain(
           "restricted to selected source instances",
@@ -909,6 +910,7 @@ describe("gateway-hosted Streamable HTTP MCP", () => {
       "lookup_document_by_url",
       "run_sql",
       "list_tables",
+      "list_sources",
     ]);
     expect(client.getInstructions()).toContain("restricted to selected source instances");
     expect(client.getInstructions()).toContain("sql_not_permitted");

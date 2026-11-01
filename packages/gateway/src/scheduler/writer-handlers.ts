@@ -204,6 +204,10 @@ import {
   registerOAuthClient,
   reissueExecutionDeviceTokens,
   renameAccessPrincipal,
+  createHostAgentGrant,
+  removeHostIdentityBinding,
+  revokeHostAgentGrant,
+  setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
   touchPrincipalCredentialUsageBatch,
@@ -632,6 +636,10 @@ import { advanceTranscriptionVocabularyRebuild } from "../transcribe/vocabulary/
 import type { WorthAnswer } from "../worth/answers.js";
 import type { SelfIdentitySource } from "../self-identity-sources.js";
 import type {
+  HostAgentGrantCreateInput,
+  HostAgentGrantRevokeInput,
+  HostIdentityBindingInput,
+  HostIdentityUnbindInput,
   AccessPrincipalRenameInput,
   AccessRevocationInput,
   AccessConnectionLevelInput,
@@ -1112,6 +1120,14 @@ export const writerHandlers = {
   "access.deviceLevelSet": (db: Db, input: AccessDeviceLevelInput) => setDeviceLevel(db, input),
   "access.principalRename": (db: Db, input: AccessPrincipalRenameInput) =>
     renameAccessPrincipal(db, input),
+  "access.hostIdentityBind": (db: Db, input: HostIdentityBindingInput) =>
+    setHostIdentityBinding(db, input),
+  "access.hostIdentityUnbind": (db: Db, input: HostIdentityUnbindInput) =>
+    removeHostIdentityBinding(db, input),
+  "access.hostAgentGrantCreate": (db: Db, input: HostAgentGrantCreateInput) =>
+    createHostAgentGrant(db, input),
+  "access.hostAgentGrantRevoke": (db: Db, input: HostAgentGrantRevokeInput) =>
+    revokeHostAgentGrant(db, input),
   "access.revoke": (db: Db, input: AccessRevocationInput) => revokeAccessEntity(db, input),
   "access.mcpInvocationAudit": (db: Db, input: McpToolInvocationAuditInput): boolean =>
     recordMcpToolInvocationAudit(db, input),

@@ -10,6 +10,7 @@ import { addNotesAccessCapability } from "../data/migration-163-notes-access.js"
 import { createAccessLevelTables } from "../data/migration-171-access-levels.js";
 import { migrateV182PrivateKeyJwtClients } from "../data/migration-182-private-key-jwt-clients.js";
 import { addCredentialApprovedAudience } from "../data/migration-183-credential-approved-audience.js";
+import { createHostAgentGrantTables } from "../data/migration-213-host-agent-grants.js";
 import type { Db } from "../data/types.js";
 
 /** Install the current access schema on a fresh database. */
@@ -32,5 +33,6 @@ export function createAccessTables(db: Db): void {
     createAccessLevelTables(db);
     migrateV182PrivateKeyJwtClients(db);
     addCredentialApprovedAudience(db);
+    createHostAgentGrantTables(db);
   }
 }

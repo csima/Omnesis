@@ -247,3 +247,18 @@ export const accessExecutionBindingBody = z
 export const accessExecutionReissueBody = z
   .object({ clientId: z.string().min(1).max(256) })
   .strict();
+
+export const accessHostIdentityBody = z
+  .object({
+    issuer: z.string().min(1).max(2_048),
+    audience: z.string().min(1).max(2_048),
+  })
+  .strict();
+
+export const accessHostAgentBody = z
+  .object({
+    person: z.string().min(1).max(320),
+    agent: z.string().min(1).max(160),
+    levelId: z.string().uuid(),
+  })
+  .strict();

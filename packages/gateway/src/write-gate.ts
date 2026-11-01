@@ -138,6 +138,10 @@ import {
   registerOAuthClient,
   reissueExecutionDeviceTokens,
   renameAccessPrincipal,
+  createHostAgentGrant,
+  removeHostIdentityBinding,
+  revokeHostAgentGrant,
+  setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
   setConnectionLevel,
@@ -164,6 +168,12 @@ import type {
   AccessPrincipalRenameInput,
   AccessRevocationInput,
   AccessGrantUpdateInput,
+  HostAgentGrant,
+  HostAgentGrantCreateInput,
+  HostAgentGrantRevokeInput,
+  HostIdentityBinding,
+  HostIdentityBindingInput,
+  HostIdentityUnbindInput,
   AccessGrantUpdateResult,
   AccessAuthorizationNotificationEnqueueResult,
   AuthorizationRequestCreateInput,
@@ -1315,6 +1325,14 @@ export interface WriteGate extends KnowledgeWriteGate {
   renameAccessPrincipal(
     input: AccessPrincipalRenameInput,
   ): Promise<AccessMutationResult<AccessPrincipal>>;
+  setHostIdentityBinding(
+    input: HostIdentityBindingInput,
+  ): Promise<AccessMutationResult<HostIdentityBinding>>;
+  removeHostIdentityBinding(input: HostIdentityUnbindInput): Promise<AccessMutationResult<null>>;
+  createHostAgentGrant(
+    input: HostAgentGrantCreateInput,
+  ): Promise<AccessMutationResult<HostAgentGrant>>;
+  revokeHostAgentGrant(input: HostAgentGrantRevokeInput): Promise<AccessMutationResult<null>>;
   revokeAccessEntity(input: AccessRevocationInput): Promise<boolean>;
   recordMcpToolInvocationAudit(input: McpToolInvocationAuditInput): Promise<boolean>;
   touchPrincipalCredentialUsageBatch(
@@ -2582,6 +2600,10 @@ export function writeGateFromCall(call: WriterCallFn): WriteGate {
     setAccessConnectionLevel: (input) => call("access.connectionLevelSet", [input]),
     setAccessDeviceLevel: (input) => call("access.deviceLevelSet", [input]),
     renameAccessPrincipal: (input) => call("access.principalRename", [input]),
+    setHostIdentityBinding: (input) => call("access.hostIdentityBind", [input]),
+    removeHostIdentityBinding: (input) => call("access.hostIdentityUnbind", [input]),
+    createHostAgentGrant: (input) => call("access.hostAgentGrantCreate", [input]),
+    revokeHostAgentGrant: (input) => call("access.hostAgentGrantRevoke", [input]),
     revokeAccessEntity: (input) => call("access.revoke", [input]),
     recordMcpToolInvocationAudit: (input) => call("access.mcpInvocationAudit", [input]),
     touchPrincipalCredentialUsageBatch: (rows) => call("access.credentialUsageTouchBatch", [rows]),
@@ -3196,6 +3218,10 @@ export function directWriteGate(db: Db): WriteGate {
     setAccessConnectionLevel: async (input) => setConnectionLevel(db, input),
     setAccessDeviceLevel: async (input) => setDeviceLevel(db, input),
     renameAccessPrincipal: async (input) => renameAccessPrincipal(db, input),
+    setHostIdentityBinding: async (input) => setHostIdentityBinding(db, input),
+    removeHostIdentityBinding: async (input) => removeHostIdentityBinding(db, input),
+    createHostAgentGrant: async (input) => createHostAgentGrant(db, input),
+    revokeHostAgentGrant: async (input) => revokeHostAgentGrant(db, input),
     revokeAccessEntity: async (input) => revokeAccessEntity(db, input),
     recordMcpToolInvocationAudit: async (input) => recordMcpToolInvocationAudit(db, input),
     touchPrincipalCredentialUsageBatch: async (rows) => {

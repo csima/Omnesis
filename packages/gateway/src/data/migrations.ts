@@ -135,6 +135,7 @@ import { runSchemaSetup } from "./schema.js";
 import { compactKnowledgeJournal } from "./migration-205-knowledge-journal.js";
 import { addConversationAuthors } from "./migration-206-conversation-authors.js";
 import { compactKnowledgeHistoryTargets } from "./migration-207-knowledge-history-targets.js";
+import { createHostAgentGrantTables } from "./migration-213-host-agent-grants.js";
 import {
   createLegacyBriefClaimsTables,
   createLegacyBriefTables,
@@ -4972,6 +4973,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 212,
     description: "index the date pass's pending documents by arrival again",
     up: createDatesPendingAgeIndex,
+  },
+  {
+    version: 213,
+    description: "agent hosts that say who is calling, and the access level of each host agent",
+    up: createHostAgentGrantTables,
   },
 ];
 
