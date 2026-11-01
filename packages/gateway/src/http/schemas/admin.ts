@@ -140,7 +140,8 @@ export const createPairingBody = z.object({
   repairDeviceId: z.string().uuid().optional(),
   kind: deviceKindSchema,
   scopes: scopeArraySchema.optional(),
-  ttlMs: z.number().positive().optional(),
+  /** A pairing code lives 1 minute to 2 hours, the same bounds `devices pair --ttl` enforces. */
+  ttlMs: z.number().int().min(60_000).max(7_200_000).optional(),
   selfEmails: z.array(z.string()).optional(),
   selfPhones: z.array(z.string()).optional(),
   /** Access level an integration paired with this code is put on (portal sessions only). */

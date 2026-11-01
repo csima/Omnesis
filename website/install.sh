@@ -133,6 +133,9 @@
 #                                  automation. Omitted, it is asked for on the
 #                                  terminal, so a single-use code stays out of
 #                                  shell history.
+#   --code-file <path>             (--collector) read the pairing code from a
+#                                  file only its owner can read, so it is on no
+#                                  command line (OMNESIS_PAIRING_CODE_FILE)
 #   --docker                       run the gateway and collector as containers on
 #                                  this machine instead of as user services. The
 #                                  daemons come from published, version-tagged
@@ -290,6 +293,11 @@ PAIR_FINGERPRINT=""
 PAIR_FINGERPRINT_FLAG=0
 PAIR_CODE=""
 PAIR_CODE_FLAG=0
+# A file holding the pairing code, and the private copy `omnesis pair` reads it
+# from, so the code reaches no command line.
+PAIR_CODE_FILE="${OMNESIS_PAIRING_CODE_FILE:-}"
+PAIR_CODE_FILE_FLAG=0
+PAIR_CODE_TMP=""
 # How long to wait for the freshly registered collector to be accepted by the
 # gateway. It builds nothing, so this is a network wait, not a boot wait.
 COLLECTOR_WAIT_SECONDS="${OMNESIS_COLLECTOR_WAIT_SECONDS:-240}"
@@ -665,6 +673,9 @@ cleanup_temp_files() {
   fi
   if [ -n "${PACKAGE_WRAPPER_TMP:-}" ] && [ -f "$PACKAGE_WRAPPER_TMP" ]; then
     rm -f "$PACKAGE_WRAPPER_TMP"
+  fi
+  if [ -n "${PAIR_CODE_TMP:-}" ] && [ -f "$PAIR_CODE_TMP" ]; then
+    rm -f "$PAIR_CODE_TMP"
   fi
   if [ -n "${UPDATE_LOCK_HELPER_TMP:-}" ] && [ -f "$UPDATE_LOCK_HELPER_TMP" ]; then
     rm -f "$UPDATE_LOCK_HELPER_TMP"
@@ -5030,6 +5041,45 @@ process.stdin.on("end", () => {
 });' "$1" 2>/dev/null || true
 }
 
+# The pairing code from --code-file (or OMNESIS_PAIRING_CODE_FILE), into
+# PAIR_CODE. Only the collector role redeems it with `omnesis pair`, which reads
+# it back from a private file; the variable alone is ignored by other roles.
+# The file must be its owner's alone: a code other users can read is a
+# credential they can redeem first.
+read_pairing_code_file() {
+  [ -n "$PAIR_CODE_FILE" ] || return 0
+  if [ "$COLLECTOR" != 1 ]; then
+    [ "$PAIR_CODE_FILE_FLAG" = 0 ] || fail "--code-file is only meaningful with --collector."
+    PAIR_CODE_FILE=""
+    return 0
+  fi
+  [ "$PAIR_CODE_FLAG" = 0 ] || fail "--code and --code-file both name the pairing code; give one."
+  [ -f "$PAIR_CODE_FILE" ] && [ -r "$PAIR_CODE_FILE" ] || \
+    fail "The pairing code file $PAIR_CODE_FILE is not a readable file."
+  PAIR_CODE_FILE_MODE="$(ls -ln "$PAIR_CODE_FILE" 2>/dev/null | cut -c5-10)"
+  case "$PAIR_CODE_FILE_MODE" in
+    ------) ;;
+    *) fail "The pairing code file $PAIR_CODE_FILE is open to other users; make it owner-only (chmod 600 $PAIR_CODE_FILE) and re-run." ;;
+  esac
+  PAIR_CODE="$(tr -d ' \t\r\n' < "$PAIR_CODE_FILE")"
+  [ -n "$PAIR_CODE" ] || fail "The pairing code file $PAIR_CODE_FILE is empty."
+  PAIR_CODE_FLAG=1
+}
+
+# Write PAIR_CODE to an owner-only file in $1 for `omnesis pair --code-file`,
+# into PAIR_CODE_TMP. Inside the config directory, which a Docker collector
+# also sees at the same path; removed once the redeem returns, and on exit.
+write_pairing_code_tmp() {
+  # mktemp creates the file exclusively, with a random name and mode 0600, so
+  # nothing planted at a guessable name in a directory another user can write
+  # (the Docker collector directory belongs to the container's user) is
+  # followed or overwritten.
+  PAIR_CODE_TMP="$( umask 077; mkdir -p "$1" && mktemp "$1/.pairing-code.XXXXXX" )" || \
+    fail "Could not create a private file for the pairing code in $1."
+  printf '%s\n' "$PAIR_CODE" > "$PAIR_CODE_TMP" || \
+    fail "Could not write the pairing code to a private file in $1."
+}
+
 # The single-use pairing code, into PAIR_CODE, for a device of the kind named
 # in $1. Read from the terminal by default: under `curl | sh` stdin is the
 # script, and a code passed on the command line lands in shell history, which
@@ -5091,7 +5141,8 @@ collector_pair() {
   # wait for the daemon below on its first poll; the redeem writes a fresh one
   # (naming the device and its gateway) and the daemon completes it.
   rm -f "$CONFIG_DIR/collector-pairing-state.json"
-  set -- pair "$PAIR_CODE" --gateway-url "$PAIR_GATEWAY_URL"
+  write_pairing_code_tmp "$CONFIG_DIR"
+  set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
   if [ -n "$PAIR_FINGERPRINT" ]; then
     set -- "$@" --trust-fingerprint "$PAIR_FINGERPRINT"
   fi
@@ -5113,6 +5164,7 @@ collector_pair() {
   else
     "$OMNESIS_BIN" "$@" </dev/null || PAIR_STATUS=$?
   fi
+  [ -z "$PAIR_CODE_TMP" ] || rm -f "$PAIR_CODE_TMP"
   PAIR_OK=0; [ "$PAIR_STATUS" = 0 ] && PAIR_OK=1
   if [ "$PAIR_OK" = 0 ]; then
     RETRY_FLAGS="--gateway-url $PAIR_GATEWAY_URL"
@@ -8268,7 +8320,11 @@ docker_up() {
 # token lands in the collector's own config directory — the one the daemon
 # reads when it starts.
 docker_collector_pair() {
-  set -- pair "$PAIR_CODE" --gateway-url "$PAIR_GATEWAY_URL"
+  # The container reads the private copy as the daemon's user, which is not
+  # this one under root; the copy is then handed to that user alone.
+  write_pairing_code_tmp "$CONFIG_DIR/collector"
+  docker_own_path "$PAIR_CODE_TMP"
+  set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
   if [ -n "$PAIR_FINGERPRINT" ]; then
     set -- "$@" --trust-fingerprint "$PAIR_FINGERPRINT"
   fi
@@ -8289,6 +8345,7 @@ docker_collector_pair() {
   PAIR_ESC="$(printf '\033')"
   DOCKER_DEVICE_NAME="$(tr -d '\r' < "$PAIR_OUTPUT" 2>/dev/null | sed "s/$PAIR_ESC\[[0-9;]*m//g" \
     | sed -n 's/^Paired as \(.*\) (collector) id=.*$/\1/p' | head -n 1)"
+  [ -z "$PAIR_CODE_TMP" ] || rm -f "$PAIR_CODE_TMP"
   PAIR_OK=0; [ "$PAIR_STATUS" = 0 ] && PAIR_OK=1
   if [ "$PAIR_OK" = 0 ]; then
     RETRY_FLAGS="--docker --collector --gateway-url $PAIR_GATEWAY_URL"
@@ -9514,6 +9571,7 @@ parse_args() {
       --gateway-url) PAIR_GATEWAY_URL="$2"; PAIR_GATEWAY_URL_FLAG=1; shift 2 ;;
       --trust-fingerprint) PAIR_FINGERPRINT="$2"; PAIR_FINGERPRINT_FLAG=1; shift 2 ;;
       --code)       PAIR_CODE="$2"; PAIR_CODE_FLAG=1; shift 2 ;;
+      --code-file)  PAIR_CODE_FILE="$2"; PAIR_CODE_FILE_FLAG=1; shift 2 ;;
       --docker)     DOCKER=1; shift ;;
       --combined) DOCKER_COMBINED=1; shift ;;
       --gateway-only) DOCKER_GATEWAY_ONLY=1; shift ;;
@@ -9684,6 +9742,7 @@ main() {
     [ "$PAIR_FINGERPRINT_FLAG" = 0 ] || fail "--trust-fingerprint is only meaningful with --collector, --openclaw or --hermes."
     [ "$PAIR_CODE_FLAG" = 0 ] || fail "--code is only meaningful with --collector, --openclaw or --hermes."
   fi
+  read_pairing_code_file
   if [ "$EMBEDDER_FLAG" = 1 ] && [ "$WANT_MODEL" = 0 ]; then
     fail "--embedder names a model to install; it cannot be combined with --no-model, --client-only, --collector, --openclaw or --hermes."
   fi

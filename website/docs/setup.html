@@ -628,7 +628,14 @@ omnesis.example.com {
           asks you to name the gateway. <code>omnesis devices discover</code> runs the same search
           (<code>--json</code> for a script). <code>--code &lt;code&gt;</code> supplies the pairing
           code for an unattended install; by default you are asked for it, which keeps the code out
-          of shell history.
+          of shell history. <code>--code-file &lt;path&gt;</code>, or
+          <code>OMNESIS_PAIRING_CODE_FILE</code>, reads it from a file only its owner can read and
+          keeps it off every command line: the role refuses a file other users can read, and hands
+          the code to <code>omnesis pair --code-file</code> through a private copy it removes
+          afterwards. On the gateway host,
+          <code>omnesis devices pair --kind collector --ttl 30m --json</code> mints a code that
+          lasts up to two hours (ten minutes by default) and prints
+          <code>{"code", "expiresAt", "kind"}</code> for a script to pass on.
         </p>
         <p>
           On macOS, run from a terminal, the install ends by opening the Full Disk Access settings
