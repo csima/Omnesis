@@ -108,11 +108,16 @@ describe("redaction of addresses and metadata", () => {
       sourceUrl: "https://maya:hunter-two@app.example.com/#/cb?access_token=abc&tab=2",
       tags: [`tag ${TOKEN}`],
       extra: { browserProfileLabel: `Work ${TOKEN}`, browserDeviceId: "d-1" },
+      description: `Summary with ${TOKEN}`,
+      people: [{ name: `Maker ${TOKEN}` }],
     } as DocumentInput["metadata"];
     const [out] = redactWebDocuments([page]);
     const metadata = out!.metadata as unknown as Record<string, unknown>;
     expect(metadata.sourceUrl).toBe("https://app.example.com/#/cb?tab=2");
     expect(metadata.tags).toEqual(["tag [redacted]"]);
+    expect(metadata.documentType).toBe("webpage");
+    expect(metadata.description).toBe("Summary with [redacted]");
+    expect(metadata.people).toEqual([{ name: "Maker [redacted]" }]);
     expect(metadata.extra).toEqual({
       browserProfileLabel: "Work [redacted]",
       browserDeviceId: "d-1",
@@ -162,14 +167,27 @@ describe("the capture policy on ingest", () => {
       "https://notes.example/page",
       "https://code.example.org/settings/tokens",
       "https://www.linkedin.com/messaging/thread/1",
+      "not a url",
+      "ftp://files.example.org/report",
     ];
-    const keptUrls = ["https://blog.example.org/post", "not a url"];
+    const keptUrls = ["https://blog.example.org/post"];
     const { kept, refused } = partitionCapturableDocuments(
       [...refusedUrls, ...keptUrls].map((url) => at(url)),
       policy,
     );
     expect(refused.map((page) => page.externalId)).toEqual(refusedUrls);
     expect(kept.map((page) => page.externalId)).toEqual(keptUrls);
+  });
+
+  it("refuses a web page with no http(s) address even without a policy", () => {
+    const missing = at("https://blog.example.org/x");
+    missing.metadata = { documentType: "webpage" } as DocumentInput["metadata"];
+    const { kept, refused } = partitionCapturableDocuments(
+      [missing, at("javascript:alert(1)"), at("https://blog.example.org/ok")],
+      null,
+    );
+    expect(refused).toHaveLength(2);
+    expect(kept.map((page) => page.externalId)).toEqual(["https://blog.example.org/ok"]);
   });
 
   it("judges web:<account> pages too, and never another source's documents", () => {
@@ -184,6 +202,9 @@ describe("the capture policy on ingest", () => {
     const rows = [{ url: "https://agents.example.net/x" }, { url: "https://blog.example.org/y" }];
     expect(filterCapturableVisits("web", "page_visits", rows, policy)).toEqual([rows[1]]);
     expect(filterCapturableVisits("web", "other", rows, policy)).toBe(rows);
-    expect(filterCapturableVisits("web", "page_visits", rows, null)).toBe(rows);
+    expect(filterCapturableVisits("web", "page_visits", rows, null)).toEqual(rows);
+    expect(
+      filterCapturableVisits("web", "page_visits", [{ url: "mailto:a@example.com" }], null),
+    ).toEqual([]);
   });
 });

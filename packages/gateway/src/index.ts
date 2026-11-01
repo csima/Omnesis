@@ -43,7 +43,13 @@ import { ReleaseCheckService } from "./release-check/service.js";
 import { createReleaseCheckTask } from "./release-check/task.js";
 import { GatewayHttpShutdown } from "./gateway-http-shutdown.js";
 import { seedWebSourceMeta } from "./sources/web/source-meta.js";
-import { redactStoredWebVisits } from "./sources/web/backfill.js";
+import {
+  WEB_PAGES_REDACTION_KEY,
+  WEB_VISITS_REDACTION_KEY,
+  WebRedactionBackfill,
+  redactStoredWebVisits,
+  webRedactionIsCurrent,
+} from "./sources/web/backfill.js";
 import { dictationFeatureStatus } from "./dictation/index.js";
 import { documentsAwaitingTranscription } from "./voice-notes/index.js";
 import {
@@ -1154,9 +1160,26 @@ const analyticsDb = new AnalyticsDb(analyticsDbPath, {
   onFatal: () => requestShutdown(1),
 });
 await analyticsDb.open();
-// Visits captured before ingest redacted them are redacted in the background,
-// a page of rows per write turn; once done, each later boot finds nothing to change.
-void redactStoredWebVisits(analyticsDb).catch((error: unknown) =>
+// Web pages and visits stored before ingest redacted them are redacted in the
+// background with the shaped rules, a page per writer turn; a recorded rules
+// version makes every later boot skip the pass.
+void new WebRedactionBackfill({
+  isCurrent: () => webRedactionIsCurrent(db, WEB_PAGES_REDACTION_KEY),
+  plan: (cursor) => ioGate.planWebRedactionPage(cursor),
+  apply: (mutations, finishedKey) => writeGate.applyWebRedactionPage(mutations, finishedKey),
+})
+  .run()
+  .catch((error: unknown) =>
+    log.warn(
+      `Redacting stored web pages failed: ${error instanceof Error ? error.message : String(error)}`,
+    ),
+  );
+void redactStoredWebVisits(analyticsDb, {
+  isCurrent: () => webRedactionIsCurrent(db, WEB_VISITS_REDACTION_KEY),
+  markCurrent: async () => {
+    await writeGate.applyWebRedactionPage([], WEB_VISITS_REDACTION_KEY);
+  },
+}).catch((error: unknown) =>
   log.warn(
     `Redacting stored page visits failed: ${error instanceof Error ? error.message : String(error)}`,
   ),

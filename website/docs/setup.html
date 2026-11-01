@@ -758,8 +758,8 @@ omnesis.example.com {
           when it starts, so until one has connected, none are skipped, and duplicates are removed
           at search time instead. Mail, messaging and password-manager sites (Gmail, Outlook, Proton
           Mail, Slack, WhatsApp Web, Telegram, Discord, 1Password, Bitwarden and others), and the
-          message pages of Facebook and LinkedIn, are skipped from the start, whether or not a
-          collector has connected. The extension never captures:
+          message pages of Facebook, LinkedIn, X, Instagram and Reddit, are skipped from the start,
+          whether or not a collector has connected. The extension never captures:
         </p>
         <ul>
           <li>pages in incognito or private windows, and any page that is not HTTPS;</li>
@@ -769,9 +769,12 @@ omnesis.example.com {
             pages deleted for good;
           </li>
           <li>
-            sign-in, registration, password, single-sign-on, multi-factor, checkout, payment and
-            billing pages, pages that manage API keys, tokens or secrets, Cloudflare Access pages,
-            and links that carry their own token, such as a password-reset or invitation link;
+            sign-in, single-sign-on, multi-factor and API-key pages, wherever the address names
+            them; registration, password, checkout, payment, billing, token, key and secrets pages
+            where the address puts them at the top of a site or under its account settings, never on
+            a documentation, wiki or blog page or a file in a code repository; Cloudflare Access
+            pages; and links that carry their own token, such as a password-reset or invitation
+            link;
           </li>
           <li>
             any page with a password, one-time-code or payment-card field, including fields inside a
@@ -809,12 +812,15 @@ omnesis.example.com {
           tokens, JSON Web Tokens, private keys, API keys with a known prefix (OpenAI and Anthropic
           <code>sk-</code>, AWS, Azure, GitHub, GitLab, Google, Hugging Face, npm, PyPI, SendGrid,
           Slack, Stripe, Discord and Telegram), the password in a URL or a
-          <code>curl -u</code> argument, the key in a connection string, a value written after a
-          name such as <code>password:</code>, <code>DB_PASSWORD=</code>,
-          <code>"api_key": </code> or <code>Authorization: Basic</code>, and the cells under a table
-          column named for a password, token or key. When a page arrives, the gateway redacts it
-          again, its address and metadata included, and turns away a page the capture settings
-          refuse, so a browser that missed either cannot store the page.
+          <code>curl -u</code> argument, the key in a connection string, and a value that looks like
+          a credential written after a name such as <code>password:</code>,
+          <code>DB_PASSWORD=</code>, <code>accessToken =</code>, <code>"api_key": </code> or
+          <code>Authorization: Basic</code>, or under a table column named for a password or key. A
+          type, a variable reference or a sentence after such a name is left as it is. When a page
+          arrives, the gateway redacts it again, its address and metadata included, and turns away a
+          page the capture settings refuse or that has no web address, so a browser that missed
+          either cannot store the page. After an upgrade, pages and visits already stored are
+          redacted once in the background, with the credential shapes only.
         </p>
         <p>
           The capture token can add pages but cannot search or read. The extension loads no remote

@@ -1153,6 +1153,54 @@ export class AnalyticsTableManager {
     return changed;
   }
 
+  /**
+   * Rewrite one key column, a page of rows per write turn: a row whose value
+   * `rewrite` changes is copied under the new key and the old row deleted, in
+   * one write slot. A copy whose new key already exists is dropped, so two rows
+   * that now share a key collapse into the one already there. `rewrite` must be
+   * idempotent. Returns the rows moved.
+   */
+  async rewriteKeyColumn(
+    tableName: string,
+    column: string,
+    rewrite: (value: string) => string,
+    pageSize = 500,
+  ): Promise<number> {
+    const table = quoteIdent(tableName);
+    const key = quoteIdent(column);
+    let after = -1n;
+    let changed = 0;
+    for (;;) {
+      const page = await this.pool.serializeWrite(() =>
+        this.pool.withConn(async ({ conn }) => {
+          const reader = await conn.runAndReadAll(
+            `SELECT rowid, ${key} FROM ${table} WHERE rowid > ${after} ORDER BY rowid LIMIT ${pageSize}`,
+          );
+          const rows = reader.getRows() as unknown[][];
+          let pageChanged = 0;
+          for (const row of rows) {
+            const value = row[1];
+            if (typeof value !== "string") continue;
+            const next = rewrite(value);
+            if (next === value) continue;
+            const rowid = BigInt(row[0] as bigint);
+            await conn.run(
+              `INSERT OR IGNORE INTO ${table} SELECT * REPLACE ('${escapeStr(next)}' AS ${key}) FROM ${table} WHERE rowid = ${rowid}`,
+            );
+            await conn.run(`DELETE FROM ${table} WHERE rowid = ${rowid}`);
+            pageChanged += 1;
+          }
+          const last = rows.length > 0 ? BigInt(rows[rows.length - 1]![0] as bigint) : null;
+          return { last, pageChanged, size: rows.length };
+        }),
+      );
+      changed += page.pageChanged;
+      if (page.last === null || page.size < pageSize) break;
+      after = page.last;
+    }
+    return changed;
+  }
+
   /** Delete records by primary key values, across every stream and every source that shares the table. */
   async deleteRecords(tableName: string, ids: string[], pkColumn: string): Promise<number> {
     if (ids.length === 0) return 0;

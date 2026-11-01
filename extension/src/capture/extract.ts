@@ -99,6 +99,9 @@ const MIN_EXTRACTED_CHARS = 25;
  */
 export const MAX_EXTRACTED_CHARS = 200_000;
 
+/** Ceiling on the extracted title, so redacting it is bounded too. */
+export const MAX_EXTRACTED_TITLE_CHARS = 10_000;
+
 /**
  * Extract the page's readable content as Markdown. `url` is the page's address;
  * Defuddle keys its site-specific extractor registry on the host, so passing it
@@ -139,11 +142,11 @@ export function extractReadableText(doc: Document, url: string): ExtractedConten
   if (text.length < MIN_EXTRACTED_CHARS) {
     text = toMarkdown(bodyHtml(doc));
   }
-  // Credentials shown on the page never leave the browser. Redaction runs
-  // before the length cap so a cut cannot leave half a token unrecognised.
+  // Credentials shown on the page never leave the browser. Redaction runs on
+  // the capped text, so its cost is bounded by the cap however large the page.
   return {
-    title: redactSecrets(parsedTitle || fallbackTitle),
-    text: capLength(redactSecrets(text)),
+    title: redactSecrets((parsedTitle || fallbackTitle).slice(0, MAX_EXTRACTED_TITLE_CHARS)),
+    text: redactSecrets(capLength(text)),
   };
 }
 

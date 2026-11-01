@@ -99,6 +99,7 @@ import {
   planSourceUrlRecanonicalization,
   type SourceUrlRecanonicalizationCursor,
 } from "../domain/SourceUrlRecanonicalization.js";
+import { planWebRedactionPage, type WebRedactionCursor } from "../sources/web/backfill.js";
 
 import {
   fetchTranscriptionVocabularyBatch,
@@ -126,6 +127,8 @@ export const ioHandlers = {
     specs: readonly UrlCanonicalizerSpec[],
     cursor?: SourceUrlRecanonicalizationCursor,
   ) => planSourceUrlRecanonicalization(db, specs, cursor),
+  "io.planWebRedactionPage": (db: Db, cursor?: WebRedactionCursor) =>
+    planWebRedactionPage(db, cursor),
   // Smallest non-trivial read op — proves the handle is usable.
   "io.countDocuments": (db: Db) => {
     const row = db.prepare("SELECT COUNT(*) AS n FROM documents").get() as

@@ -64,7 +64,7 @@ export function assertCanonicalWebSourceIds(
  * An address as it is stored: without a user or password, normalized (which
  * strips credential params, in the fragment too) and redacted.
  */
-function redactUrl(url: string): string {
+function redactUrl(url: string, redact: (text: string) => string = redactSecrets): string {
   let clean = url;
   try {
     const parsed = new URL(url);
@@ -76,42 +76,58 @@ function redactUrl(url: string): string {
   } catch {
     // Not a URL: redacted as text below.
   }
-  return redactSecrets(normalizeUrl(clean));
+  return redact(normalizeUrl(clean));
 }
 
-function redactStrings(value: unknown): unknown {
-  if (typeof value === "string") return redactSecrets(value);
-  if (Array.isArray(value)) return value.map(redactStrings);
+function redactStrings(value: unknown, redact: (text: string) => string): unknown {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((entry) => redactStrings(entry, redact));
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
         key,
-        redactStrings(entry),
+        redactStrings(entry, redact),
       ]),
     );
   }
   return value;
 }
 
-/** Redact one web document's metadata; the same object when nothing changed. */
-function redactMetadata(metadata: DocumentInput["metadata"]): DocumentInput["metadata"] {
+/**
+ * Redact one web document's metadata — every string in it, at any depth,
+ * except the `documentType` that routes it — with `sourceUrl` treated as an
+ * address. The same object when nothing changed.
+ */
+function redactMetadata(
+  metadata: DocumentInput["metadata"],
+  redact: (text: string) => string,
+): DocumentInput["metadata"] {
   if (!metadata || typeof metadata !== "object") return metadata;
-  const next: Record<string, unknown> = { ...metadata };
-  if (typeof next.sourceUrl === "string") next.sourceUrl = redactUrl(next.sourceUrl);
-  if (next.tags !== undefined) next.tags = redactStrings(next.tags);
-  if (next.extra !== undefined) next.extra = redactStrings(next.extra);
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (key === "documentType") next[key] = value;
+    else if (key === "sourceUrl" && typeof value === "string") next[key] = redactUrl(value, redact);
+    else next[key] = redactStrings(value, redact);
+  }
   return JSON.stringify(next) === JSON.stringify(metadata)
     ? metadata
     : (next as DocumentInput["metadata"]);
 }
 
-/** Redact one web document; the same object when nothing changed. */
-export function redactWebDocument(document: DocumentInput): DocumentInput {
+/**
+ * Redact one web document, with every rule by default or with the given
+ * redactor (the stored-page pass uses only the shaped rules); the same object
+ * when nothing changed.
+ */
+export function redactWebDocument(
+  document: DocumentInput,
+  redact: (text: string) => string = redactSecrets,
+): DocumentInput {
   if (!isWebSourceId(document.sourceId)) return document;
-  const title = typeof document.title === "string" ? redactSecrets(document.title) : document.title;
+  const title = typeof document.title === "string" ? redact(document.title) : document.title;
   const content =
-    typeof document.content === "string" ? redactSecrets(document.content) : document.content;
-  const metadata = redactMetadata(document.metadata);
+    typeof document.content === "string" ? redact(document.content) : document.content;
+  const metadata = redactMetadata(document.metadata, redact);
   if (title === document.title && content === document.content && metadata === document.metadata) {
     return document;
   }
@@ -163,15 +179,26 @@ export function redactWebVisitRecords(
   });
 }
 
+/** Whether `url` is an http(s) address, the only kind a browser captures. */
+function isHttpUrl(url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether the policy refuses a page at `url`. The pause is not consulted —
- * a page captured before a pause began is still delivered — and an address
- * that does not parse is left to the rest of the ingest contract.
+ * a page captured before a pause began is still delivered. An address that is
+ * missing or not http(s) is refused: a captured page always has one.
  */
-export function refusesWebUrl(policy: WebCapturePolicy, url: unknown): boolean {
-  if (typeof url !== "string") return false;
-  const verdict = judgeCaptureUrl({ ...policy, pause: null }, url, { gatewayHost: "", now: 0 });
-  return !verdict.allowed && verdict.reason !== "invalid-url";
+export function refusesWebUrl(policy: WebCapturePolicy | null | undefined, url: unknown): boolean {
+  if (!isHttpUrl(url)) return true;
+  if (!policy) return false;
+  return !judgeCaptureUrl({ ...policy, pause: null }, url, { gatewayHost: "", now: 0 }).allowed;
 }
 
 /** Split a batch into the documents the policy lets in and the web pages it refuses. */
@@ -179,7 +206,6 @@ export function partitionCapturableDocuments(
   documents: readonly DocumentInput[],
   policy: WebCapturePolicy | null | undefined,
 ): { kept: DocumentInput[]; refused: DocumentInput[] } {
-  if (!policy) return { kept: [...documents], refused: [] };
   const kept: DocumentInput[] = [];
   const refused: DocumentInput[] = [];
   for (const document of documents) {
@@ -200,7 +226,7 @@ export function filterCapturableVisits(
   records: Record<string, unknown>[],
   policy: WebCapturePolicy | null | undefined,
 ): Record<string, unknown>[] {
-  if (!policy || !isWebVisitBatch(sourceId, tableName)) return records;
+  if (!isWebVisitBatch(sourceId, tableName)) return records;
   const kept = records.filter((record) => !refusesWebUrl(policy, record.url));
   if (kept.length < records.length) {
     log.info(

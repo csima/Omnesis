@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import { describe, expect, it } from "vitest";
-import { REDACTED_SECRET, redactSecrets } from "./redact-secrets.js";
+import { REDACTED_SECRET, redactSecrets, redactShapedSecrets } from "./redact-secrets.js";
 
 /**
  * Every credential below is invented and assembled at run time from a prefix
@@ -43,6 +43,17 @@ const SHAPED: Array<[string, string]> = [
   ["a Google OAuth client secret", join("GOC", "SPX-", FILLER.slice(0, 28))],
   ["a Stripe webhook secret", join("wh", "sec_", FILLER)],
   ["an Azure AD client secret", join("aB3", "8Q", "~", FILLER.slice(0, 34))],
+  ["a Shopify access token", join("shp", "at_", "0123456789abcdef0123456789abcdef")],
+  ["a Shopify shared secret", join("shp", "ss_", "fedcba9876543210fedcba9876543210")],
+  ["a DigitalOcean token", join("dop", "_v1_", "0123456789abcdef".repeat(4))],
+  ["a Vault token", join("hv", "s.", FILLER)],
+  ["a Doppler token", join("dp", ".st.", "dev.", FILLER, "Ab12Cd34")],
+  ["a Linear key", join("lin", "_api_", FILLER, "Ab12Cd34")],
+  ["a Notion token", join("nt", "n_", FILLER, "Ab12Cd34")],
+  [
+    "an age secret key",
+    join("AGE-", "SECRET-KEY-1", "QWERTYUIOPASDFGHJKLZXCVBNM0123456789QWERTYUIOPASDFGHJKLZXC"),
+  ],
 ];
 
 describe("redactSecrets", () => {
@@ -70,12 +81,12 @@ describe("redactSecrets", () => {
   it.each([
     ["DB_PASSWORD=correct-horse-battery", "DB_PASSWORD=[redacted]"],
     ["GITHUB_ACCESS_TOKEN=abc123def456", "GITHUB_ACCESS_TOKEN=[redacted]"],
-    ["export STRIPE\\_SECRET\\_KEY=abc123", "export STRIPE\\_SECRET\\_KEY=[redacted]"],
+    ["export STRIPE\\_SECRET\\_KEY=abc123def456", "export STRIPE\\_SECRET\\_KEY=[redacted]"],
     ["secret: plain-value", "secret: [redacted]"],
-    ["token = abc123", "token = [redacted]"],
-    ["private_key: abc123", "private_key: [redacted]"],
-    ["X-API-Key: abc123", "X-API-Key: [redacted]"],
-    ["passphrase=two words", "passphrase=[redacted] words"],
+    ["token = abc123def456", "token = [redacted]"],
+    ["private_key: abc123def456", "private_key: [redacted]"],
+    ["X-API-Key: abc123def456", "X-API-Key: [redacted]"],
+    ["passphrase=two-words-here", "passphrase=[redacted]"],
     ["pwd=hunter-two", "pwd=[redacted]"],
   ])("redacts the .env-style assignment %s", (input, expected) => {
     expect(redactSecrets(input)).toBe(expected);
@@ -85,7 +96,7 @@ describe("redactSecrets", () => {
     expect(redactSecrets('{"password": "hunter two", "user": "maya"}')).toBe(
       '{"password": [redacted], "user": "maya"}',
     );
-    expect(redactSecrets("{'api_key':'abc123'}")).toBe("{'api_key':[redacted]}");
+    expect(redactSecrets("{'api_key':'abc123def456'}")).toBe("{'api_key':[redacted]}");
     expect(redactSecrets('client_secret: "s3cr3t value"')).toBe("client_secret: [redacted]");
   });
 
@@ -257,5 +268,128 @@ describe("redactSecrets", () => {
 
   it("returns empty text unchanged", () => {
     expect(redactSecrets("")).toBe("");
+  });
+
+  it.each([
+    ["accessToken: Q7rT2mX9pL4v", "accessToken: [redacted]"],
+    ["refreshToken = Q7rT2mX9pL4v", "refreshToken = [redacted]"],
+    ["clientSecret: Q7rT2mX9pL4v", "clientSecret: [redacted]"],
+    ["privateKey: Q7rT2mX9pL4v", "privateKey: [redacted]"],
+    ["PGPASSWORD=hunter-two-x", "PGPASSWORD=[redacted]"],
+    ["DB_PASS=hunter-two-x", "DB_PASS=[redacted]"],
+    ["SECRET_KEY_BASE=Q7rT2mX9pL4v", "SECRET_KEY_BASE=[redacted]"],
+    ["API_TOKEN_V2=Q7rT2mX9pL4v;", "API_TOKEN_V2=[redacted];"],
+  ])("redacts the camelCase or suffixed name %s", (input, expected) => {
+    expect(redactSecrets(input)).toBe(expected);
+  });
+
+  it("redacts a private key quoted or indented in Markdown", () => {
+    const quoted = join(
+      "> -----BEGIN ",
+      "PRIVATE KEY-----\n> ",
+      FILLER,
+      "\n> ",
+      FILLER,
+      "\n> -----END PRIVATE KEY-----",
+    );
+    expect(redactSecrets(`Quoted:\n\n${quoted}\n\nAfter.`)).toBe(
+      `Quoted:\n\n> ${REDACTED_SECRET}\n\nAfter.`,
+    );
+    const indented = join("    -----BEGIN ", "PRIVATE KEY-----\n    ", FILLER, "\n    ", FILLER);
+    expect(redactSecrets(`${indented}\n\nNext paragraph with a longword.`)).toBe(
+      `    ${REDACTED_SECRET}\n\nNext paragraph with a longword.`,
+    );
+  });
+
+  it("finds a token split by invisible separators", () => {
+    const token = join("gh", "p_", FILLER, "AbCd");
+    const hidden = `${token.slice(0, 10)}⁣${token.slice(10, 20)}⁢${token.slice(20)}`;
+    expect(redactSecrets(`Token ${hidden} here`)).toBe(`Token ${REDACTED_SECRET} here`);
+  });
+
+  it("applies only the shaped rules through redactShapedSecrets", () => {
+    const token = join("gh", "p_", FILLER, "AbCd");
+    expect(redactShapedSecrets(`password: hunter-two-x and ${token}`)).toBe(
+      `password: hunter-two-x and ${REDACTED_SECRET}`,
+    );
+  });
+});
+
+/**
+ * Text that names credentials without holding one: code, types, docs and
+ * tables. Every line must come back exactly as it went in.
+ */
+const NOT_SECRETS = [
+  "interface Login { password: string; remember: boolean }",
+  "type Session = { token: string | null; expires: number };",
+  "if (token === null) return;",
+  "if (password == confirm) submit();",
+  "while (token !== undefined) next();",
+  "const token = getToken();",
+  "password := readPassword()",
+  "Password: must be at least twelve characters long.",
+  "Authorization: required for every request.",
+  "Authorization: Bearer token",
+  "token: ${{ secrets.DEPLOY_TOKEN }}",
+  "password: $DB_PASSWORD",
+  "password: <your-password>",
+  "api_key: {{ .Values.apiKey }}",
+  'password: "********"',
+  "secret_key = settings.SECRET_KEY",
+  "SECRET_KEY = os.environ['SECRET_KEY']",
+  "token = os.getenv('API_TOKEN')",
+  "password: Optional[str] = None",
+  "tokens: Array<string>",
+  "api_key: str",
+  "token_type: bearer",
+  "max_tokens: 4096",
+  "tokenizer: sentencepiece",
+  "password_hint: The name of your first pet",
+  "PASSWORD: DB_PASSWORD",
+  "Use scikit-learn, written sk-learn-is-a-python-ml-library-name in some notes.",
+  "Run `npm` ``install`` then start the server.",
+  "Call `token` and `secret` in that order.",
+  "| Token | Price | Change |\n| --- | --- | --- |\n| Northcoin | 1.2345 | +2.5% |\n| Ridgecoin | 0.0042 | -1.1% |",
+  "| Field | Password |\n| --- | --- |\n| Strength | required |",
+  "## Passwords\n\nA password manager keeps every password: unique, long and random.",
+  "The secret: practice every day.",
+];
+
+describe("redactSecrets leaves text that only talks about credentials alone", () => {
+  it.each(NOT_SECRETS)("%s", (text) => {
+    expect(redactSecrets(text)).toBe(text);
+  });
+});
+
+/**
+ * Inputs built to make a backtracking pattern scan its run once per start.
+ * Each must finish in well under the budget at 200 KB.
+ */
+const PATHOLOGICAL: Array<[string, string]> = [
+  ["eyJ- runs", "eyJ-"],
+  ["a. runs", "a."],
+  ["xoxb- runs", "xoxb-"],
+  ["M runs", "MAAAAAAAAAAAAAAAAAAAAAAAAA."],
+  ["sk- runs", "sk-"],
+  ["digit-colon runs", "1234567890:AA"],
+  ["armour lines", join("-----BEGIN ", "PRIVATE KEY-----")],
+  ["armour with chunks", join("-----BEGIN ", "PRIVATE KEY-----\nQ7rT2mX9pL4vN8kB ")],
+  ["Bearer runs", "Bearer a"],
+  ["assignments", "password=a"],
+  ["quoted assignments", '"token":"'],
+  ["url schemes", "a+b.c-d:"],
+  ["userinfo", "https://a:b"],
+  ["tilde runs", "abc1Q~"],
+  ["code spans", "`a``"],
+  ["table rows", "| Password |\n| --- |\n| x |\n"],
+  ["dotted runs", "hvs.dp.st.ya29.SG."],
+];
+
+describe("redactSecrets runs in linear time", () => {
+  it.each(PATHOLOGICAL)("%s at 200 KB", (_label, unit) => {
+    const text = unit.repeat(Math.ceil(200_000 / unit.length)).slice(0, 200_000);
+    const started = performance.now();
+    redactSecrets(text);
+    expect(performance.now() - started).toBeLessThan(50);
   });
 });

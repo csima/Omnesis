@@ -892,6 +892,11 @@ export interface WriteGate extends KnowledgeWriteGate {
   finishSourceUrlRecanonicalization(
     cursor: import("./domain/SourceUrlRecanonicalization.js").SourceUrlRecanonicalizationCursor,
   ): Promise<boolean>;
+  /** Apply one reader-planned page of the stored web redaction pass; see `sources/web/backfill.ts`. */
+  applyWebRedactionPage(
+    mutations: readonly import("./sources/web/backfill.js").WebRedactionMutation[],
+    finishedKey: string | null,
+  ): Promise<number>;
   /**
    * Persist a sync error message on one row (`""` = shared), with the
    * structured remedy the collector reported beside it; survives gateway restart.
@@ -2430,6 +2435,8 @@ export function writeGateFromCall(call: WriterCallFn): WriteGate {
       call("db.applySourceUrlRecanonicalizationPage", [cursor, mutations]),
     finishSourceUrlRecanonicalization: (cursor) =>
       call("db.finishSourceUrlRecanonicalization", [cursor]),
+    applyWebRedactionPage: (mutations, finishedKey) =>
+      call("db.applyWebRedactionPage", [mutations, finishedKey]),
     setSyncError: (sourceId, errorMessage, deviceId, remediation) =>
       call("db.setSyncError", [sourceId, errorMessage, deviceId, remediation]),
     clearSyncError: (sourceId, deviceId) => call("db.clearSyncError", [sourceId, deviceId]),
@@ -3002,6 +3009,8 @@ export function directWriteGate(db: Db): WriteGate {
       writerHandlers["db.applySourceUrlRecanonicalizationPage"](db, cursor, mutations),
     finishSourceUrlRecanonicalization: async (cursor) =>
       writerHandlers["db.finishSourceUrlRecanonicalization"](db, cursor),
+    applyWebRedactionPage: async (mutations, finishedKey) =>
+      writerHandlers["db.applyWebRedactionPage"](db, mutations, finishedKey),
     setSyncError: async (sourceId, errorMessage, deviceId, remediation) => {
       setSyncError(db, sourceId, errorMessage, deviceId ?? "", remediation);
     },

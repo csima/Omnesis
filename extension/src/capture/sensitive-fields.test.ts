@@ -37,7 +37,11 @@ describe("hasSensitiveField", () => {
     ["an OTP name", '<input name="otp">'],
     ["an OTPCode id", '<input id="OTPCode">'],
     ["a verification code name", '<input name="verification_code">'],
-    ["a PIN name", '<input name="pin">'],
+    ["a numeric PIN code", '<input name="pin_code" inputmode="numeric">'],
+    ["a PIN number in a number input", '<input type="number" id="pinNumber">'],
+    ["a passcode name", '<input name="passcode">'],
+    ["an MFA code name", '<input name="mfa_code">'],
+    ["a TOTP name", '<input id="totp">'],
   ])("finds %s", (_label, field) => {
     expect(hasSensitiveField(page(`<form>${field}</form>`))).toBe(true);
   });
@@ -61,6 +65,10 @@ describe("hasSensitiveField", () => {
     ["a shipping field", '<input name="shipping_method">'],
     ["a spinner", '<input id="spinner">'],
     ["an otpauth label", '<input name="otpauthor">'],
+    ["a bare pin", '<input name="pin">'],
+    ["a pin-search box", '<input type="search" name="pin-search">'],
+    ["a map pin label", '<input name="map_pin_label">'],
+    ["a postal pin code in a text input", '<input type="text" name="pin_code">'],
   ])("does not mistake %s for a sensitive field", (_label, field) => {
     expect(hasSensitiveField(page(`<form>${field}</form>`))).toBe(false);
   });

@@ -86,7 +86,7 @@ describe("pathIsSecretLink", () => {
   it("matches links that carry their own token, and not the bare keyword", () => {
     expect(pathIsSecretLink("/reset/Q2xhcmEgbm90IGEgdG9rZW4")).toBe(true);
     expect(pathIsSecretLink("/verify-email/3f9a1c7e5b2d4f6a8c0e")).toBe(true);
-    expect(pathIsSecretLink("/invite/abcdefghijklmnop/accept")).toBe(true);
+    expect(pathIsSecretLink("/invite/Ab3dEfGh1jKlMnOp/accept")).toBe(true);
     expect(pathIsSecretLink("/magic-link/0123456789abcdef")).toBe(true);
     expect(pathIsSecretLink("/reset/short")).toBe(false);
     expect(pathIsSecretLink("/docs/how-to-reset")).toBe(false);
@@ -150,11 +150,38 @@ describe("judgeCaptureUrl", () => {
     "https://cloud.example/iam/security_credentials",
     "https://team.example/accept-invitation/Zm9yZ290LXBhc3N3b3Jk",
     "https://team.example/activate/Zm9yZ290LXBhc3N3b3Jk",
+    "https://code.example/users/sign_in",
+    "https://code.example/session/new",
+    "https://code.example/sessions/new",
+    "https://code.example/log_in",
+    "https://code.example/settings//tokens",
+    "https://cloud.example/console/keys",
+    "https://cloud.example/dashboard/billing",
+    "https://github.com/settings/tokens",
+    "https://dashboard.stripe.com/apikeys",
+    "https://platform.openai.com/api-keys",
+    "https://console.anthropic.com/settings/keys",
   ])("refuses the credential path %s", (url) => {
     expect(judgeCaptureUrl(policy(), url, context)).toEqual({
       allowed: false,
       reason: "skipped-path",
     });
+  });
+  it.each([
+    "https://en.wikipedia.org/wiki/Password",
+    "https://docs.python.org/3/library/secrets.html",
+    "https://redis.io/docs/latest/commands/keys/",
+    "https://github.com/northstar-labs/ledger/blob/main/src/auth/session.ts",
+    "https://docs.stripe.com/payments/checkout",
+    "https://news.example.org/blog/register",
+    "https://github.com/magic-research/very-long-repository-name-for-papers",
+    "https://cdn.example.org/reset-css/a-modern-css-reset-for-every-project",
+    "https://conf.example.org/invited-talks/building-reliable-systems-at-scale",
+    "https://conf.example.org/invite/our-speakers-for-the-autumn-programme",
+    "https://shop.example/products/password-notebook/reviews",
+    "https://code.example/northstar/ledger/tree/main/docs/tokens",
+  ])("lets the ordinary page %s through", (url) => {
+    expect(judgeCaptureUrl(policy(), url, context)).toEqual({ allowed: true });
   });
   it("applies the built-in path segments even when a gateway serves none", () => {
     const p = policy({ rules: { skipPasswordForms: true, skipPathSegments: [] } });
@@ -191,6 +218,13 @@ describe("judgeCaptureUrl", () => {
       "https://www.facebook.com/messages/t/123",
       "https://facebook.com/messages",
       "https://www.linkedin.com/messaging/thread/abc",
+      "https://www.linkedin.com//messaging/",
+      "https://www.facebook.com/messages;x=1/",
+      "https://x.com/messages/123-456",
+      "https://twitter.com/messages",
+      "https://www.instagram.com/direct/inbox/",
+      "https://www.reddit.com/message/inbox",
+      "https://chat.reddit.com/room/abc",
     ]) {
       expect(judgeCaptureUrl(policy(), url, context), url).toEqual({
         allowed: false,

@@ -7,7 +7,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computeContentHash } from "@omnesis/core";
 import { createDatabase } from "../../db.js";
 import { AnalyticsDb } from "../../analytics-db.js";
-import { redactStoredWebPages, redactStoredWebVisits } from "./backfill.js";
+import {
+  WEB_PAGES_REDACTION_KEY,
+  WEB_REDACTION_PAGE_SIZE,
+  WEB_VISITS_REDACTION_KEY,
+  WebRedactionBackfill,
+  applyWebRedactionPage,
+  markWebRedactionDue,
+  planWebRedactionPage,
+  redactStoredWebVisits,
+  webRedactionIsCurrent,
+} from "./backfill.js";
 import type { AnalyticsTableSchema } from "@omnesis/source-sdk";
 import type { Db } from "../../data/types.js";
 
@@ -73,8 +83,37 @@ function row(externalId: string) {
     .get(externalId)!;
 }
 
-describe("redactStoredWebPages", () => {
-  it("redacts stored web pages once, rehashing only those whose text changed", () => {
+/** The pass with both gates on this handle, as the gateway runs it on its reader and writer. */
+function backfill(): WebRedactionBackfill {
+  return new WebRedactionBackfill({
+    isCurrent: () => webRedactionIsCurrent(db, WEB_PAGES_REDACTION_KEY),
+    plan: (cursor) => Promise.resolve(planWebRedactionPage(db, cursor)),
+    apply: (mutations, finishedKey) =>
+      Promise.resolve(applyWebRedactionPage(db, mutations, finishedKey)),
+  });
+}
+
+describe("migration 207", () => {
+  it("only records that a pass is due, rewriting nothing in the boot transaction", () => {
+    plant(
+      "web",
+      "a",
+      `Runbook ${TOKEN}`,
+      `Deploy with ${TOKEN} today.`,
+      "https://wiki.example.org/a",
+    );
+    db.prepare(
+      "INSERT INTO canonicalization_state (key, value, updated_at) VALUES (?, '1', ?)",
+    ).run(WEB_PAGES_REDACTION_KEY, OLD);
+    markWebRedactionDue(db);
+    expect(webRedactionIsCurrent(db, WEB_PAGES_REDACTION_KEY)).toBe(false);
+    expect(webRedactionIsCurrent(db, WEB_VISITS_REDACTION_KEY)).toBe(false);
+    expect(row("a").content).toBe(`Deploy with ${TOKEN} today.`);
+  });
+});
+
+describe("WebRedactionBackfill", () => {
+  it("redacts stored web pages with the shaped rules once, rehashing only changed text", async () => {
     plant(
       "web",
       "a",
@@ -83,7 +122,7 @@ describe("redactStoredWebPages", () => {
       "https://wiki.example.org/a",
     );
     plant("web", "b", "Clean page", "Nothing secret here.", "https://wiki.example.org/b");
-    plant("web:alt", "c", "Alt", `Body ${TOKEN}`, "https://wiki.example.org/c?api_key=k");
+    plant("web:alt", "c", "Alt", `Body ${TOKEN}`, "https://maya:hunter-two@wiki.example.org/c");
     plant(
       "notes",
       "d",
@@ -91,8 +130,15 @@ describe("redactStoredWebPages", () => {
       `My own note keeps ${TOKEN}.`,
       "https://notes.example.org/d",
     );
+    plant(
+      "web",
+      "e",
+      "Settings",
+      "password: hunter-two-x is how the form spells it.",
+      "https://wiki.example.org/e",
+    );
 
-    expect(redactStoredWebPages(db)).toBe(3);
+    expect(await backfill().run()).toEqual({ scanned: 4, touched: 4 });
 
     const a = row("a");
     expect(a.title).toBe("Runbook [redacted]");
@@ -107,20 +153,23 @@ describe("redactStoredWebPages", () => {
     expect(b.content_hash).toBe(computeContentHash("Nothing secret here."));
     expect(b.metadata).not.toContain(TOKEN);
 
-    const c = row("c");
-    expect(c.content).toBe("Body [redacted]");
-    expect(c.source_url).toBe("https://wiki.example.org/c");
+    expect(row("c").content).toBe("Body [redacted]");
+    expect(row("c").source_url).toBe("https://wiki.example.org/c");
+
+    // Stored text gets the shaped rules only: an assignment is left as it was.
+    expect(row("e").content).toBe("password: hunter-two-x is how the form spells it.");
 
     // Another source's documents are the user's own records.
     expect(row("d").content).toBe(`My own note keeps ${TOKEN}.`);
 
+    expect(webRedactionIsCurrent(db, WEB_PAGES_REDACTION_KEY)).toBe(true);
     const before = row("a").updated_at;
-    expect(redactStoredWebPages(db)).toBe(0);
+    expect(await backfill().run()).toEqual({ scanned: 0, touched: 0 });
     expect(row("a").updated_at).toBe(before);
   });
 
-  it("pages through more web documents than one read holds", () => {
-    for (let i = 0; i < 450; i++) {
+  it("pages through more web documents than one plan holds, a bounded page per write", async () => {
+    for (let i = 0; i < 130; i++) {
       plant(
         "web",
         `p-${String(i).padStart(4, "0")}`,
@@ -129,15 +178,34 @@ describe("redactStoredWebPages", () => {
         `https://x.example.org/${i}`,
       );
     }
-    plant("web", "p-9999", "Last", `Body ${TOKEN}`, "https://x.example.org/last");
-    expect(redactStoredWebPages(db)).toBe(451);
-    expect(row("p-9999").content).toBe("Body [redacted]");
+    const first = planWebRedactionPage(db);
+    expect(first.mutations).toHaveLength(WEB_REDACTION_PAGE_SIZE);
+    expect(first.done).toBe(false);
+    expect((await backfill().run()).touched).toBe(130);
+  });
+
+  it("leaves a row that changed after it was read", () => {
+    plant("web", "a", `Runbook ${TOKEN}`, `Body ${TOKEN}`, "https://wiki.example.org/a");
+    const plan = planWebRedactionPage(db);
+    db.prepare("UPDATE documents SET updated_at = ? WHERE external_id = 'a'").run(
+      "2026-02-01T00:00:00.000Z",
+    );
+    expect(applyWebRedactionPage(db, plan.mutations, null)).toBe(0);
+    expect(row("a").content).toBe(`Body ${TOKEN}`);
   });
 });
 
 describe("redactStoredWebVisits", () => {
   let analyticsPath: string;
   let analyticsDb: AnalyticsDb;
+  let current: boolean;
+  const state = {
+    isCurrent: () => current,
+    markCurrent: () => {
+      current = true;
+      return Promise.resolve();
+    },
+  };
   const schema: AnalyticsTableSchema = {
     tableName: "page_visits",
     displayName: "Page visits",
@@ -155,6 +223,7 @@ describe("redactStoredWebVisits", () => {
   };
 
   beforeEach(async () => {
+    current = false;
     analyticsPath = `/tmp/omnesis-web-backfill-test-${randomUUID()}.duckdb`;
     analyticsDb = new AnalyticsDb(analyticsPath);
     await analyticsDb.open();
@@ -166,7 +235,7 @@ describe("redactStoredWebVisits", () => {
     rmSync(`${analyticsPath}.wal`, { force: true });
   });
 
-  it("redacts stored visit titles and labels across pages, leaving every other column, once", async () => {
+  it("redacts titles and labels across pages and moves rows whose address held a credential, once", async () => {
     const records = Array.from({ length: 1_100 }, (_, i) => ({
       url: `https://x.example.org/${i}`,
       title: i === 1_050 ? `Runbook ${TOKEN}` : `Page ${i}`,
@@ -174,25 +243,35 @@ describe("redactStoredWebVisits", () => {
       visited_at: "2026-01-15T10:00:00Z",
       dwell_ms: 6_000 + i,
     }));
+    records.push({
+      url: "https://app.example.org/#/cb?access_token=abc&tab=2",
+      title: "Callback",
+      browser_profile_label: "Personal",
+      visited_at: "2026-01-15T11:00:00Z",
+      dwell_ms: 7_000,
+    });
     await analyticsDb.ingestPage({ tableName: "page_visits", records, schema, sourceId: "web" });
 
-    expect(await redactStoredWebVisits(analyticsDb)).toBe(2);
+    expect(await redactStoredWebVisits(analyticsDb, state)).toBe(3);
     const rows = (
       await analyticsDb.executeQuery(
-        "SELECT url, title, browser_profile_label, dwell_ms FROM page_visits WHERE url IN ('https://x.example.org/1050', 'https://x.example.org/3') ORDER BY url",
+        "SELECT url, title, browser_profile_label, dwell_ms FROM page_visits WHERE url IN ('https://x.example.org/1050', 'https://x.example.org/3') OR title = 'Callback' ORDER BY url",
         { limit: 10 },
       )
     ).rows;
     expect(rows.map((r) => [String(r[0]), String(r[1]), String(r[2]), Number(r[3])])).toEqual([
+      ["https://app.example.org/#/cb?tab=2", "Callback", "Personal", 7_000],
       ["https://x.example.org/1050", "Runbook [redacted]", "Personal", 7_050],
       ["https://x.example.org/3", "Page 3", "Work [redacted]", 6_003],
     ]);
     const count = (await analyticsDb.executeQuery("SELECT COUNT(*) FROM page_visits")).rows;
-    expect(Number(count[0]![0])).toBe(1_100);
-    expect(await redactStoredWebVisits(analyticsDb)).toBe(0);
+    expect(Number(count[0]![0])).toBe(1_101);
+    expect(current).toBe(true);
+    expect(await redactStoredWebVisits(analyticsDb, state)).toBe(0);
   });
 
-  it("does nothing when there is no page_visits table", async () => {
-    expect(await redactStoredWebVisits(analyticsDb)).toBe(0);
+  it("records the pass as done when there is no page_visits table", async () => {
+    expect(await redactStoredWebVisits(analyticsDb, state)).toBe(0);
+    expect(current).toBe(true);
   });
 });

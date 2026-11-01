@@ -102,12 +102,18 @@ describe("normalizeUrl", () => {
     );
   });
 
-  test("strips any *_token and x-goog-* param", () => {
+  test("strips session and CSRF tokens and Google signed-URL params, and keeps a page token", () => {
     expect(
       normalizeUrl(
-        "https://files.example.com/a?csrf_token=t&X-Goog-Signature=s&X-Goog-Credential=c&v=2",
+        "https://files.example.com/a?csrf_token=t&session_token=s&X-Goog-Signature=s&X-Goog-Credential=c&v=2",
       ),
     ).toBe("https://files.example.com/a?v=2");
+    expect(normalizeUrl("https://feed.example.com/list?page_token=CAEQAA&v=2")).toBe(
+      "https://feed.example.com/list?page_token=CAEQAA&v=2",
+    );
+    expect(normalizeUrl("https://feed.example.com/#/list?page_token=CAEQAA")).toBe(
+      "https://feed.example.com/#/list?page_token=CAEQAA",
+    );
   });
 
   test("strips credential params from a fragment's query string, and leaves other fragments alone", () => {

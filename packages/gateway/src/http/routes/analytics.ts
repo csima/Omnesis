@@ -104,6 +104,10 @@ export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): 
         writeOrdinal?: number;
       };
       const auth = c.get("auth");
+      // Scope first: a caller with no right to write the source is refused
+      // before any of its records are read.
+      if (raw.sourceId) enforceWriteScopeForSource(auth.scopes, raw.sourceId);
+      else enforceBroadWriteScope(auth.scopes);
       if (raw.sourceId) assertCanonicalWebSourceIds(auth.scopes, [raw.sourceId]);
       // Web visit rows are redacted and judged against the capture policy here,
       // as the backstop to the extension's own rules (see sources/web/ingest.ts).
@@ -117,8 +121,6 @@ export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): 
         ),
       };
 
-      if (body.sourceId) enforceWriteScopeForSource(auth.scopes, body.sourceId);
-      else enforceBroadWriteScope(auth.scopes);
       const broadWriter = scopeSatisfies(auth.scopes, SCOPE_WRITE_ALL);
       if (body.schema && analyticsSchemaUsesDynamicColumns(body.schema) && !broadWriter) {
         throw new BadRequestError("Dynamic analytics schemas require write:* scope");

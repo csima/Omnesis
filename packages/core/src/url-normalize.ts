@@ -196,6 +196,8 @@ export const CREDENTIAL_PARAMS: ReadonlySet<string> = new Set([
   "access_token",
   "id_token",
   "refresh_token",
+  "session_token",
+  "csrf_token",
   "auth_token",
   "authtoken",
   "api_key",
@@ -215,18 +217,18 @@ export const CREDENTIAL_PARAMS: ReadonlySet<string> = new Set([
   "jwt",
   "auth",
   "authorization",
+  "x-goog-signature",
+  "x-goog-credential",
+  "x-goog-algorithm",
+  "x-goog-date",
+  "x-goog-expires",
+  "x-goog-signedheaders",
+  "googleaccessid",
 ]);
 
 function isCredentialParam(key: string, keys: ReadonlySet<string>): boolean {
   const lower = key.toLowerCase();
-  if (
-    CREDENTIAL_PARAMS.has(lower) ||
-    lower.endsWith("_token") ||
-    lower.startsWith("x-amz-") ||
-    lower.startsWith("x-goog-")
-  ) {
-    return true;
-  }
+  if (CREDENTIAL_PARAMS.has(lower) || lower.startsWith("x-amz-")) return true;
   return (lower === "code" || lower === "state") && keys.has("code") && keys.has("state");
 }
 
@@ -263,8 +265,8 @@ function stripFragmentCredentials(hash: string): string {
  * Generic rules (no source-specific knowledge):
  * - Lowercase hostname
  * - Strip well-known tracking params ({@link TRACKING_PARAMS}) and
- *   credential-bearing params ({@link CREDENTIAL_PARAMS}, any `*_token`,
- *   `x-amz-*` and `x-goog-*`), in the query and in a fragment's query string
+ *   credential-bearing params ({@link CREDENTIAL_PARAMS} and `x-amz-*`), in the
+ *   query and in a fragment's query string
  * - Strip anchor-like fragments (`#section`, `#top`) but PRESERVE path-like
  *   fragments that contain a `/`. The latter are used as resource identifiers
  *   in some apps (Gmail, Calendar, single-page apps that route on the hash).

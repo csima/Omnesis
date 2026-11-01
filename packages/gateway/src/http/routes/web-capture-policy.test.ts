@@ -559,6 +559,11 @@ describe("the backstop on ingest", () => {
       }),
     });
     expect(visits.status).toBe(403);
+    const cursorPage = await call("/documents/with-cursor", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ providerId: "web", sourceId: "web:alt", cursor: {}, hasMore: false }),
+    });
+    expect(cursorPage.status).toBe(403);
     expect(
       db.prepare("SELECT COUNT(*) AS n FROM documents WHERE source_id LIKE 'web%'").get(),
     ).toEqual({ n: 0 });
@@ -612,6 +617,37 @@ describe("the backstop on ingest", () => {
     const rows = (await analyticsDb.executeQuery("SELECT url FROM page_visits", { limit: 10 }))
       .rows;
     expect(rows.map((row) => String(row[0]))).toEqual(["https://blog.example.org/post"]);
+  });
+
+  test("a web page with no http(s) address is turned away", async () => {
+    const page = { ...webPage("https://a.example/x"), metadata: {} };
+    const res = await call("/documents", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ documents: [page] }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { suppressed?: string[] }).suppressed).toEqual([page.externalId]);
+    expect(webDocUrls()).toEqual([]);
+  });
+
+  test("a token without the source's scope is refused before its visit rows are read", async () => {
+    const notesToken = mintToken("cli", [writeScope(SourceType("notes"))]);
+    const title = "x".repeat(1_000);
+    const started = performance.now();
+    const res = await call("/analytics/ingest", notesToken, {
+      method: "POST",
+      body: JSON.stringify({
+        tableName: "page_visits",
+        sourceId: "web",
+        records: Array.from({ length: 200 }, (_, i) => ({
+          url: `https://a.example/${i}`,
+          title: `${title}eyJ-${"eyJ-".repeat(200)}`,
+          visited_at: "2026-01-15T10:00:00Z",
+        })),
+      }),
+    });
+    expect(res.status).toBe(403);
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 
   test("a page's address and metadata are redacted before they are stored", async () => {

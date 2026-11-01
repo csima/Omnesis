@@ -12,7 +12,8 @@
  * the `autocomplete` tokens the HTML standard defines for these fields
  * (`one-time-code`, `current-password`, `cc-number`, `cc-csc`, …), compared
  * token by token — and, for forms that declare nothing, by the words in its
- * name or id (`cardNumber`, `cc_num`, `security-code`, `otp`, `pin`). Words
+ * name or id (`cardNumber`, `cc_num`, `security-code`, `otp`, `totp`,
+ * `passcode`, and a `pin_code` in an input that takes digits). Words
  * are matched whole, after splitting camelCase, so `discvc` or a
  * `section-acc-1` autocomplete section is not mistaken for a card field.
  */
@@ -25,7 +26,14 @@ const CARD_NUMBER_INSIDE = /card[_-]?number|cc[_-]?num/;
 
 /** Words that name a code or card field when they stand alone in a name or id. */
 const SENSITIVE_WORD =
-  /(?:^|[^a-z])(?:cvc|cvv|csc|otp|pin|security[_-]?code|verification[_-]?code)(?=$|[^a-z])/;
+  /(?:^|[^a-z])(?:cvc|cvv|csc|otp|totp|passcode|mfa[_-]?code|security[_-]?code|verification[_-]?code)(?=$|[^a-z])/;
+
+/**
+ * A PIN: the word `pin` followed by `code` or `number`. A `pin` alone names a
+ * map pin or a pinned search as often as a secret, so it counts only together
+ * with one of those words, in an input that takes a password or digits.
+ */
+const PIN_WORDS = /(?:^|[^a-z])pin[_-]?(?:code|number|num)(?=$|[^a-z])/;
 
 /** A name or id split at camelCase humps and lowercased: `cardCvc` → `card_cvc`, `OTPCode` → `otp_code`. */
 function words(value: string): string {
@@ -42,9 +50,16 @@ export function isSensitiveInput(input: Element): boolean {
   if (tokens.some((token) => SENSITIVE_AUTOCOMPLETE.has(token) || token.startsWith("cc-"))) {
     return true;
   }
+  const type = (input.getAttribute("type") ?? "").trim().toLowerCase();
+  const numeric =
+    type === "number" ||
+    type === "tel" ||
+    (input.getAttribute("inputmode") ?? "").trim().toLowerCase() === "numeric";
   for (const attribute of ["name", "id"]) {
     const value = words(input.getAttribute(attribute) ?? "");
-    if (value && (CARD_NUMBER_INSIDE.test(value) || SENSITIVE_WORD.test(value))) return true;
+    if (!value) continue;
+    if (CARD_NUMBER_INSIDE.test(value) || SENSITIVE_WORD.test(value)) return true;
+    if (numeric && PIN_WORDS.test(value)) return true;
   }
   return false;
 }
