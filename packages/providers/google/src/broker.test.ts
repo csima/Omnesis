@@ -674,3 +674,88 @@ describe("Google brokered connections are re-checked against the linked account"
     }
   });
 });
+
+const SHARED = { providerConfigKey: "google", connectionId: "conn-google" };
+
+/** One connection for every purpose, as a combined Google integration links them. */
+function sharedBinding(...purposes: Purpose[]): BrokerBinding {
+  return { broker: "nango", connections: Object.fromEntries(purposes.map((p) => [p, SHARED])) };
+}
+
+/** `people/me` answers nothing about the account, as under `contacts.readonly`. */
+const silentPeople = (url: URL): unknown =>
+  url.pathname === "/v1/people/me"
+    ? Response.json({ error: { code: 403, message: "Forbidden" } }, { status: 403 })
+    : defaultGoogle(url);
+
+describe("Contacts on the same connection as Gmail is confirmed through it", () => {
+  test("links with Gmail when both are one connection, though People cannot name the account", async () => {
+    stubNetwork({ google: silentPeople });
+    await expect(
+      definition.broker!.resolveAccount(
+        new BrokeredCredentials(sharedBinding("gmail", "contacts"), BROKER),
+        {},
+      ),
+    ).resolves.toEqual({ accountId: ACCOUNT });
+  });
+
+  test("a separate Contacts connection People cannot name is still refused", async () => {
+    stubNetwork({ google: silentPeople });
+    await expect(
+      definition.broker!.resolveAccount(
+        new BrokeredCredentials(binding("gmail", "contacts"), BROKER),
+        { account: ACCOUNT },
+      ),
+    ).rejects.toThrow(/Google Contacts connection/);
+  });
+
+  test("syncs, asking Gmail with the Contacts token who it belongs to", async () => {
+    const configDir = await configDirWith(sharedBinding("gmail", "contacts"));
+    const net = stubNetwork({ google: silentPeople });
+    const context = await brokeredContext(configDir);
+    const contacts = await createSource("google-contacts", configDir, context);
+    await expect(contacts.sync(null)).resolves.toBeDefined();
+    const profile = net
+      .google("gmail.googleapis.com")
+      .filter((c) => c.url.pathname === "/gmail/v1/users/me/profile");
+    expect(profile.map((c) => c.authorization)).toEqual(["Bearer conn-google-token-1"]);
+  });
+
+  test("a shared connection signed in again as someone else stops Contacts before it reads", async () => {
+    const configDir = await configDirWith(sharedBinding("gmail", "contacts"));
+    const net = stubNetwork({
+      google: (url) =>
+        url.pathname === "/gmail/v1/users/me/profile"
+          ? { emailAddress: OTHER, historyId: "9" }
+          : silentPeople(url),
+    });
+    const context = await brokeredContext(configDir);
+    const contacts = await createSource("google-contacts", configDir, context);
+    await expect(contacts.sync(null)).rejects.toMatchObject({ reason: "identity-changed" });
+    expect(
+      net.google("people.googleapis.com").filter((c) => c.url.pathname.endsWith("/connections")),
+    ).toHaveLength(0);
+  });
+
+  test("a Gmail rate limit during the check keeps its kind and is not a match", async () => {
+    const configDir = await configDirWith(sharedBinding("gmail", "contacts"));
+    stubNetwork({
+      google: (url) =>
+        url.pathname === "/gmail/v1/users/me/profile"
+          ? Response.json(
+              {
+                error: {
+                  code: 429,
+                  message: "quota",
+                  errors: [{ reason: "userRateLimitExceeded" }],
+                },
+              },
+              { status: 429 },
+            )
+          : silentPeople(url),
+    });
+    const context = await brokeredContext(configDir);
+    const contacts = await createSource("google-contacts", configDir, context);
+    await expect(contacts.sync(null)).rejects.toMatchObject({ kind: "rate-limit" });
+  });
+});

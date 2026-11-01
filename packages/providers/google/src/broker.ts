@@ -246,7 +246,18 @@ export async function resolveGoogleBrokerAccount(
   // Every sync checks each connection still belongs to this account (see
   // `verifyGoogleIdentity`); one that can say nothing about its account
   // could be signed in again as someone else without anyone noticing.
-  const silent = answers.filter((a) => !a.email && !a.person).map((a) => a.label);
+  const ref = (id: string) => {
+    const c = credentials.binding.connections[id];
+    return c ? `${c.providerConfigKey}/${c.connectionId}` : undefined;
+  };
+  // A purpose linked to the same connection as one that names its account is
+  // the same grant and the same token, so that purpose's answer covers it;
+  // `verifyGoogleIdentity` asks the same question with its own token later.
+  const sharesNamed = (a: (typeof answers)[number]) =>
+    answers.some((b) => b.id !== a.id && b.email !== undefined && ref(b.id) === ref(a.id));
+  const silent = answers
+    .filter((a) => !a.email && !a.person && !sharesNamed(a))
+    .map((a) => a.label);
   if (silent.length > 0) {
     throw new Error(
       `Google will not say which account the linked ${silent.join(", ")} connection belongs to, ` +
@@ -276,7 +287,9 @@ export async function resolveGoogleBrokerAccount(
   // A connection that cannot name its account is not vouched for by the ones
   // that can: it may be another person's grant. It joins them only when the
   // operator states the account, which is then checked against the rest.
-  const unverified = answers.filter((a) => a.email === undefined).map((a) => a.label);
+  const unverified = answers
+    .filter((a) => a.email === undefined && !sharesNamed(a))
+    .map((a) => a.label);
   if (unverified.length > 0 && !supplied) {
     throw new Error(
       `The linked ${unverified.join(", ")} connection cannot say which Google account it belongs to; ` +
@@ -293,6 +306,29 @@ export async function resolveGoogleBrokerAccount(
     }
   }
   return { accountId: first.email, ...recorded };
+}
+
+/**
+ * Another purpose of `binding` linked to the same broker connection as
+ * `purpose`, preferring one that can name its account. The same connection
+ * hands out the same grant, so its probe asked with `purpose`'s own token
+ * says whose token it is when `purpose`'s own probe cannot (Contacts under
+ * `contacts.readonly`).
+ */
+function sharedConnectionPurpose(
+  binding: BrokerBinding,
+  purpose: GoogleBrokerPurpose,
+): GoogleBrokerPurpose | undefined {
+  const mine = binding.connections[purpose];
+  if (!mine) return undefined;
+  return (["gmail", "calendar", "drive"] as const).find((id) => {
+    if (id === purpose) return false;
+    const other = binding.connections[id];
+    return (
+      other?.providerConfigKey === mine.providerConfigKey &&
+      other.connectionId === mine.connectionId
+    );
+  });
 }
 
 /**
@@ -333,9 +369,16 @@ export function verifyGoogleIdentity(
     const token = credential.accessToken;
     if (verified.get(purpose) === token) return;
 
+    // Contacts cannot always name its account; on a connection it shares with
+    // Gmail, Calendar or Drive the token is that grant's, so their question
+    // asked with this token answers for it.
+    const asked =
+      known.id === "contacts"
+        ? (sharedConnectionPurpose(binding(), known.id) ?? known.id)
+        : known.id;
     let answer: GoogleAccountAnswer;
     try {
-      answer = await ACCOUNT_PROBES[known.id](tokenClient(token));
+      answer = await ACCOUNT_PROBES[asked](tokenClient(token));
     } catch (err) {
       const mapped = mapGoogleApiError(err);
       throw new SyncError(
