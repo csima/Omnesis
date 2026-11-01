@@ -127,6 +127,13 @@ below.
    shared with the integration) renders without them. A page that 404s between search and its content fetch is
    skipped for the run and still counted present; its stored copy stays until its next edit or the next snapshot
    rewalk reads it. A restricted page still fails the run as a permission error.
+   **A stored page the gateway refuses kept a source stuck forever. Fixed on this branch.** A structured source's
+   prepared page is replayed byte for byte, so a page an older gateway stored with a schema declaring a column twice
+   failed the same way on every retry and the pilot's Notion databases source never moved again. The source SDK's
+   schema validator now refuses a column declared twice (in any letter case), so the gateway answers such a write with
+   a 400 `VALIDATION_ERROR` instead of a DuckDB error, and the collector then discards the page through
+   `POST /sync-state/:sourceId/pending-page/abandon` while its cursor is uncommitted; that attempt fails and the next
+   one fetches the page again. A cursor-committed page is never discarded. Worth proposing upstream.
 2. **Identity re-check for Google, GitHub, Coinbase, Lunch Flow and Granola.** Their `createContext` trusts that a
    linked connection still belongs to the linked account. If a connection is re-authorised at Nango as someone else
    (or a key is swapped), that account's data syncs under the stored id. Use the `verify` option of
