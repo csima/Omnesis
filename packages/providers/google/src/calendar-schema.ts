@@ -18,7 +18,8 @@ export const GOOGLE_CALENDAR_EVENTS_TABLE = "google_calendar_events";
 export const googleCalendarEventsSchema: AnalyticsTableSchema = {
   tableName: GOOGLE_CALENDAR_EVENTS_TABLE,
   displayName: "Google Calendar Events",
-  description: "Events across your Google calendars — durations, attendees, and RSVP status.",
+  description:
+    "Events across your Google calendars — durations, attendees, and RSVP status. One row per account per event: a calendar shared with two linked accounts lists the same id under each, so a row is identified by source_account and id together.",
   columns: [
     {
       name: "id",
@@ -144,5 +145,6 @@ export const googleCalendarEventsSchema: AnalyticsTableSchema = {
     "SELECT date_trunc('week', start_time) AS week, ROUND(SUM(duration_minutes) / 60, 1) AS meeting_hours FROM google_calendar_events WHERE all_day = false AND status != 'cancelled' AND response_status IN ('accepted', 'needsAction') GROUP BY week ORDER BY week DESC",
     "SELECT dayname(start_time) AS day, COUNT(*) AS events, ROUND(SUM(duration_minutes) / 60, 1) AS hours FROM google_calendar_events WHERE all_day = false GROUP BY day ORDER BY hours DESC",
     "SELECT response_status, COUNT(*) AS n FROM google_calendar_events WHERE response_status IS NOT NULL GROUP BY response_status ORDER BY n DESC",
+    "SELECT source_account, id, title, response_status FROM google_calendar_events WHERE id IN (SELECT id FROM google_calendar_events GROUP BY id HAVING COUNT(DISTINCT source_account) > 1) ORDER BY id, source_account",
   ],
 };

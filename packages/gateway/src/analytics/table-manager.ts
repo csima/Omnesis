@@ -196,8 +196,24 @@ const LEGACY_SETTLE_BATCH = 1000;
 /** Batches one settlement call runs before returning what remains, so a request stays bounded. */
 const LEGACY_SETTLE_BATCHES_PER_CALL = 20;
 
+function sameColumns(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((column, index) => column === b[index]);
+}
+
+/** Whether a document binding still names exactly one row under `primaryKey`. */
+function reconstructsKey(
+  bound: AnalyticsTableSchema["boundDocument"],
+  primaryKey: readonly string[],
+): boolean {
+  if (!bound) return false;
+  const named = [...bound.externalIdColumns, ...(bound.sourceKeyColumns ?? [])];
+  return named.length === primaryKey.length && primaryKey.every((column) => named.includes(column));
+}
+
 export class AnalyticsTableManager {
   private readonly ownership: AnalyticsAccountOwnership;
+  /** Tables whose key widening already logged why it waits, so the warning is said once. */
+  private readonly deferredKeyWidening = new Set<string>();
   constructor(
     private readonly pool: AnalyticsConnectionPool,
     private readonly catalog: AnalyticsCatalogStore,
@@ -361,8 +377,8 @@ export class AnalyticsTableManager {
     );
     const addedColumns = await this.evolveTableSchema(conn, schema);
     await this.stampDiscriminatorOnLegacyRows(conn, schema, sourceId, addedColumns);
-    await this.widenPrimaryKey(conn, schema);
-    await this.catalog.upsertEntry(conn, schema, sourceId);
+    const keyed = await this.reconcilePrimaryKey(conn, schema, previousSchema);
+    await this.catalog.upsertEntry(conn, keyed, sourceId);
     log.debug(`Ensured table ${schema.tableName} with ${schema.columns.length} columns`);
   }
 
@@ -468,28 +484,46 @@ export class AnalyticsTableManager {
   }
 
   /**
-   * Rebuild a table whose declared primary key gained columns since it was
-   * created, so it is keyed the way its source now names rows.
+   * Reconcile the primary key a declaration names with the one the table was
+   * built with, and return the declaration to persist for it.
    *
    * `CREATE TABLE IF NOT EXISTS` leaves an existing table's key as it was, and
    * DuckDB cannot alter a primary key in place. The canonical case is a table
    * several accounts share whose upstream ids are not unique across them: two
    * accounts that both see one shared calendar hold the same event under the
    * same id, so the account column has to join the key or the second account's
-   * row is refused as another account's.
+   * row is refused as another account's. Three outcomes:
    *
-   * Only widening is done. Adding columns to a key that was unique keeps it
-   * unique, so every existing row survives the copy; dropping or replacing a
-   * key column could merge rows and is left alone. The rebuild copies every
-   * column at its live type and nullability, as the stream rekey does, and
-   * re-keys the table's temporal projections in the same transaction. The
-   * delete key a table declares is untouched, so the absence ledgers built on
+   * - **Widened.** The declaration adds columns to the table's key, and the
+   *   table is rebuilt with them. Adding columns to a key that was unique keeps
+   *   it unique, so every existing row survives the copy. The rebuild copies
+   *   every column at its live type and nullability, as the stream rekey does,
+   *   and re-keys the table's temporal projections in the same transaction.
+   * - **Deferred.** A gained column is NULL on some row, which the wider key
+   *   cannot hold. The table keeps its key, and the declaration is persisted
+   *   under it so pages keep landing with the old key's meaning; a later
+   *   registration widens it once those rows are claimed or dropped.
+   * - **Kept.** The declaration names a strict subset of a key the catalog
+   *   already widened to — a producer that predates the widening, such as a
+   *   rolled-back collector — and addresses rows the way the table does. The
+   *   wider key stays; the older producer's rows land under it.
+   *
+   * Dropping or replacing a key column could merge rows and is left alone. In
+   * every outcome the delete key is untouched, so the absence ledgers built on
    * it keep their meaning.
+   *
+   * The rebuild holds the analytics writer once per table, for about six
+   * seconds at 131k calendar rows with a projection each, mostly the
+   * projection move. Unlike the stream rekey it has no online row cap: writes
+   * queue behind it rather than fail, it never runs again for that table, and
+   * a cap would leave the table refusing every row a second account shares —
+   * the failure the widening exists to end.
    */
-  private async widenPrimaryKey(
+  private async reconcilePrimaryKey(
     conn: DuckDBConnection,
     schema: AnalyticsTableSchema,
-  ): Promise<void> {
+    previousSchema: AnalyticsTableSchema | null,
+  ): Promise<AnalyticsTableSchema> {
     const table = quoteIdent(schema.tableName);
     const constraint = await conn.runAndReadAll(
       `SELECT constraint_column_names FROM duckdb_constraints()
@@ -501,23 +535,44 @@ export class AnalyticsTableManager {
     const streamKeyed = await this.catalog.isStreamKeyed(conn, schema.tableName);
     const physicalKey =
       streamKeyed && physical.at(-1) === STREAM_COLUMN ? physical.slice(0, -1) : physical;
+    if (physicalKey.length === 0) return schema;
     const gained = schema.primaryKey.filter((column) => !physicalKey.includes(column));
-    if (
-      physicalKey.length === 0 ||
-      gained.length === 0 ||
-      physicalKey.some((column) => !schema.primaryKey.includes(column))
-    )
-      return;
+    const lost = physicalKey.filter((column) => !schema.primaryKey.includes(column));
+    const keyedAsTable = (): AnalyticsTableSchema => ({
+      ...schema,
+      primaryKey: physicalKey,
+      deleteKey: previousSchema?.deleteKey,
+      boundDocument: reconstructsKey(previousSchema?.boundDocument, physicalKey)
+        ? previousSchema?.boundDocument
+        : undefined,
+    });
+
+    if (gained.length === 0) {
+      const alreadyWidened =
+        lost.length > 0 &&
+        previousSchema !== null &&
+        sameColumns(previousSchema.primaryKey, physicalKey) &&
+        sameColumns(analyticsDeleteKey(previousSchema), analyticsDeleteKey(schema));
+      if (!alreadyWidened) return schema;
+      log.debug(
+        `Analytics table ${schema.tableName} keeps its key (${physicalKey.join(", ")}) for a declaration keyed by (${schema.primaryKey.join(", ")})`,
+      );
+      return keyedAsTable();
+    }
+    if (lost.length > 0) return schema;
 
     for (const column of gained) {
       const nulls = await conn.runAndReadAll(
         `SELECT 1 FROM ${table} WHERE ${quoteIdent(column)} IS NULL LIMIT 1`,
       );
-      if (nulls.getRows().length > 0)
-        throw new RowKeyError(
-          `Cannot add ${column} to the primary key of ${schema.tableName}: some rows have no ${column}. ` +
-            "Claim or drop the table's unattributed rows, then retry.",
+      if (nulls.getRows().length === 0) continue;
+      if (!this.deferredKeyWidening.has(schema.tableName)) {
+        this.deferredKeyWidening.add(schema.tableName);
+        log.warn(
+          `Analytics table ${schema.tableName} stays keyed by (${physicalKey.join(", ")}): some rows have no ${column}, so (${schema.primaryKey.join(", ")}) waits until they are claimed or dropped`,
         );
+      }
+      return keyedAsTable();
     }
 
     const existing = await conn.runAndReadAll(
@@ -549,9 +604,11 @@ export class AnalyticsTableManager {
       schema.sharedDiscriminatorColumn,
       STREAM_COLUMN,
     );
+    this.deferredKeyWidening.delete(schema.tableName);
     log.info(
       `Analytics table ${schema.tableName} is now keyed by (${key.join(", ")}), was (${physical.join(", ")})`,
     );
+    return schema;
   }
 
   private async evolveTableSchema(
@@ -2086,16 +2143,22 @@ export class AnalyticsTableManager {
             const recordKey =
               `left(record_key, length(record_key) - 1) || ` +
               `',"${STREAM_COLUMN}":' || '${ownerJson}' || '}'`;
+            const movedId = `'tp_' || substr(sha256(
+                        source_id || chr(0) || table_name || chr(0) ||
+                        (${recordKey}) || chr(0) || slot
+                      ), 1, 32)`;
+            const unscoped = `source_id = '${escapeStr(sourceId)}'
+                  AND table_name = '${escapeStr(tableName)}'
+                  AND json_extract_string(record_key, '$.${STREAM_COLUMN}') IS NULL`;
+            await this.temporalProjections.recordMoves(
+              conn,
+              `SELECT id, ${movedId} FROM ${TEMPORAL_PROJECTIONS_TABLE} WHERE ${unscoped}`,
+            );
             await conn.run(
               `UPDATE ${TEMPORAL_PROJECTIONS_TABLE}
                   SET record_key = ${recordKey},
-                      id = 'tp_' || substr(sha256(
-                        source_id || chr(0) || table_name || chr(0) ||
-                        (${recordKey}) || chr(0) || slot
-                      ), 1, 32)
-                WHERE source_id = '${escapeStr(sourceId)}'
-                  AND table_name = '${escapeStr(tableName)}'
-                  AND json_extract_string(record_key, '$.${STREAM_COLUMN}') IS NULL`,
+                      id = ${movedId}
+                WHERE ${unscoped}`,
             );
             for (const ledger of [
               ANALYTICS_ABSENCES_TABLE,

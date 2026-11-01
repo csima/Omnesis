@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Adrien Conrath
 
+import { createHash } from "node:crypto";
 import { unlinkSync, existsSync } from "node:fs";
 import { DuckDBInstance } from "@duckdb/node-api";
 import Database from "better-sqlite3";
@@ -5733,20 +5734,160 @@ describe("a shared table whose ids repeat across accounts", () => {
     expect(after[0]!.id).not.toBe(before[0]!.id);
   });
 
-  test("a key that would lose a column is refused, and the table keeps its key", async () => {
+  test("an older declaration keyed by a subset of the widened key keeps ingesting under it", async () => {
     await db.ingestPage({
       tableName: table,
       schema: accountKeyed,
       sourceId: accountA,
       records: [event("team:evt-1", "maya@example.com")],
     });
-    await expect(db.ensureTable({ ...idKeyed, deleteKey: ["id"] }, accountA)).rejects.toThrow(
-      /declared physical primary key/,
-    );
+    const rolledBack = { ...idKeyed, deleteKey: undefined };
+    await db.ensureTable(rolledBack, accountB);
+    await db.ingestPage({
+      tableName: table,
+      schema: rolledBack,
+      sourceId: accountB,
+      records: [event("team:evt-1", "maya.reeves@example.org", "Quarterly planning (B)")],
+    });
+    expect(await physicalKey()).toEqual(["source_account", "id"]);
+    const entry = (await db.getCatalog()).find((candidate) => candidate.tableName === table);
+    expect(entry?.primaryKey).toEqual(["source_account", "id"]);
+    expect(await rows()).toEqual([
+      ["maya.reeves@example.org", "team:evt-1", "Quarterly planning (B)"],
+      ["maya@example.com", "team:evt-1", "Quarterly planning"],
+    ]);
+
+    await db.ingestPage({
+      tableName: table,
+      schema: rolledBack,
+      sourceId: accountB,
+      records: [],
+      deletedIds: ["team:evt-1"],
+    });
+    expect(await rows()).toEqual([["maya@example.com", "team:evt-1", "Quarterly planning"]]);
+  });
+
+  test("a key that would replace a column is refused, and the table keeps its key", async () => {
+    await db.ingestPage({
+      tableName: table,
+      schema: accountKeyed,
+      sourceId: accountA,
+      records: [event("team:evt-1", "maya@example.com")],
+    });
+    await expect(
+      db.ensureTable(
+        {
+          ...accountKeyed,
+          primaryKey: ["source_account", "title"],
+          deleteKey: undefined,
+          boundDocument: undefined,
+        },
+        accountA,
+      ),
+    ).rejects.toThrow(/declared physical primary key/);
     expect(await physicalKey()).toEqual(["source_account", "id"]);
     expect((await db.getCatalog()).find((entry) => entry.tableName === table)?.primaryKey).toEqual([
       "source_account",
       "id",
     ]);
   });
+
+  test("rows without an account defer the widening, and pages keep landing under the old key", async () => {
+    const unowned: AnalyticsTableSchema = {
+      ...projectedCalendarSchema,
+      tableName: table,
+    };
+    const unattributed = (id: string) => {
+      const { source_account: _unknown, ...record } = event(id, "");
+      return record;
+    };
+    await db.ingestPage({
+      tableName: table,
+      schema: unowned,
+      sourceId: accountA,
+      records: [unattributed("team:evt-1"), unattributed("team:evt-2")],
+    });
+    await db.ingestPage({
+      tableName: table,
+      schema: unowned,
+      sourceId: accountB,
+      records: [unattributed("team:evt-3")],
+    });
+    await db.ensureTable(idKeyed, accountA);
+    expect(
+      (await db.executeQuery(`SELECT count(*) FROM ${table} WHERE source_account IS NULL`))
+        .rows[0]?.[0],
+    ).toBe(3);
+
+    await db.ensureTable(accountKeyed, accountA);
+    expect(await physicalKey()).toEqual(["id"]);
+    expect((await db.getCatalog()).find((entry) => entry.tableName === table)?.primaryKey).toEqual([
+      "id",
+    ]);
+    await db.ingestPage({
+      tableName: table,
+      schema: accountKeyed,
+      sourceId: accountA,
+      records: [event("team:evt-1", "maya@example.com", "Quarterly planning, moved")],
+    });
+    await expect(
+      db.ingestPage({
+        tableName: table,
+        schema: accountKeyed,
+        sourceId: accountB,
+        records: [event("team:evt-1", "maya.reeves@example.org")],
+      }),
+    ).rejects.toThrow(/primary key belongs to a different source account/);
+
+    await db.settleLegacyRows(accountA, "claim");
+    await db.ensureTable(accountKeyed, accountA);
+    expect(await physicalKey()).toEqual(["source_account", "id"]);
+    await db.ingestPage({
+      tableName: table,
+      schema: accountKeyed,
+      sourceId: accountB,
+      records: [event("team:evt-1", "maya.reeves@example.org")],
+    });
+    expect(await rows()).toEqual([
+      ["maya.reeves@example.org", "team:evt-1", "Quarterly planning"],
+      ["maya@example.com", "team:evt-1", "Quarterly planning, moved"],
+      ["maya@example.com", "team:evt-2", "Quarterly planning"],
+      ["maya@example.com", "team:evt-3", "Quarterly planning"],
+    ]);
+  });
+
+  test("a key widened to two VARCHAR columns over well past 60k rows checkpoints and reopens", async () => {
+    // DuckDB 1.5.0 aborted the whole process (`free(): corrupted unsorted
+    // chunks`) checkpointing an ART index on two VARCHAR columns above roughly
+    // 60k rows — duckdb/duckdb#21246, fixed by duckdb/duckdb#21270 in 1.5.1.
+    // A widened account key is exactly that index, at the size a calendar
+    // with a few years of history reaches.
+    const bulk = { ...testSchema, tableName: "test_widened_bulk", exampleQueries: [] };
+    const count = 80_000;
+    await db.ensureTable(bulk, "fictional:local");
+    const records = Array.from({ length: count }, (_, i) => ({
+      id: `primary:${createHash("md5").update(String(i)).digest("hex")}`,
+      date: "2026-01-01",
+      metric_type: i % 3 === 0 ? "maya@example.org" : "maya.reeves@example.com",
+      value: i,
+      unit: null,
+    }));
+    for (let offset = 0; offset < count; offset += 20_000)
+      await db.insertRecords(bulk.tableName, records.slice(offset, offset + 20_000), ["id"]);
+    await db.ensureTable({ ...bulk, primaryKey: ["metric_type", "id"] }, "fictional:local");
+    await db.close();
+
+    const raw = await DuckDBInstance.create(TEST_DB);
+    const conn = await raw.connect();
+    await conn.run("CHECKPOINT");
+    const stored = await conn.runAndReadAll(
+      `SELECT count(*), count(DISTINCT (metric_type, id)) FROM ${bulk.tableName}`,
+    );
+    conn.closeSync();
+    raw.closeSync();
+    expect(stored.getRows()[0]?.map(Number)).toEqual([count, count]);
+
+    db = new AnalyticsDb(TEST_DB);
+    await db.open();
+  }, 60_000);
 });

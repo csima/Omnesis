@@ -13,7 +13,9 @@
  *      keeps every row it held; both accounts then ingest the shared event,
  *      each with its own RSVP;
  *   3. one account's tombstone for the shared id removes that account's row
- *      alone.
+ *      alone;
+ *   4. a collector rolled back to the old declaration keeps ingesting: the
+ *      table keeps its wider key, and the old page's rows land under it.
  *
  * Pages go over the real `/analytics/ingest` route as a paired collector
  * sends them, against a real gateway subprocess.
@@ -149,5 +151,21 @@ describe("google calendar: two accounts sharing an event id", () => {
       [ACCOUNT_A, "jamie.lopez@example.com:evt0002", "accepted"],
       [ACCOUNT_A, SHARED_ID, "tentative"],
     ]);
+  }, 30_000);
+
+  test("4. a collector still sending the id-keyed declaration keeps ingesting under the wider key", async () => {
+    await ingestOk(ACCOUNT_B, {
+      schema: legacySchema,
+      records: [row(ACCOUNT_B, SHARED_ID, "declined")],
+    });
+    expect(await held()).toEqual([
+      [ACCOUNT_A, "jamie.lopez@example.com:evt0002", "accepted"],
+      [ACCOUNT_A, SHARED_ID, "tentative"],
+      [ACCOUNT_B, SHARED_ID, "declined"],
+    ]);
+    const key = await sql(
+      `SELECT constraint_column_names FROM duckdb_constraints() WHERE table_name = '${TABLE}' AND constraint_type = 'PRIMARY KEY'`,
+    );
+    expect(JSON.stringify(key[0]?.[0])).toContain("source_account");
   }, 30_000);
 });
