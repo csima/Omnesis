@@ -2163,6 +2163,23 @@ describe("device management endpoints", () => {
     expect(response.status).toBe(400);
   });
 
+  test("a pairing code's ttlMs is bounded to between one minute and two hours", async () => {
+    for (const ttlMs of [59_999, 7_200_001, 1.5]) {
+      const refused = await req("/admin/devices/pair", {
+        method: "POST",
+        body: JSON.stringify({ kind: "collector", ttlMs }),
+      });
+      expect(refused.status).toBe(400);
+    }
+    for (const ttlMs of [60_000, 7_200_000]) {
+      const accepted = await req("/admin/devices/pair", {
+        method: "POST",
+        body: JSON.stringify({ kind: "collector", ttlMs }),
+      });
+      expect(accepted.status).toBe(200);
+    }
+  });
+
   test("a repair pairing refuses a kind that is not the target's", async () => {
     const target = createDevice(db, { name: "kind-mismatch-collector", kind: "collector" });
     const response = await req("/admin/devices/pair", {

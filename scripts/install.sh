@@ -4267,8 +4267,13 @@ read_pairing_code_file() {
 # into PAIR_CODE_TMP. Inside the config directory, which a Docker collector
 # also sees at the same path; removed once the redeem returns, and on exit.
 write_pairing_code_tmp() {
-  PAIR_CODE_TMP="$1/.pairing-code.$$"
-  ( umask 077; mkdir -p "$1" && printf '%s\n' "$PAIR_CODE" > "$PAIR_CODE_TMP" ) || \
+  # mktemp creates the file exclusively, with a random name and mode 0600, so
+  # nothing planted at a guessable name in a directory another user can write
+  # (the Docker collector directory belongs to the container's user) is
+  # followed or overwritten.
+  PAIR_CODE_TMP="$( umask 077; mkdir -p "$1" && mktemp "$1/.pairing-code.XXXXXX" )" || \
+    fail "Could not create a private file for the pairing code in $1."
+  printf '%s\n' "$PAIR_CODE" > "$PAIR_CODE_TMP" || \
     fail "Could not write the pairing code to a private file in $1."
 }
 

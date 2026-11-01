@@ -8,7 +8,7 @@
  * a command line.
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +118,19 @@ describe("pair --code-file", () => {
   it("refuses a file other users can read", () => {
     expect(() => readPairingCodeFile(codeFile("shared", 0o644))).toThrow(/open to other users/);
     expect(() => readPairingCodeFile(codeFile("group", 0o640))).toThrow(/open to other users/);
+  });
+
+  it("refuses a symlink, even to an owner-only file", () => {
+    const target = codeFile("target", 0o600);
+    const link = join(directory, "link");
+    symlinkSync(target, link);
+    expect(() => readPairingCodeFile(link)).toThrow(/ELOOP|EMLINK|not a regular file/);
+  });
+
+  it("refuses something that isn't a regular file", () => {
+    const dir = join(directory, "a-directory");
+    mkdirSync(dir, { mode: 0o700 });
+    expect(() => readPairingCodeFile(dir)).toThrow(/not a regular file|EISDIR/);
   });
 
   it("refuses a missing file without quoting anything from it", () => {

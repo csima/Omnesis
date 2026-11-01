@@ -2,7 +2,15 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname as osHostname } from "node:os";
 import { join as pathJoin, resolve as pathResolve } from "node:path";
 import { defineCommand } from "citty";
@@ -1275,30 +1283,40 @@ export function readPairingCodeFile(source: string): string {
     }
   }
   const path = expandHomePath(source);
-  let mode: number;
+  const fail = (reason: string): never => {
+    throw new CliError(
+      `${c.red}Could not read the pairing code from ${path} (${reason}).${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  };
+  // Opened once and checked through the descriptor, so the file that is read
+  // is the file that was checked, and a symlink is never followed.
+  let fd: number;
   try {
-    mode = statSync(path).mode;
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code ?? "unreadable";
-    throw new CliError(
-      `${c.red}Could not read the pairing code from ${path} (${code}).${c.reset}`,
-      EXIT_USER_ERROR,
-    );
-  }
-  if (process.platform !== "win32" && (mode & 0o077) !== 0) {
-    throw new CliError(
-      `${c.red}${path} is open to other users; a pairing code file must be owner-only (chmod 600 ${path}).${c.reset}`,
-      EXIT_USER_ERROR,
-    );
+    return fail((err as NodeJS.ErrnoException).code ?? "unreadable");
   }
   try {
-    return readFileSync(path, "utf8").trim();
+    const st = fstatSync(fd);
+    if (!st.isFile()) fail("not a regular file");
+    if (process.platform !== "win32") {
+      if ((st.mode & 0o077) !== 0) {
+        throw new CliError(
+          `${c.red}${path} is open to other users; a pairing code file must be owner-only (chmod 600 ${path}).${c.reset}`,
+          EXIT_USER_ERROR,
+        );
+      }
+      if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+        fail("owned by another user");
+      }
+    }
+    return readFileSync(fd, "utf8").trim();
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code ?? "unreadable";
-    throw new CliError(
-      `${c.red}Could not read the pairing code from ${path} (${code}).${c.reset}`,
-      EXIT_USER_ERROR,
-    );
+    if (err instanceof CliError) throw err;
+    return fail((err as NodeJS.ErrnoException).code ?? "unreadable");
+  } finally {
+    closeSync(fd);
   }
 }
 

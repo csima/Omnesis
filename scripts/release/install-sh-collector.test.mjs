@@ -487,6 +487,15 @@ describe("install.sh --collector: the pairing code from a file", () => {
     expect(callStartingWith(run.rawCalls, "pair ")).not.toContain(PAIRING_CODE);
   });
 
+  test("the private copy gets a random name, created exclusively, not one a planted file could take", () => {
+    const run = runInstaller("code-file-random", [...ROLE, "--code", PAIRING_CODE]);
+    expect(run.status, run.output).toBe(0);
+    const pair = callStartingWith(run.rawCalls, "pair ");
+    const copy = /--code-file (\S+)/.exec(pair)?.[1] ?? "";
+    expect(copy).toMatch(/\.pairing-code\.[A-Za-z0-9]{6,}$/);
+    expect(copy).not.toMatch(/\.pairing-code\.\d+$/);
+  });
+
   test("a file other users can read, an empty one, or two codes are refused", () => {
     const refuse = (name, args, needle) => {
       const run = runInstaller(name, args);
