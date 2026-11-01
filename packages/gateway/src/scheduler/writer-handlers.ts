@@ -24,7 +24,6 @@ import {
 import { upsertConversationDocument } from "../sources/omnesis-chat/document-writer.js";
 import { clearMorningBriefMessageItems } from "../brain/storage/morning-brief-items.js";
 
-
 /**
  * Single source of truth for every writer op the worker can dispatch.
  *
