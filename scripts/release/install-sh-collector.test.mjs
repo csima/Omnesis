@@ -16,7 +16,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
@@ -68,6 +68,13 @@ case "$1" in
     fi
     ;;
   pair)
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "--code-file" ]; then
+      printf '%s %s\n' "$(ls -ln "$arg" | cut -c1-10)" "$(cat "$arg")" >> "$OMNESIS_TEST_CALLS.codes"
+    fi
+    prev="$arg"
+  done
     if [ -t 0 ]; then printf 'pair stdin is a tty\n' >> "$OMNESIS_TEST_CALLS"; fi
     if [ -n "\${OMNESIS_TEST_PAIR_FAIL:-}" ]; then
       # The value is the exit status, so a test can drive the CLI's real
@@ -139,7 +146,8 @@ describe("install.sh --collector: the happy path", () => {
     );
     expect(run.status, run.output).toBe(0);
     expect(run.calls).not.toContain("pair stdin is a tty");
-    expect(callStartingWith(run.calls, "pair ")).toContain(`pair ${PAIRING_CODE}`);
+    expect(callStartingWith(run.calls, "pair ")).toContain("pair --code-file <file>");
+    expect(run.pairCodeFiles.map((file) => file.code)).toEqual([PAIRING_CODE]);
   });
 
   test("pairs, registers the collector unit, and reports the device online", () => {
@@ -155,7 +163,7 @@ describe("install.sh --collector: the happy path", () => {
     // The exact vector: the code, the gateway it was told to trust and how to
     // verify it, and the file the daemon will authenticate from.
     expect(callStartingWith(run.calls, "pair ")).toBe(
-      `pair ${PAIRING_CODE} --gateway-url ${GATEWAY_URL} ` +
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
         `--trust-fingerprint sha256:${GATEWAY_FP} ` +
         `--save ${join(run.configDir, "collector-token")}`,
     );
@@ -178,7 +186,7 @@ describe("install.sh --collector: the happy path", () => {
     const run = runInstaller("nofp", [...CODED, "--gateway-url", GATEWAY_URL]);
     expect(run.status).toBe(0);
     expect(callStartingWith(run.calls, "pair ")).toBe(
-      `pair ${PAIRING_CODE} --gateway-url ${GATEWAY_URL} ` +
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
         `--save ${join(run.configDir, "collector-token")}`,
     );
   });
@@ -263,7 +271,7 @@ describe("install.sh --collector: finding the gateway", () => {
     // The advertised fingerprint becomes the pin: verifying what answered is
     // strictly better than trusting it on sight.
     expect(callStartingWith(run.calls, "pair ")).toBe(
-      `pair ${PAIRING_CODE} --gateway-url ${GATEWAY_URL} ` +
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
         `--trust-fingerprint sha256:${GATEWAY_FP} ` +
         `--save ${join(run.configDir, "collector-token")}`,
     );
@@ -325,7 +333,7 @@ describe("install.sh --collector: finding the gateway", () => {
     expect(run.status).toBe(0);
     expect(run.output).toContain("(none advertised)");
     expect(callStartingWith(run.calls, "pair ")).toBe(
-      `pair ${PAIRING_CODE} --gateway-url ${GATEWAY_URL} ` +
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
         `--save ${join(run.configDir, "collector-token")}`,
     );
   });
@@ -382,7 +390,8 @@ describe("install.sh --collector: the pairing code", () => {
     );
     expect(run.status).toBe(0);
     expect(run.output).toContain("omnesis devices pair --kind collector");
-    expect(callStartingWith(run.calls, "pair ")).toContain(`pair ${PAIRING_CODE} `);
+    expect(callStartingWith(run.calls, "pair ")).toContain("pair --code-file <file> ");
+    expect(run.pairCodeFiles.map((file) => file.code)).toEqual([PAIRING_CODE]);
   });
 
   test.skipIf(!HAS_PTY)("an empty answer stops rather than pairing with nothing", () => {
@@ -432,6 +441,95 @@ describe("install.sh --collector: the pairing code", () => {
     expect(run.output).toContain("your code was not used");
     expect(run.output).not.toContain("single-use and short-lived");
     expect(run.calls.some((call) => call.startsWith("service install"))).toBe(false);
+  });
+});
+
+describe("install.sh --collector: the pairing code from a file", () => {
+  const ROLE = ["--collector", "--no-keyring", "--gateway-url", GATEWAY_URL];
+
+  function codeFile(name, mode = 0o600, content = `${PAIRING_CODE}\n`) {
+    const path = fixturePath(`pairing-code-${name}`);
+    writeFileSync(path, content, { mode });
+    chmodSync(path, mode);
+    return path;
+  }
+
+  function expectCodeOnNoCommandLine(run) {
+    expect(run.pairCodeFiles).toEqual([{ mode: "-rw-------", code: PAIRING_CODE }]);
+    for (const call of run.rawCalls) expect(call).not.toContain(PAIRING_CODE);
+    expect(readdirSync(run.configDir).filter((name) => name.startsWith(".pairing-code"))).toEqual(
+      [],
+    );
+  }
+
+  test("--code-file pairs with the code on no command line", () => {
+    const run = runInstaller("code-file", [...ROLE, "--code-file", codeFile("flag")]);
+    expect(run.status, run.output).toBe(0);
+    expect(callStartingWith(run.calls, "pair ")).toBe(
+      `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
+        `--save ${join(run.configDir, "collector-token")}`,
+    );
+    expectCodeOnNoCommandLine(run);
+  });
+
+  test("OMNESIS_PAIRING_CODE_FILE does the same", () => {
+    const run = runInstaller("code-file-env", ROLE, {
+      OMNESIS_PAIRING_CODE_FILE: codeFile("env"),
+    });
+    expect(run.status, run.output).toBe(0);
+    expectCodeOnNoCommandLine(run);
+  });
+
+  test("even a code given with --code reaches the CLI through a file", () => {
+    const run = runInstaller("code-flag-file", [...ROLE, "--code", PAIRING_CODE]);
+    expect(run.status, run.output).toBe(0);
+    expect(run.pairCodeFiles).toEqual([{ mode: "-rw-------", code: PAIRING_CODE }]);
+    expect(callStartingWith(run.rawCalls, "pair ")).not.toContain(PAIRING_CODE);
+  });
+
+  test("the private copy gets a random name, created exclusively, not one a planted file could take", () => {
+    const run = runInstaller("code-file-random", [...ROLE, "--code", PAIRING_CODE]);
+    expect(run.status, run.output).toBe(0);
+    const pair = callStartingWith(run.rawCalls, "pair ");
+    const copy = /--code-file (\S+)/.exec(pair)?.[1] ?? "";
+    expect(copy).toMatch(/\.pairing-code\.[A-Za-z0-9]{6,}$/);
+    expect(copy).not.toMatch(/\.pairing-code\.\d+$/);
+  });
+
+  test("a file other users can read, an empty one, or two codes are refused", () => {
+    const refuse = (name, args, needle) => {
+      const run = runInstaller(name, args);
+      expect(run.status).toBe(1);
+      expect(run.output).toContain(needle);
+      expect(run.calls).toEqual([]);
+      expect(run.output).not.toContain(PAIRING_CODE);
+    };
+    refuse(
+      "code-file-readable",
+      [...ROLE, "--code-file", codeFile("readable", 0o644)],
+      "is open to other users",
+    );
+    refuse(
+      "code-file-group",
+      [...ROLE, "--code-file", codeFile("group", 0o640)],
+      "is open to other users",
+    );
+    refuse("code-file-empty", [...ROLE, "--code-file", codeFile("empty", 0o600, "\n")], "is empty");
+    refuse(
+      "code-file-missing",
+      [...ROLE, "--code-file", fixturePath("no-such-code")],
+      "is not a readable file",
+    );
+    refuse(
+      "code-file-and-code",
+      [...ROLE, "--code", PAIRING_CODE, "--code-file", codeFile("both")],
+      "--code and --code-file both name the pairing code",
+    );
+    refuse(
+      "code-file-no-role",
+      ["--code-file", codeFile("no-role")],
+      "--code-file is only meaningful with --collector",
+    );
   });
 });
 
@@ -595,6 +693,7 @@ describe("install.sh --collector: the script itself", () => {
     expect(help).toContain("--gateway-url <url>");
     expect(help).toContain("--trust-fingerprint sha256:");
     expect(help).toContain("--code <code>");
+    expect(help).toContain("--code-file <path>");
     expect(help.trimEnd().endsWith("# download executes nothing.")).toBe(true);
     expect(help).not.toContain("set -eu");
   });
