@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import "./synth-env.js";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { FictionalAgentHost } from "@omnesis/gateway/src/access/host-identity-test-host.js";
@@ -20,6 +20,10 @@ const PERSON = "maya.reeves@example.com";
 const RESEARCHER = "instance:researcher-1";
 const PLANNER = "instance:planner-7";
 const STRANGER = "instance:stranger-3";
+const ANSWERER = "instance:answerer-a";
+const SECOND_ANSWERER = "instance:answerer-b";
+const SECOND_PERSON = "jamie.lopez@example.com";
+const QUESTION = "When is the Halden Press order due to arrive?";
 
 type MintInput = Parameters<FictionalAgentHost["mint"]>[0];
 
@@ -97,7 +101,7 @@ function isToolCall(body: string): boolean {
   }
 }
 
-describe("Direct MCP through an agent host that says who is calling", () => {
+describe("MCP through an agent host that says who is calling", () => {
   let harness: SyntheticE2EHarness;
   let host: FictionalAgentHost;
   let authorized: AuthorizedMcpClient;
@@ -110,7 +114,12 @@ describe("Direct MCP through an agent host that says who is calling", () => {
   const grants = new Map<string, string>();
 
   beforeAll(async () => {
-    harness = new SyntheticE2EHarness({ gatewayMode: "stable", universe: "default" });
+    harness = new SyntheticE2EHarness({
+      gatewayMode: "stable",
+      universe: "default",
+      agentBackend: "replay",
+      extraInference: { assignments: { "privacy-reviewer": "replay" } },
+    });
     await harness.start();
     await harness.syncAllSources();
     await harness.refreshSearchSnapshot();
@@ -147,7 +156,15 @@ describe("Direct MCP through an agent host that says who is calling", () => {
         principalName: "Fictional agent host",
         grantName: "Agent host access",
         credentialLabel: "Fictional agent host",
-        capabilities: ["direct"],
+        capabilities: ["direct", "answer"],
+        rules: [
+          { capability: "direct", sources: { mode: "all", sourceIds: [] } },
+          {
+            capability: "answer",
+            sources: { mode: "all", sourceIds: [] },
+            release: { mode: "unreviewed" },
+          },
+        ],
       },
     );
     await portalJson(
@@ -161,6 +178,26 @@ describe("Direct MCP through an agent host that says who is calling", () => {
     const bothLevel = await level("Fictional planner reader", [mailSourceId, otherSourceId]);
     grants.set(RESEARCHER, await grant(RESEARCHER, mailLevel));
     grants.set(PLANNER, await grant(PLANNER, bothLevel));
+    const answerLevel = (
+      await portalJson<{ level: { id: string } }>(
+        harness.gatewayUrl,
+        authorized.portal,
+        "/admin/access/levels",
+        {
+          name: "Fictional answer desk",
+          rules: [
+            {
+              capability: "answer",
+              sources: { mode: "all", sourceIds: [] },
+              release: { mode: "unreviewed" },
+            },
+          ],
+        },
+      )
+    ).level.id;
+    await grant(ANSWERER, answerLevel);
+    await grant(SECOND_ANSWERER, answerLevel);
+    await grant(ANSWERER, answerLevel, SECOND_PERSON);
 
     session = new HostSession(harness.gatewayUrl, authorized, host, audience);
     await session.connect();
@@ -325,6 +362,60 @@ describe("Direct MCP through an agent host that says who is calling", () => {
     }
   }, 30_000);
 
+  test("keeps each host agent's Answer tasks and conversations its own", async () => {
+    const requestId = `host_answer_${randomUUID()}`;
+    const asked = await session.call([ANSWERER], "ask_omnesis", {
+      question: QUESTION,
+      requestId,
+      workflowName: "Fictional delivery desk",
+      workflowPurpose: "Return delivery status for open orders.",
+    });
+    expect(asked.isError).not.toBe(true);
+    const released = asked.structuredContent as {
+      status: string;
+      taskId: string;
+      conversationId: string;
+      answer: string;
+    };
+    expect(released.status).toBe("released");
+    const status = await session.call([ANSWERER], "get_answer_status", {
+      taskId: released.taskId,
+    });
+    expect(status.structuredContent).toMatchObject({ taskId: released.taskId });
+
+    const foreignStatus = await session.call([SECOND_ANSWERER], "get_answer_status", {
+      taskId: released.taskId,
+    });
+    expect(foreignStatus.isError).toBe(true);
+    expect(JSON.stringify(foreignStatus)).not.toContain(released.answer);
+
+    const foreignContinuation = await session.call([SECOND_ANSWERER], "ask_omnesis", {
+      question: "And who is the courier?",
+      requestId: `host_answer_${randomUUID()}`,
+      conversationId: released.conversationId,
+    });
+    expect(foreignContinuation.isError).toBe(true);
+    expect(JSON.stringify(foreignContinuation)).not.toContain(released.answer);
+
+    const collision = await session.call([SECOND_ANSWERER], "ask_omnesis", {
+      question: QUESTION,
+      requestId,
+      workflowName: "Fictional delivery desk",
+      workflowPurpose: "Return delivery status for open orders.",
+    });
+    expect(collision.isError).not.toBe(true);
+    expect((collision.structuredContent as { taskId: string }).taskId).not.toBe(released.taskId);
+
+    const otherPerson = await session.call(
+      null,
+      "get_answer_status",
+      { taskId: released.taskId },
+      session.mint([ANSWERER], { person: SECOND_PERSON }),
+    );
+    expect(otherPerson.isError).toBe(true);
+    expect(JSON.stringify(otherPerson)).not.toContain(released.answer);
+  }, 180_000);
+
   test("applies a revoked grant on the very next call", async () => {
     expect(await coverage([RESEARCHER])).toEqual([mailSourceId]);
     const revoked = await portalRequest(
@@ -341,11 +432,10 @@ describe("Direct MCP through an agent host that says who is calling", () => {
     const listed = await portalJson<{
       bindings: Array<{ connectionId: string; agents: Array<{ agent: string }> }>;
     }>(harness.gatewayUrl, authorized.portal, "/admin/access/host-identity");
-    expect(listed.bindings).toEqual([
-      expect.objectContaining({
-        connectionId: authorized.principalId,
-        agents: [expect.objectContaining({ agent: PLANNER })],
-      }),
-    ]);
+    expect(listed.bindings).toHaveLength(1);
+    expect(listed.bindings[0]?.connectionId).toBe(authorized.principalId);
+    expect(listed.bindings[0]?.agents.map((entry) => entry.agent).sort()).toEqual(
+      [ANSWERER, ANSWERER, SECOND_ANSWERER, PLANNER].sort(),
+    );
   }, 60_000);
 });

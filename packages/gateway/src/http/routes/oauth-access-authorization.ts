@@ -11,6 +11,7 @@ import {
   type ServedResource,
 } from "../../access/served-by-gateway.js";
 import { resolveOAuthOverviewUrls, resolveOAuthUrls } from "../../access/oauth-urls.js";
+import { normalizeHostAudience } from "../../access/host-identity.js";
 import { ClientMetadataDocumentResolver } from "../../access/client-metadata-document.js";
 import { normalizeInteractiveOAuthScope } from "../../access/oauth-scopes.js";
 import { MCP_ACCESS_SCOPE, type AuthorizationRequestPortal } from "../../access/types.js";
@@ -647,9 +648,29 @@ export function mountOAuthAuthorizationRoutes(
     async (c) => {
       const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
       if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const body = c.req.valid("json");
+      // The host's assertions must name this gateway, or every call through
+      // the binding would be refused; a mistyped audience is caught here.
+      const served = resolveOAuthOverviewUrls(
+        c.req.url,
+        options.publicBaseUrl,
+        options.mcpResourceUrls,
+        options.loopbackBaseUrl,
+      )?.supportedResources.map(normalizeHostAudience);
+      const audience = normalizeHostAudience(body.audience);
+      if (!audience || !served?.includes(audience)) {
+        return c.json(
+          {
+            error: "audience-not-served",
+            message: "The audience must be one of this gateway's MCP URLs.",
+            servedAudiences: (served ?? []).filter((value): value is string => value !== null),
+          },
+          400,
+        );
+      }
       const result = await access.bindHostIdentity({
         connectionId: connectionId.data,
-        ...c.req.valid("json"),
+        ...body,
         actorTokenId: c.get("auth").tokenId!,
       });
       if (!result.ok) {

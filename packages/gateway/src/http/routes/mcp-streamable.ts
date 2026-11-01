@@ -29,6 +29,7 @@ import {
   parseCorpusAuthorization,
   serializeCorpusAuthorization,
   type CorpusAuthorization,
+  type HostAnswerCaller,
 } from "../../access/corpus-authorization.js";
 import {
   AnswerMcpGatewayError,
@@ -310,7 +311,7 @@ function createUnifiedHandler(deps: McpStreamableRoutesDeps): McpHttpHandler {
 
       const tokenIdentity = stringExtra(auth, "tokenIdentity");
       const ownerId = answerAuthorization
-        ? externalAnswerOwnerId(answerAuthorization)
+        ? externalAnswerOwnerId(answerAuthorization, hostAnswerCallerExtra(auth))
         : `principal:${stringExtra(auth, "principalId")}`;
       const executionDeviceId = tryDeviceId(optionalStringExtra(auth, "executionDeviceId") ?? "");
       const activeExecutionDeviceId =
@@ -575,7 +576,16 @@ function authInfo(
           ? { directAuthorization: serializeCorpusAuthorization(directAuthorization) }
           : {}),
         ...(auth.executionDeviceId ? { executionDeviceId: auth.executionDeviceId } : {}),
-        ...(host.kind === "authorized" ? { hostCaller: JSON.stringify(host.audit) } : {}),
+        ...(host.kind === "authorized"
+          ? {
+              hostCaller: JSON.stringify(host.audit),
+              hostAnswerCaller: JSON.stringify({
+                issuer: host.caller.issuer,
+                person: host.caller.person,
+                agent: host.caller.agent,
+              } satisfies HostAnswerCaller),
+            }
+          : {}),
         ...(host.kind === "unidentified" ? { hostIdentity: "missing" } : {}),
         clientIp: clientIpValue,
         requestId,
@@ -735,6 +745,24 @@ function hostCallerExtra(auth: AuthInfo): { hostCaller?: HostCallerAudit } {
   } catch {
     throw new ForbiddenError("Authenticated MCP request context is incomplete.");
   }
+}
+
+function hostAnswerCallerExtra(auth: AuthInfo): HostAnswerCaller | undefined {
+  const serialized = optionalStringExtra(auth, "hostAnswerCaller");
+  if (!serialized) return undefined;
+  try {
+    const parsed = JSON.parse(serialized) as Partial<HostAnswerCaller>;
+    if (
+      typeof parsed.issuer === "string" &&
+      typeof parsed.person === "string" &&
+      typeof parsed.agent === "string"
+    ) {
+      return { issuer: parsed.issuer, person: parsed.person, agent: parsed.agent };
+    }
+  } catch {
+    // Falls through to the refusal below.
+  }
+  throw new ForbiddenError("Authenticated MCP request context is incomplete.");
 }
 
 function parsePositiveIntegerExtra(auth: AuthInfo, key: string): number {

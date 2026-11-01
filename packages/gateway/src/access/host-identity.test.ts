@@ -8,6 +8,7 @@ import {
   HostIdentityVerifier,
   normalizeHostAudience,
   normalizeHostIssuer,
+  normalizeHostPerson,
   type HostIdentityRefusal,
 } from "./host-identity.js";
 import { FictionalAgentHost } from "./host-identity-test-host.js";
@@ -291,6 +292,23 @@ describe("HostIdentityVerifier", () => {
     const issuer = host.issuer;
     await host.stop();
     expect(await refusal(assertion, trust({ issuer }))).toBe("keys-unavailable");
+  });
+});
+
+describe("host identity persons", () => {
+  it("refuses a person NFKC would change or that is not plain ASCII", async () => {
+    for (const sub of [
+      "\u212Aate.reeves@example.com",
+      "ｍaya.reeves@example.com",
+      "maya.rée@example.com",
+      "maya reeves@example.com",
+    ]) {
+      expect(normalizeHostPerson(sub)).toBeNull();
+      expect(
+        await refusal(host.mint({ audience: AUDIENCE, person: sub, agents: [RESEARCHER] })),
+      ).toBe("malformed");
+    }
+    expect(normalizeHostPerson(" Kate.Reeves@Example.com ")).toBe("kate.reeves@example.com");
   });
 });
 

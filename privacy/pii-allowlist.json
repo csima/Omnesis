@@ -7509,6 +7509,7 @@
         "packages/collector/src/e2e/agent-integration-connect.e2e.test.ts",
         "packages/collector/src/e2e/agent-integration-graduated.e2e.test.ts",
         "packages/collector/src/e2e/mcp-answer.e2e.test.ts",
+        "packages/collector/src/e2e/mcp-host-identity.e2e.test.ts",
         "packages/collector/src/e2e/restart-durability.e2e.test.ts"
       ],
       "reason": "reviewed: invented organisation in the synthetic privacy fixtures"

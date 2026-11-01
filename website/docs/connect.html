@@ -404,7 +404,10 @@
           seconds of clock difference, that it lives no longer than two minutes, and that its
           <code>jti</code> has not been used before. The issuer is an <code>https://</code> origin,
           or an <code>http://</code> loopback origin for a host on the same machine; the audience is
-          this gateway's MCP URL as the host saved it, without query, fragment or trailing slash.
+          one of this gateway's MCP URLs as the host saved it, without query, fragment or trailing
+          slash, and a binding to any other audience is refused. A person is compared lower-cased
+          and must be plain ASCII that Unicode NFKC normalization leaves unchanged; any other
+          <code>sub</code> is refused.
         </p>
         <p>
           A call is granted by the calling agent and the person together. When other agents asked
@@ -415,8 +418,10 @@
           Without an assertion a bound connection can still list its tools, under the connection's
           own level, but every tool call is refused. Revoking an agent's level or editing the level
           applies to the next call, and a call already running releases nothing once its level
-          changes. Each tool call's entry in the access ledger (<code>GET /admin/access/audit</code
-          >) names the calling agent, the agents that asked it and the agent levels it used.
+          changes. Each agent, acting for each person, has Answer tasks and conversations of its
+          own: another agent of the same host cannot read or continue them, even on the same level.
+          Each tool call's entry in the access ledger (<code>GET /admin/access/audit</code>) names
+          the calling agent, the agents that asked it and the agent levels it used.
         </p>
         <p>
           The binding and the agents' levels are set from a portal session: bind a connection with

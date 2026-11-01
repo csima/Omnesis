@@ -121,10 +121,17 @@ export function normalizeHostAudience(value: string): string | null {
   return `${url.origin}${path}`;
 }
 
-/** A person as grants name them: the assertion's `sub`, trimmed and lower-cased. */
+/**
+ * A person as grants name them: the assertion's `sub`, trimmed and
+ * lower-cased. Only printable ASCII is a person, and only a value NFKC leaves
+ * as it is: a compatibility character such as the Kelvin sign would otherwise
+ * fold onto another person's plain letter.
+ */
 export function normalizeHostPerson(value: string): string | null {
-  const person = value.trim().toLowerCase();
-  if (person.length === 0 || person.length > MAX_PERSON_LENGTH || /\s/u.test(person)) return null;
+  const trimmed = value.trim();
+  if (trimmed.normalize("NFKC") !== trimmed || !/^[\x21-\x7e]+$/u.test(trimmed)) return null;
+  const person = trimmed.toLowerCase();
+  if (person.length > MAX_PERSON_LENGTH) return null;
   return person;
 }
 
