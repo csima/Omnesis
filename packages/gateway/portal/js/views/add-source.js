@@ -74,8 +74,9 @@ function descriptorIcon(d) {
  * `perAccount` spec the answer is otherwise always "yes", so the wizard's own
  * resume would reopen it, forever.
  *
- * `isAdded(accountId)` says whether an account is already added on the chosen
- * device, so a brokered account that is skips nothing.
+ * `isAdded(accountId)` says whether the gateway already lists an account's
+ * source (see {@link isAccountRegistered}), so a brokered account that is
+ * skips nothing.
  */
 export function shouldOpenCredentialsWizard(spec, entry, alreadyCollected, isAdded = () => false) {
   if (alreadyCollected) return false;
@@ -354,6 +355,15 @@ export function splitConfiguredAccounts(descriptorId, accountIds, registeredSour
     else fresh.push(accountId);
   }
   return { fresh, configured };
+}
+
+/**
+ * Whether the gateway already lists a source of this type for an account, on
+ * any device and enabled or not: the CLI add's rule for an added account.
+ */
+export function isAccountRegistered(descriptorId, registeredSources) {
+  return (accountId) =>
+    splitConfiguredAccounts(descriptorId, [accountId], registeredSources).fresh.length === 0;
 }
 
 /** Ask the selected collector to resolve a local source's account identity. */
@@ -1014,8 +1024,7 @@ export function AddSourceModal({ onClose, onAdded }) {
     try {
       const status = await getCredentialsStatus(deviceIdRef.current);
       const entry = (status.items || []).find((e) => e.fileKey === spec.fileKey);
-      const configured = snapshotRef.current.configured || {};
-      const isAdded = (accountId) => !!configured[`${d.id}:${accountId}`]?.enabled;
+      const isAdded = isAccountRegistered(d.id, registeredSources);
       if (!shouldOpenCredentialsWizard(spec, entry, false, isAdded)) return false;
       setCredsWizard({ entry, descriptor: d, collectedParams, perAccount: !!spec.perAccount });
       return true;

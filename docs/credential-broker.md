@@ -147,9 +147,11 @@ below.
    run `omnesis broker unlink <provider> <account>`, instead of `sources reauth` (which `auth.begin` refuses). The
    gateway's needs-sign-in notice and the portal's reauth banner still offer a sign-in here; they cannot tell a
    brokered account apart yet.
-4. **Portal wizard skip. Done.** `shouldOpenCredentialsWizard` now takes whether each account is already added on the
-   chosen device and skips the wizard only while a brokered account is not added yet, as the CLI's add does. Once
-   every brokered account is added, connecting another account opens the wizard as usual.
+4. **Portal wizard skip. Done.** `shouldOpenCredentialsWizard` now takes whether each account is already added, read
+   by `isAccountRegistered` from the gateway's source rows (`GET /admin/sources`) with the CLI's
+   `splitConfiguredAccounts` rule: an account counts as added when the gateway lists its source on any device,
+   enabled or not. The wizard is skipped only while a brokered account is not added yet; once every brokered account
+   is added, connecting another account opens the wizard as usual.
 5. **Narrower Nango key** (see above), and document it in `website/docs/sources.html`.
 6. **Before proposing upstream:** consider gating behind `OMNESIS_EXPERIMENTAL` per the repository's rules for new
    behaviour; add a `.changeset/` entry; split into reviewable commits (core + contract + CLI, then providers); rebase
