@@ -361,6 +361,7 @@ export class AnalyticsTableManager {
     );
     const addedColumns = await this.evolveTableSchema(conn, schema);
     await this.stampDiscriminatorOnLegacyRows(conn, schema, sourceId, addedColumns);
+    await this.widenPrimaryKey(conn, schema);
     await this.catalog.upsertEntry(conn, schema, sourceId);
     log.debug(`Ensured table ${schema.tableName} with ${schema.columns.length} columns`);
   }
@@ -463,6 +464,93 @@ export class AnalyticsTableManager {
     );
     log.info(
       `Stamped ${discriminator}='${accountId}' on pre-existing ${schema.tableName} rows while ${sourceId} still owns the table`,
+    );
+  }
+
+  /**
+   * Rebuild a table whose declared primary key gained columns since it was
+   * created, so it is keyed the way its source now names rows.
+   *
+   * `CREATE TABLE IF NOT EXISTS` leaves an existing table's key as it was, and
+   * DuckDB cannot alter a primary key in place. The canonical case is a table
+   * several accounts share whose upstream ids are not unique across them: two
+   * accounts that both see one shared calendar hold the same event under the
+   * same id, so the account column has to join the key or the second account's
+   * row is refused as another account's.
+   *
+   * Only widening is done. Adding columns to a key that was unique keeps it
+   * unique, so every existing row survives the copy; dropping or replacing a
+   * key column could merge rows and is left alone. The rebuild copies every
+   * column at its live type and nullability, as the stream rekey does, and
+   * re-keys the table's temporal projections in the same transaction. The
+   * delete key a table declares is untouched, so the absence ledgers built on
+   * it keep their meaning.
+   */
+  private async widenPrimaryKey(
+    conn: DuckDBConnection,
+    schema: AnalyticsTableSchema,
+  ): Promise<void> {
+    const table = quoteIdent(schema.tableName);
+    const constraint = await conn.runAndReadAll(
+      `SELECT constraint_column_names FROM duckdb_constraints()
+        WHERE table_name = '${escapeStr(schema.tableName)}' AND constraint_type = 'PRIMARY KEY'`,
+    );
+    const physicalCell = (constraint.getRows() as unknown[][])[0]?.[0] as
+      { items?: unknown[] } | undefined;
+    const physical = (physicalCell?.items ?? []).map(String);
+    const streamKeyed = await this.catalog.isStreamKeyed(conn, schema.tableName);
+    const physicalKey =
+      streamKeyed && physical.at(-1) === STREAM_COLUMN ? physical.slice(0, -1) : physical;
+    const gained = schema.primaryKey.filter((column) => !physicalKey.includes(column));
+    if (
+      physicalKey.length === 0 ||
+      gained.length === 0 ||
+      physicalKey.some((column) => !schema.primaryKey.includes(column))
+    )
+      return;
+
+    for (const column of gained) {
+      const nulls = await conn.runAndReadAll(
+        `SELECT 1 FROM ${table} WHERE ${quoteIdent(column)} IS NULL LIMIT 1`,
+      );
+      if (nulls.getRows().length > 0)
+        throw new RowKeyError(
+          `Cannot add ${column} to the primary key of ${schema.tableName}: some rows have no ${column}. ` +
+            "Claim or drop the table's unattributed rows, then retry.",
+        );
+    }
+
+    const existing = await conn.runAndReadAll(
+      `SELECT column_name, data_type, is_nullable FROM information_schema.columns
+        WHERE table_name = '${escapeStr(schema.tableName)}' ORDER BY ordinal_position`,
+    );
+    const columns = (existing.getRows() as unknown[][]).map((row) => ({
+      name: String(row[0]),
+      type: String(row[1]),
+      nullable: String(row[2]).toUpperCase() === "YES",
+    }));
+    const key = [...schema.primaryKey, ...(streamKeyed ? [STREAM_COLUMN] : [])];
+    const rebuilt = quoteIdent(`${schema.tableName}__rekey`);
+    const colDefs = columns.map((column) =>
+      column.name === STREAM_COLUMN
+        ? `${quoteIdent(STREAM_COLUMN)} VARCHAR NOT NULL DEFAULT ''`
+        : `${quoteIdent(column.name)} ${column.type}${column.nullable && !key.includes(column.name) ? "" : " NOT NULL"}`,
+    );
+    colDefs.push(`PRIMARY KEY (${key.map(quoteIdent).join(", ")})`);
+    const copied = columns.map((column) => quoteIdent(column.name)).join(", ");
+    await conn.run(`CREATE TABLE ${rebuilt} (${colDefs.join(", ")})`);
+    await conn.run(`INSERT INTO ${rebuilt} (${copied}) SELECT ${copied} FROM ${table}`);
+    await conn.run(`DROP TABLE ${table}`);
+    await conn.run(`ALTER TABLE ${rebuilt} RENAME TO ${table}`);
+    await this.temporalProjections.rekeyTable(
+      conn,
+      schema.tableName,
+      schema.primaryKey,
+      schema.sharedDiscriminatorColumn,
+      STREAM_COLUMN,
+    );
+    log.info(
+      `Analytics table ${schema.tableName} is now keyed by (${key.join(", ")}), was (${physical.join(", ")})`,
     );
   }
 

@@ -10,7 +10,7 @@ export const GOOGLE_CALENDAR_EVENTS_TABLE = "google_calendar_events";
 /**
  * Structured twin of the Google Calendar event document. The row's `id` is the
  * `calendarId:eventId` string that is also the document's `externalId`, so the
- * doc↔row `same-entity` edge is a clean 1:1 `boundDocument`. Derived
+ * doc↔row `same-entity` edge is a clean 1:1 `boundDocument` within an account. Derived
  * analytical columns the document body can't aggregate — `duration_minutes`,
  * `attendee_count`, `response_status` — are what make this dual-push worth it
  * ("meeting hours per week", "accept rate", "busiest day").
@@ -96,9 +96,17 @@ export const googleCalendarEventsSchema: AnalyticsTableSchema = {
       nullable: true,
     },
   ],
-  primaryKey: ["id"],
-  // Several Google accounts write this one provider-owned table. Snapshot
-  // reconciliation must scope deletions to the emitting account.
+  // Several Google accounts write this one provider-owned table, and an id is
+  // only unique within one of them: a calendar shared with two linked accounts
+  // lists the same event under the same `calendarId:eventId` in both. The
+  // account is therefore part of the key, and each account keeps its own row
+  // (its own RSVP) for the event.
+  primaryKey: ["source_account", "id"],
+  // Deletes and snapshots still name a row by its id alone. The gateway scopes
+  // both to the emitting account, where the id is unique, and the absence
+  // ledgers this table already holds were recorded under that key.
+  deleteKey: ["id"],
+  // Snapshot reconciliation must scope deletions to the emitting account.
   sharedDiscriminatorColumn: "source_account",
   // An event is placed at its start instant.
   semanticTimeColumn: "start_time",
@@ -106,9 +114,10 @@ export const googleCalendarEventsSchema: AnalyticsTableSchema = {
     titleColumns: ["title"],
     keyColumns: ["title", "start_time", "end_time", "location"],
   },
-  // The event document's externalId is exactly this row's `id` — declare the
-  // 1:1 doc↔row edge. Synthesized at walk time; no edge rows persisted.
-  boundDocument: { externalIdColumns: ["id"] },
+  // The event document's externalId is exactly this row's `id`, and the
+  // account comes from the document's own source id — declare the 1:1
+  // doc↔row edge. Synthesized at walk time; no edge rows persisted.
+  boundDocument: { externalIdColumns: ["id"], sourceKeyColumns: ["source_account"] },
   temporalProjection: {
     slot: "calendar",
     start: "$semanticTime",

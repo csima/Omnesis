@@ -19,6 +19,7 @@ import {
   TEMPORAL_STATUSES,
   temporalVocabularyCheck,
 } from "@omnesis/core";
+import { sourceAccountOf } from "@omnesis/types";
 import { stableProjectionId } from "../enrichment/temporal-projections/derive.js";
 import { escapeStr, formatValue, parseSchemaJson, quoteIdent } from "./internal.js";
 import {
@@ -320,6 +321,79 @@ export class AnalyticsTemporalProjectionStore {
         FROM (VALUES ${mapping}) AS moved(from_id, to_id)
         WHERE ${TEMPORAL_PROJECTIONS_TABLE}.id = moved.from_id`,
     );
+  }
+
+  /**
+   * Re-key one table's projections after its primary key gained columns, so
+   * the projections already derived keep their facts under the key the table
+   * now names its rows by, rather than lingering under the old one beside
+   * fresh duplicates. A gained column is filled from what the projection
+   * already knows: its old key, or — for the account column — the account of
+   * the source that recorded it. A projection that cannot be named that way is
+   * dropped; its row re-derives it the next time it is written.
+   */
+  async rekeyTable(
+    conn: DuckDBConnection,
+    tableName: string,
+    primaryKey: readonly string[],
+    accountColumn: string | undefined,
+    streamColumn: string,
+  ): Promise<void> {
+    const reader = await conn.runAndReadAll(
+      `SELECT id, source_id, record_key, slot FROM ${TEMPORAL_PROJECTIONS_TABLE}
+        WHERE table_name = '${escapeStr(tableName)}'`,
+    );
+    const moves: Array<{ from: string; to: string; key: string }> = [];
+    const orphans: string[] = [];
+    for (const row of reader.getRows() as unknown[][]) {
+      const [id, sourceId, recordKey, slot] = row.map(String) as [string, string, string, string];
+      let previous: Record<string, unknown>;
+      try {
+        previous = JSON.parse(recordKey) as Record<string, unknown>;
+      } catch {
+        orphans.push(id);
+        continue;
+      }
+      const columns = [...primaryKey, ...(streamColumn in previous ? [streamColumn] : [])];
+      const next: Record<string, unknown> = {};
+      for (const column of columns) {
+        next[column] =
+          previous[column] ?? (column === accountColumn ? sourceAccountOf(sourceId) : undefined);
+      }
+      if (columns.some((column) => next[column] === undefined || next[column] === "")) {
+        orphans.push(id);
+        continue;
+      }
+      const key = serializeRecordKey(columns, next);
+      if (key === recordKey) continue;
+      moves.push({ from: id, to: stableProjectionId(sourceId, tableName, key, slot), key });
+    }
+    for (let offset = 0; offset < orphans.length; offset += 1000) {
+      const chunk = orphans.slice(offset, offset + 1000);
+      await conn.run(
+        `DELETE FROM ${TEMPORAL_PROJECTIONS_TABLE}
+          WHERE id IN (${chunk.map((id) => `'${escapeStr(id)}'`).join(", ")})`,
+      );
+    }
+    for (let offset = 0; offset < moves.length; offset += 1000) {
+      const mapping = moves
+        .slice(offset, offset + 1000)
+        .map(
+          (move) =>
+            `('${escapeStr(move.from)}', '${escapeStr(move.to)}', '${escapeStr(move.key)}')`,
+        )
+        .join(", ");
+      await conn.run(
+        `UPDATE ${TEMPORAL_PROJECTIONS_TABLE} SET id = moved.to_id, record_key = moved.to_key
+          FROM (VALUES ${mapping}) AS moved(from_id, to_id, to_key)
+          WHERE ${TEMPORAL_PROJECTIONS_TABLE}.id = moved.from_id`,
+      );
+    }
+    if (moves.length + orphans.length > 0)
+      log.info(
+        `Re-keyed ${moves.length} temporal projection(s) of ${tableName} to (${primaryKey.join(", ")})` +
+          (orphans.length > 0 ? `; dropped ${orphans.length} that could not be re-keyed` : ""),
+      );
   }
 
   async recordCoverage(
