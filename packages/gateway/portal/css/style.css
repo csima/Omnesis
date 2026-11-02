@@ -1232,6 +1232,54 @@ a:hover { text-decoration: underline; }
 .access-device-heading .access-device-link { font-size: 13px; font-weight: 600; }
 .access-device-meta { color: var(--text-muted); font-size: 11.5px; }
 .access-device-item + .access-device-item { border-top: 1px solid var(--border-light); }
+.access-host-agents-panel { display: grid; gap: 12px; margin-top: 20px; }
+.access-host-header h3 { margin: 0 0 4px; font-size: 15px; }
+.access-host-header p { margin: 0; color: var(--text-secondary); font-size: 12.5px; }
+.access-host-issuer { color: var(--text-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.access-host-agents {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  list-style: none;
+}
+.access-host-agent {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+}
+.access-host-agent code { overflow-wrap: anywhere; }
+.access-host-agent + .access-host-agent { border-top: 1px solid var(--border-light); }
+.access-host-default,
+.access-host-new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 12.5px;
+}
+.access-host-default label,
+.access-host-new label { color: var(--text-secondary); font-weight: 600; }
+.access-host-new input,
+.access-host-select {
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+}
+.access-host-new input { flex: 1 1 200px; min-width: 0; max-width: 340px; }
+.access-host-select { max-width: 100%; min-width: 160px; }
+.access-host-new input:focus,
+.access-host-select:focus { outline: none; border-color: var(--accent); }
+.access-host-new input:focus-visible,
+.access-host-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .access-device-link,
 .access-impact-device {
   display: inline-flex;

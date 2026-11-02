@@ -131,6 +131,7 @@ import {
   createHostAgentGrant,
   removeHostIdentityBinding,
   revokeHostAgentGrant,
+  setHostAgentDefault,
   setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
@@ -158,6 +159,8 @@ import type {
   AccessPrincipalRenameInput,
   AccessRevocationInput,
   AccessGrantUpdateInput,
+  HostAgentDefault,
+  HostAgentDefaultInput,
   HostAgentGrant,
   HostAgentGrantCreateInput,
   HostAgentGrantRevokeInput,
@@ -1314,6 +1317,9 @@ export interface WriteGate extends KnowledgeWriteGate {
     input: HostAgentGrantCreateInput,
   ): Promise<AccessMutationResult<HostAgentGrant>>;
   revokeHostAgentGrant(input: HostAgentGrantRevokeInput): Promise<AccessMutationResult<null>>;
+  setHostAgentDefault(
+    input: HostAgentDefaultInput,
+  ): Promise<AccessMutationResult<HostAgentDefault | null>>;
   revokeAccessEntity(input: AccessRevocationInput): Promise<boolean>;
   recordMcpToolInvocationAudit(input: McpToolInvocationAuditInput): Promise<boolean>;
   touchPrincipalCredentialUsageBatch(
@@ -2552,6 +2558,7 @@ export function writeGateFromCall(call: WriterCallFn): WriteGate {
     removeHostIdentityBinding: (input) => call("access.hostIdentityUnbind", [input]),
     createHostAgentGrant: (input) => call("access.hostAgentGrantCreate", [input]),
     revokeHostAgentGrant: (input) => call("access.hostAgentGrantRevoke", [input]),
+    setHostAgentDefault: (input) => call("access.hostAgentDefaultSet", [input]),
     revokeAccessEntity: (input) => call("access.revoke", [input]),
     recordMcpToolInvocationAudit: (input) => call("access.mcpInvocationAudit", [input]),
     touchPrincipalCredentialUsageBatch: (rows) => call("access.credentialUsageTouchBatch", [rows]),
@@ -3155,6 +3162,7 @@ export function directWriteGate(db: Db): WriteGate {
     removeHostIdentityBinding: async (input) => removeHostIdentityBinding(db, input),
     createHostAgentGrant: async (input) => createHostAgentGrant(db, input),
     revokeHostAgentGrant: async (input) => revokeHostAgentGrant(db, input),
+    setHostAgentDefault: async (input) => setHostAgentDefault(db, input),
     revokeAccessEntity: async (input) => revokeAccessEntity(db, input),
     recordMcpToolInvocationAudit: async (input) => recordMcpToolInvocationAudit(db, input),
     touchPrincipalCredentialUsageBatch: async (rows) => {

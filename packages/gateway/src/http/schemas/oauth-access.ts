@@ -255,6 +255,17 @@ export const accessHostIdentityBody = z
   })
   .strict();
 
+export const accessHostAgentDefaultBody = z
+  .object({
+    person: z.string().min(1).max(320),
+    levelId: z.string().uuid(),
+  })
+  .strict();
+
+export const accessHostAgentDefaultQuery = z
+  .object({ person: z.string().min(1).max(320) })
+  .strict();
+
 export const accessHostAgentBody = z
   .object({
     person: z.string().min(1).max(320),

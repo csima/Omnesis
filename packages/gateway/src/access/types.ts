@@ -117,8 +117,17 @@ export interface McpToolInvocationAuditInput {
   hostCaller?: HostCallerAudit;
 }
 
+/**
+ * How an agent got the level a call used: a grant naming it, or the
+ * default the person's agents get when no grant names them.
+ */
+export type HostAgentGrantKind = "exact" | "default";
+
 /** One host agent grant a call relied on, with the level revision it read. */
 export interface HostAgentAuthority {
+  /** The agent this grant was read for, `instance:<id>`. */
+  agent: string;
+  grant: HostAgentGrantKind;
   grantId: string;
   levelId: string;
   levelRevision: number;
@@ -156,8 +165,21 @@ export interface HostAgentGrant {
   revokedAt: number | null;
 }
 
+/**
+ * The level every agent of a bound host gets, acting for one person, when no
+ * grant names that agent. A grant naming the agent always wins over it.
+ */
+export interface HostAgentDefault {
+  id: string;
+  connectionId: string;
+  person: string;
+  levelId: string;
+  levelName: string | null;
+  createdAt: number;
+}
+
 export interface HostIdentityOverview {
-  bindings: Array<HostIdentityBinding & { agents: HostAgentGrant[] }>;
+  bindings: Array<HostIdentityBinding & { agents: HostAgentGrant[]; defaults: HostAgentDefault[] }>;
 }
 
 export interface HostIdentityBindingInput {
@@ -182,6 +204,14 @@ export interface HostAgentGrantCreateInput {
 
 export interface HostAgentGrantRevokeInput {
   grantId: string;
+  actorTokenId: string;
+}
+
+/** Set one person's default level on a bound connection, or clear it with `levelId: null`. */
+export interface HostAgentDefaultInput {
+  connectionId: string;
+  person: string;
+  levelId: string | null;
   actorTokenId: string;
 }
 

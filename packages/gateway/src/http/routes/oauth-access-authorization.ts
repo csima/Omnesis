@@ -30,6 +30,8 @@ import {
   accessExecutionReissueBody,
   accessGrantUpdateBody,
   accessHostAgentBody,
+  accessHostAgentDefaultBody,
+  accessHostAgentDefaultQuery,
   accessHostIdentityBody,
   accessLevelCreateBody,
   accessLevelUpdateBody,
@@ -718,6 +720,57 @@ export function mountOAuthAuthorizationRoutes(
         `Host agent ${result.value.agent} on connection ${connectionId.data} given access level ${result.value.levelId}`,
       );
       return c.json({ agent: result.value }, 201);
+    },
+  );
+  // The level a person's agents get when no grant names them, so an agent
+  // host's new agents need not each be granted one by one. It is set like a
+  // grant, and a grant naming an agent always wins over it.
+  app.put(
+    "/admin/access/connections/:id/host-agent-default",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostAgentDefaultBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.setHostAgentDefault({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok || !result.value) {
+        const error = result.ok ? "not-found" : result.error;
+        const status = error === "not-found" ? 404 : error === "invalid-selection" ? 400 : 409;
+        return c.json({ error }, status);
+      }
+      log.info(
+        `Default host agent level on connection ${connectionId.data} set to ${result.value.levelId}`,
+      );
+      return c.json({ default: result.value });
+    },
+  );
+  app.delete(
+    "/admin/access/connections/:id/host-agent-default",
+    noStore,
+    scope.portalAdmin(),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      const query = accessHostAgentDefaultQuery.safeParse(c.req.query());
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      if (!query.success) return c.json({ error: "invalid-selection" }, 400);
+      const result = await access.setHostAgentDefault({
+        connectionId: connectionId.data,
+        person: query.data.person,
+        levelId: null,
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        const status =
+          result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
+        return c.json({ error: result.error }, status);
+      }
+      log.info(`Default host agent level on connection ${connectionId.data} cleared`);
+      return c.json({ cleared: true });
     },
   );
   app.delete("/admin/access/host-agents/:id", noStore, scope.portalAdmin(), async (c) => {

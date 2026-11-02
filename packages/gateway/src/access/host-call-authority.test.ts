@@ -19,6 +19,7 @@ import {
   recordMcpToolInvocationAudit,
   removeHostIdentityBinding,
   revokeHostAgentGrant,
+  setHostAgentDefault,
   setHostIdentityBinding,
   updateAccessLevel,
 } from "./store.js";
@@ -425,5 +426,319 @@ describe("HostCallAuthorizer", () => {
         actorTokenId: ACTOR,
       }),
     ).toEqual({ ok: false, error: "invalid-selection" });
+  });
+
+  describe("a person's default level for agents no grant names", () => {
+    const AGENT_A = "instance:agent-a";
+    const RUN_WORKER = "instance:run-0042";
+
+    function setDefault(levelId: string | null, person = PERSON, connection = connectionId) {
+      return setHostAgentDefault(db, {
+        connectionId: connection,
+        person,
+        levelId,
+        actorTokenId: ACTOR,
+      });
+    }
+
+    function defaultOn(levelId: string, person = PERSON, connection = connectionId): string {
+      const set = setDefault(levelId, person, connection);
+      if (!set.ok || !set.value) throw new Error("the default was not set");
+      return set.value.id;
+    }
+
+    function lastInvocationDetail(): Record<string, unknown> {
+      const row = db
+        .prepare<[string], { detail: string }>(
+          `SELECT detail FROM access_audit_events
+            WHERE event_type = 'mcp-tool-invoked' AND principal_id = ?
+            ORDER BY occurred_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(connectionId);
+      if (!row) throw new Error("no invocation was recorded");
+      return JSON.parse(row.detail) as Record<string, unknown>;
+    }
+
+    function secondConnection(): { id: string; capabilities: AccessGrantCapability[] } {
+      const connection = authorizeInteractiveAccess(db, {
+        selection: {
+          kind: "new-connection",
+          name: "Second fictional agent host",
+          level: {
+            kind: "existing",
+            levelId: level("Second host", [
+              { capability: "direct", sources: { mode: "all", sourceIds: [] } },
+            ]),
+            expectedLevelRevision: 1,
+          },
+        },
+        resource: RESOURCE,
+        scope: defaultAuthorizationScope(),
+      });
+      const token = lookupPrincipalAccessToken(db, connection.tokens.accessToken, RESOURCE);
+      if (!token) throw new Error("the second connection has no live token");
+      const bound = setHostIdentityBinding(db, {
+        connectionId: connection.principalId,
+        issuer: host.issuer,
+        audience: RESOURCE,
+        actorTokenId: ACTOR,
+      });
+      if (!bound.ok) throw new Error(`binding failed: ${bound.error}`);
+      return { id: connection.principalId, capabilities: token.capabilities };
+    }
+
+    it("gives an agent no grant names the person's default", async () => {
+      bind();
+      const defaultId = defaultOn(mailLevel);
+      for (const agent of [AGENT_A, RUN_WORKER]) {
+        await expect(call([agent])).resolves.toMatchObject({
+          kind: "authorized",
+          capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+          audit: {
+            agent,
+            grants: [{ agent, grant: "default", grantId: defaultId, levelId: mailLevel }],
+          },
+        });
+      }
+    });
+
+    it("refuses an unlisted agent when the person has no default", async () => {
+      bind();
+      grant(PLANNER, wideLevel);
+      await expect(call([AGENT_A])).resolves.toEqual({ kind: "refused", reason: "no-grant" });
+    });
+
+    it("lets a grant naming the agent win, lower or higher, still capped by the connection", async () => {
+      bind();
+      const answerAndMail = level("Answer and mail", [
+        { capability: "direct", sources: { mode: "allowlist", sourceIds: ["mail:alpha"] } },
+        {
+          capability: "answer",
+          sources: { mode: "all", sourceIds: [] },
+          release: { mode: "unreviewed" },
+        },
+      ]);
+      defaultOn(wideLevel);
+      grant(RESEARCHER, mailLevel);
+      grant(PLANNER, answerAndMail);
+      await expect(call([RESEARCHER])).resolves.toMatchObject({
+        kind: "authorized",
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+        audit: { grants: [{ agent: RESEARCHER, grant: "exact" }] },
+      });
+      await expect(call([PLANNER])).resolves.toMatchObject({
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+        audit: { grants: [{ agent: PLANNER, grant: "exact" }] },
+      });
+      await expect(call([AGENT_A])).resolves.toMatchObject({
+        capabilities: [
+          rule("direct", "allowlist", ["mail:alpha", "notes:beta"]),
+          rule("notes", "all"),
+        ],
+      });
+
+      defaultOn(answerAndMail);
+      grant(AGENT_A, wideLevel);
+      await expect(call([AGENT_A])).resolves.toMatchObject({
+        capabilities: [
+          rule("direct", "allowlist", ["mail:alpha", "notes:beta"]),
+          rule("notes", "all"),
+        ],
+        audit: { grants: [{ agent: AGENT_A, grant: "exact" }] },
+      });
+      const capped = await call([RUN_WORKER]);
+      expect(capped).toMatchObject({
+        kind: "authorized",
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+      });
+      if (capped.kind !== "authorized") throw new Error("expected an authorized caller");
+      expect(capped.capabilities.map((entry) => entry.capability)).not.toContain("answer");
+    });
+
+    it("cuts a delegated call by each agent's grant or default", async () => {
+      bind();
+      defaultOn(mailLevel);
+      grant(PLANNER, wideLevel);
+      await expect(call([AGENT_A, PLANNER])).resolves.toMatchObject({
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+        audit: {
+          grants: [
+            { agent: AGENT_A, grant: "default" },
+            { agent: PLANNER, grant: "exact" },
+          ],
+        },
+      });
+      await expect(call([PLANNER, AGENT_A])).resolves.toMatchObject({
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+      });
+    });
+
+    it("refuses unlisted agents again once the default is cleared", async () => {
+      bind();
+      defaultOn(mailLevel);
+      expect((await call([AGENT_A])).kind).toBe("authorized");
+      expect(setDefault(null)).toEqual({ ok: true, value: null });
+      await expect(call([AGENT_A])).resolves.toEqual({ kind: "refused", reason: "no-grant" });
+      expect(setDefault(null)).toEqual({ ok: false, error: "not-found" });
+    });
+
+    it("refuses another person, issuer or audience and an expired assertion despite a default", async () => {
+      bind();
+      defaultOn(mailLevel);
+      const mint = (overrides: Partial<Parameters<FictionalAgentHost["mint"]>[0]>) =>
+        authorizer.authorize({
+          connectionId,
+          connectionCapabilities,
+          assertion: host.mint({
+            audience: RESOURCE,
+            person: PERSON,
+            agents: [AGENT_A],
+            ...overrides,
+          }),
+        });
+      await expect(mint({ person: "jamie.lopez@example.com" })).resolves.toEqual({
+        kind: "refused",
+        reason: "no-grant",
+      });
+      await expect(mint({ issuer: "https://agents.example.org" })).resolves.toEqual({
+        kind: "refused",
+        reason: "issuer",
+      });
+      await expect(mint({ audience: "https://other.example.org/mcp" })).resolves.toEqual({
+        kind: "refused",
+        reason: "audience",
+      });
+      await expect(mint({ issuedAt: Math.floor(Date.now() / 1_000) - 300 })).resolves.toEqual({
+        kind: "refused",
+        reason: "expired",
+      });
+      expect((await mint({})).kind).toBe("authorized");
+    });
+
+    it("keeps a default to its own person and its own binding", async () => {
+      bind();
+      defaultOn(mailLevel, "jamie.lopez@example.com");
+      await expect(call([AGENT_A])).resolves.toEqual({ kind: "refused", reason: "no-grant" });
+      expect((await call([AGENT_A], "jamie.lopez@example.com")).kind).toBe("authorized");
+
+      defaultOn(mailLevel);
+      const second = secondConnection();
+      const through = (connection: { id: string; capabilities: AccessGrantCapability[] }) =>
+        authorizer.authorize({
+          connectionId: connection.id,
+          connectionCapabilities: connection.capabilities,
+          assertion: host.mint({ audience: RESOURCE, person: PERSON, agents: [AGENT_A] }),
+        });
+      await expect(through(second)).resolves.toEqual({ kind: "refused", reason: "no-grant" });
+      defaultOn(wideLevel, PERSON, second.id);
+      expect(setDefault(null)).toEqual({ ok: true, value: null });
+      await expect(call([AGENT_A])).resolves.toEqual({ kind: "refused", reason: "no-grant" });
+      expect((await through(second)).kind).toBe("authorized");
+    });
+
+    it("records in the ledger that a call's level came from the default", async () => {
+      bind();
+      const defaultId = defaultOn(mailLevel);
+      const plannerGrant = grant(PLANNER, wideLevel);
+      const authorized = await call([AGENT_A, PLANNER]);
+      if (authorized.kind !== "authorized") throw new Error("expected an authorized caller");
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: authorized.audit }))).toBe(true);
+      expect(lastInvocationDetail()).toMatchObject({
+        hostAgent: AGENT_A,
+        hostDelegators: [PLANNER],
+        hostAgentGrantIds: [defaultId, plannerGrant],
+        hostAgentGrants: [
+          { agent: AGENT_A, grant: "default" },
+          { agent: PLANNER, grant: "exact" },
+        ],
+      });
+    });
+
+    it("fences a defaulted call when the default changes or a grant names the agent", async () => {
+      bind();
+      defaultOn(mailLevel);
+      const first = await call([AGENT_A]);
+      if (first.kind !== "authorized") throw new Error("expected an authorized caller");
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: first.audit }))).toBe(true);
+      grant(AGENT_A, wideLevel);
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: first.audit }))).toBe(false);
+
+      const second = await call([RUN_WORKER]);
+      if (second.kind !== "authorized") throw new Error("expected an authorized caller");
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: second.audit }))).toBe(true);
+      defaultOn(wideLevel);
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: second.audit }))).toBe(false);
+
+      const third = await call([RUN_WORKER]);
+      if (third.kind !== "authorized") throw new Error("expected an authorized caller");
+      setDefault(null);
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: third.audit }))).toBe(false);
+
+      defaultOn(wideLevel);
+      const fourth = await call([RUN_WORKER]);
+      if (fourth.kind !== "authorized") throw new Error("expected an authorized caller");
+      const claimedExact = {
+        ...fourth.audit,
+        grants: fourth.audit.grants.map((entry) => ({ ...entry, grant: "exact" as const })),
+      };
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: claimedExact }))).toBe(false);
+      expect(recordMcpToolInvocationAudit(db, audit({ hostCaller: fourth.audit }))).toBe(true);
+    });
+
+    it("never falls back to the default for an agent whose own grant's level is gone", async () => {
+      bind();
+      defaultOn(wideLevel);
+      grant(RESEARCHER, mailLevel);
+      db.prepare("UPDATE access_levels SET revoked_at = ? WHERE id = ?").run(Date.now(), mailLevel);
+      await expect(call([RESEARCHER])).resolves.toEqual({ kind: "refused", reason: "no-grant" });
+      expect((await call([AGENT_A])).kind).toBe("authorized");
+    });
+
+    it("lists defaults apart from agents and revokes them with the binding", () => {
+      expect(setDefault(mailLevel)).toEqual({ ok: false, error: "host-not-bound" });
+      bind();
+      expect(setDefault(mailLevel, "not a person")).toEqual({
+        ok: false,
+        error: "invalid-selection",
+      });
+      expect(setDefault("00000000-0000-4000-8000-00000000ffff")).toEqual({
+        ok: false,
+        error: "inactive-grant",
+      });
+      grant(RESEARCHER, mailLevel);
+      const id = defaultOn(wideLevel, PERSON.toUpperCase());
+      expect(defaultOn(wideLevel)).toBe(id);
+      expect(listHostIdentity(db).bindings[0]).toMatchObject({
+        agents: [{ agent: RESEARCHER }],
+        defaults: [{ id, person: PERSON, levelId: wideLevel, levelName: "Mail and notes reader" }],
+      });
+      expect(listHostIdentity(db).bindings[0]?.agents).toHaveLength(1);
+      expect(deleteAccessLevel(db, { levelId: wideLevel, actorTokenId: ACTOR })).toEqual({
+        ok: false,
+        error: "level-in-use",
+      });
+      expect(
+        createHostAgentGrant(db, {
+          connectionId,
+          person: PERSON,
+          agent: "*",
+          levelId: wideLevel,
+          actorTokenId: ACTOR,
+        }),
+      ).toEqual({ ok: false, error: "invalid-selection" });
+
+      expect(
+        setHostIdentityBinding(db, {
+          connectionId,
+          issuer: "https://agents.example.org",
+          audience: RESOURCE,
+          actorTokenId: ACTOR,
+        }).ok,
+      ).toBe(true);
+      expect(listHostIdentity(db).bindings[0]?.defaults).toEqual([]);
+      defaultOn(wideLevel);
+      expect(removeHostIdentityBinding(db, { connectionId, actorTokenId: ACTOR }).ok).toBe(true);
+      expect(deleteAccessLevel(db, { levelId: wideLevel, actorTokenId: ACTOR }).ok).toBe(true);
+    });
   });
 });

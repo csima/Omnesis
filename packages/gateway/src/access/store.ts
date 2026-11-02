@@ -77,6 +77,7 @@ export {
   listHostIdentity,
   removeHostIdentityBinding,
   revokeHostAgentGrant,
+  setHostAgentDefault,
   setHostIdentityBinding,
 } from "./store-host-identity.js";
 export type {

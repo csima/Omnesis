@@ -28,6 +28,8 @@
 //   requests still waiting on the owner.
 // - `access/connect-dialog.js` — `ConnectAgentDialog`, the MCP server address
 //   and the short-code entry that opens a pending request for review.
+// - `access/host-agents.js` — `HostAgents`, the connections bound to an agent
+//   host, their agents' levels and each person's default for other agents.
 // - `access/name-fields.js`, `access/terms.js`, `access/shared.js` — helpers
 //   those modules have in common.
 //
@@ -58,6 +60,7 @@ import {
   authorizationStatusNotice,
 } from "./access/authorization.js";
 import { ConnectAgentDialog } from "./access/connect-dialog.js";
+import { HostAgents } from "./access/host-agents.js";
 import { LevelEditorPage, NewLevelPage } from "./access/level-editor.js";
 import { MoveConnectionDialog } from "./access/move-dialog.js";
 import { LEVEL_NAME_TAKEN_MESSAGE } from "./access/name-fields.js";
@@ -668,6 +671,8 @@ export function AccessView({
               onRemove: askRemoval,
             }}
           />`}
+
+      ${overviewReady ? html`<${HostAgents} levels=${levels} entries=${entries} />` : null}
 
       ${connectVisible && html`<${ConnectAgentDialog} oauth=${overview.oauth} onClose=${closeConnect} />`}
 

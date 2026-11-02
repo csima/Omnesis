@@ -424,6 +424,21 @@
           the calling agent, the agents that asked it and the agent levels it used.
         </p>
         <p>
+          A host that starts agents often, including one-off workers, can give a person's agents a
+          default instead of a level each. The default is an access level that every agent of the
+          host acting for that person gets when you have not given that agent a level of its own. A
+          level given to an agent by name always wins over the default, even when it is narrower.
+          The default changes nothing about the checks above: it applies only to an assertion that
+          passes every one of them and whose <code>sub</code> is that person, it belongs to one
+          binding, and the connection's own level stays its ceiling. In a delegated call, each agent
+          in the chain without a level of its own is cut by the default. Clearing the default
+          refuses those agents again from the next call, and a call already running when the default
+          changes, or when an agent it covered is given a level of its own, releases nothing. The
+          ledger entry of each tool call lists, in <code>hostAgentGrants</code>, every agent in the
+          chain with <code>"grant": "exact"</code> for a level given by name or
+          <code>"grant": "default"</code> for the person's default.
+        </p>
+        <p>
           The binding and the agents' levels are set from a portal session: bind a connection with
           <code>PUT /admin/access/connections/&lt;connection&gt;/host-identity</code> and a body of
           <code
@@ -438,6 +453,17 @@
           with <code>GET /admin/access/host-identity</code>. Changing the issuer or audience, or
           removing the binding with <code>DELETE</code> on the binding, revokes every agent's level,
           and a level that an agent still uses cannot be deleted.
+        </p>
+        <p>
+          Set a person's default under Settings → Access → Agent hosts, with
+          <strong>Default for other agents</strong>, or with
+          <code>PUT /admin/access/connections/&lt;connection&gt;/host-agent-default</code> and
+          <code>{"person": "maya.reeves@example.com", "levelId": "&lt;level&gt;"}</code>. Setting it
+          again replaces it. Clear it by choosing <strong>No access</strong>, or with
+          <code>DELETE</code> on the same path and <code>?person=maya.reeves%40example.com</code>.
+          <code>GET /admin/access/host-identity</code> lists each binding's defaults under
+          <code>defaults</code>, apart from its agents. Changing the issuer or audience, or removing
+          the binding, clears its defaults with its agents' levels.
         </p>
 
         <h2 id="privacy-policy">Privacy policy</h2>

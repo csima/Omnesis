@@ -90,7 +90,9 @@ function callerAudit(
     agent: caller.agent,
     delegators: caller.delegators,
     task: caller.task,
-    grants: grants.map(({ grantId, levelId, levelRevision }) => ({
+    grants: grants.map(({ agent, grant, grantId, levelId, levelRevision }) => ({
+      agent,
+      grant,
       grantId,
       levelId,
       levelRevision,
