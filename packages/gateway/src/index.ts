@@ -1684,6 +1684,7 @@ const indexerLifecycle = new IndexerLifecycle({
   indexDb,
   configDir,
   memoryBudget,
+  isUserActive: () => scheduler.isAdmissionPaused(),
   initialModelInfo: {
     name: embeddingModelName,
     path: embeddingModelPath,
