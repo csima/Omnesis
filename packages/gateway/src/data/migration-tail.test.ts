@@ -68,6 +68,9 @@ const WOUND_BACK = [
   // 208 rebuilds the host agent grants that undoHostAgentGrants drops, so 206
   // recreates them in the shape 208 relaxes.
   208,
+  // 209 recreates the date pending-age index that 203 drops during the replay;
+  // an install below the tail had it from migration 100.
+  209,
 ];
 
 let dir: string;

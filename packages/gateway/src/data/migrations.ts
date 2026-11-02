@@ -64,6 +64,7 @@ import { queueTranscriptEviction } from "../brain/transcript-eviction.js";
 import {
   createExtractedDatesTables,
   createDatesUnprocessedIndex,
+  createDatesPendingAgeIndex,
   addDateMentions,
   rescanIsoDateTimeMentions,
   rescanSameDaySpansAndRestCompounds,
@@ -4893,6 +4894,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 208,
     description: "host agents denied by name, and no host access left behind a removed connection",
     up: (db) => allowHostAgentDenials(db),
+  },
+  {
+    version: 209,
+    description: "index the date pass's pending documents by arrival again",
+    up: createDatesPendingAgeIndex,
   },
 ];
 
