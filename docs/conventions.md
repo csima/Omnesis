@@ -528,6 +528,15 @@ id < ?)`: with statistics the planner splits that OR into a multi-index OR
 and sorts the whole match. For mixed directions, bound the leading column and
 exclude the cursor's tie: `ts <= ? AND NOT (ts = ? AND id <= ?)`.
 
+**A long read holds the WAL open.** The writer checkpoints between ops in
+small pieces and rewinds the WAL once it passes `journal_size_limit`
+(`workers/wal-checkpoint.ts`), but it can rewind only at an instant when no
+reader is mid-statement on it; it waits about 100 ms for one, then backs off.
+A statement or open iterator that runs for a minute on an `omnesis.db` read
+handle therefore lets the WAL grow by a minute of writes, and back-to-back long
+scans let it grow for as long as they last. Page a full-table read by keyset in
+separate statements rather than iterating it under one snapshot.
+
 **A new source is a new load.** A source that emits an unusual number of links,
 people or documents per item changes the arithmetic every consumer of that data
 assumed. Before enabling one, look at what it costs the writer.
