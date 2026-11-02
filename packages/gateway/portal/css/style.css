@@ -1252,7 +1252,10 @@ a:hover { text-decoration: underline; }
   padding: 8px 14px;
   font-size: 12.5px;
 }
-.access-host-agent code { overflow-wrap: anywhere; }
+.access-host-agent { align-items: center; }
+.access-host-agent code { overflow-wrap: anywhere; min-width: 0; }
+.access-host-agent-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.access-host-remove { padding: 5px 10px; font-size: 12px; }
 .access-host-agent + .access-host-agent { border-top: 1px solid var(--border-light); }
 .access-host-default,
 .access-host-new {

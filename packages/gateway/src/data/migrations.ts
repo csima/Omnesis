@@ -133,6 +133,7 @@ import { pruneInvalidEmailAliases } from "./prune-invalid-email-aliases.js";
 import { runSchemaSetup } from "./schema.js";
 import { compactKnowledgeJournal } from "./migration-205-knowledge-journal.js";
 import { createHostAgentGrantTables } from "./migration-206-host-agent-grants.js";
+import { allowHostAgentDenials } from "./migration-208-host-agent-denials.js";
 import {
   createLegacyBriefClaimsTables,
   createLegacyBriefTables,
@@ -4887,6 +4888,11 @@ export const MIGRATIONS: readonly Migration[] = [
     description:
       "mark stored web pages and visits due a background redaction pass with the shaped rules",
     up: markWebRedactionDue,
+  },
+  {
+    version: 208,
+    description: "host agents denied by name, and no host access left behind a removed connection",
+    up: (db) => allowHostAgentDenials(db),
   },
 ];
 

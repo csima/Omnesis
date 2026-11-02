@@ -153,13 +153,17 @@ export interface HostIdentityBinding {
   updatedAt: number;
 }
 
-/** One agent of a bound host, acting for one person, on one access level. */
+/**
+ * One agent of a bound host, acting for one person, on one access level, or
+ * denied any access when `levelId` is null. A grant naming the agent, a denial
+ * included, always wins over the person's default.
+ */
 export interface HostAgentGrant {
   id: string;
   connectionId: string;
   person: string;
   agent: string;
-  levelId: string;
+  levelId: string | null;
   levelName: string | null;
   createdAt: number;
   revokedAt: number | null;
@@ -194,17 +198,24 @@ export interface HostIdentityUnbindInput {
   actorTokenId: string;
 }
 
+/** `levelId: null` denies the agent any access, whatever the person's default. */
 export interface HostAgentGrantCreateInput {
   connectionId: string;
   person: string;
   agent: string;
-  levelId: string;
+  levelId: string | null;
   actorTokenId: string;
 }
 
+/**
+ * Revoke one agent's grant. While the person has a default the agent would
+ * then get it, so the revocation is refused as `default-would-apply` unless
+ * `fallback` says the default is meant.
+ */
 export interface HostAgentGrantRevokeInput {
   grantId: string;
   actorTokenId: string;
+  fallback?: "default";
 }
 
 /** Set one person's default level on a bound connection, or clear it with `levelId: null`. */

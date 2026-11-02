@@ -172,6 +172,7 @@ import {
   removeHostIdentityBinding,
   revokeHostAgentGrant,
   setHostAgentDefault,
+  setHostAgentGrant,
   setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
@@ -1097,6 +1098,8 @@ export const writerHandlers = {
     revokeHostAgentGrant(db, input),
   "access.hostAgentDefaultSet": (db: Db, input: HostAgentDefaultInput) =>
     setHostAgentDefault(db, input),
+  "access.hostAgentGrantSet": (db: Db, input: HostAgentGrantCreateInput) =>
+    setHostAgentGrant(db, input),
   "access.revoke": (db: Db, input: AccessRevocationInput) => revokeAccessEntity(db, input),
   "access.mcpInvocationAudit": (db: Db, input: McpToolInvocationAuditInput): boolean =>
     recordMcpToolInvocationAudit(db, input),

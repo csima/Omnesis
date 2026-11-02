@@ -439,6 +439,21 @@
           <code>"grant": "default"</code> for the person's default.
         </p>
         <p>
+          While a person has a default, the host's <code>sub</code> is the only thing that decides
+          which of that person's agents the default reaches: any agent of the host that the host
+          says acts for that person, and that you have not named, gets it. Set a default only for a
+          person whose agents the host attributes correctly, and name an agent to treat it
+          differently. To keep one agent out, deny it: an agent given <strong>No access</strong> by
+          name gets nothing, whatever the default, and a call it takes part in is refused as
+          <code>denied</code>. Removing an agent's level or denial while its person has a default
+          would hand the agent that default, so Omnesis refuses the removal unless you say the
+          default is meant. Agents are named in lower case, as <code>instance:</code> followed by a
+          letter and then letters, digits and hyphens, up to 41 characters; a call from an agent
+          that a grant names only in other letter case is refused as
+          <code>agent-name-mismatch</code>
+          rather than given the default.
+        </p>
+        <p>
           The binding and the agents' levels are set from a portal session: bind a connection with
           <code>PUT /admin/access/connections/&lt;connection&gt;/host-identity</code> and a body of
           <code
@@ -449,21 +464,31 @@
           <code
             >{"person": "maya.reeves@example.com", "agent": "instance:researcher-1", "levelId":
             "&lt;level&gt;"}</code
-          >; revoke one with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>; and list them
-          with <code>GET /admin/access/host-identity</code>. Changing the issuer or audience, or
-          removing the binding with <code>DELETE</code> on the binding, revokes every agent's level,
-          and a level that an agent still uses cannot be deleted.
+          >, or <code>"levelId": null</code> to deny it; change an agent's level or denial in one
+          step with <code>PUT</code> on the same path and the same body; revoke one with
+          <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>, which answers
+          <code>409</code> with <code>default-would-apply</code> while its person has a default and
+          revokes it onto the default only with <code>?fallback=default</code>; and list them with
+          <code>GET /admin/access/host-identity</code>. Changing the issuer or audience, or removing
+          the binding with <code>DELETE</code> on the binding, revokes every agent's level, and a
+          level that an agent still uses cannot be deleted. Removing the connection does the same,
+          and drops its binding.
         </p>
         <p>
-          Set a person's default under Settings → Access → Agent hosts, with
+          Under Settings → Access → Agent hosts, each agent has its level or
+          <strong>No access</strong>, and <strong>Remove</strong> asks whether the agent should get
+          its person's default or be denied. Set a person's default there with
           <strong>Default for other agents</strong>, or with
           <code>PUT /admin/access/connections/&lt;connection&gt;/host-agent-default</code> and
-          <code>{"person": "maya.reeves@example.com", "levelId": "&lt;level&gt;"}</code>. Setting it
-          again replaces it. Clear it by choosing <strong>No access</strong>, or with
-          <code>DELETE</code> on the same path and <code>?person=maya.reeves%40example.com</code>.
+          <code>{"person": "maya.reeves@example.com", "levelId": "&lt;level&gt;"}</code>; the person
+          is an email address. Setting it again replaces it. Clear it by choosing
+          <strong>No access</strong>, or with <code>DELETE</code> on the same path and
+          <code>?person=maya.reeves%40example.com</code>.
           <code>GET /admin/access/host-identity</code> lists each binding's defaults under
-          <code>defaults</code>, apart from its agents. Changing the issuer or audience, or removing
-          the binding, clears its defaults with its agents' levels.
+          <code>defaults</code>, apart from its agents, and only for connections that are still
+          live. Changing the issuer or audience, removing the binding or removing the connection
+          clears its defaults with its agents' levels. A default is cleared only on its own path,
+          never with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>.
         </p>
 
         <h2 id="privacy-policy">Privacy policy</h2>

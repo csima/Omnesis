@@ -570,4 +570,94 @@ describe("MCP through an agent host that says who is calling", () => {
     expect(await coverage([AGENT_B])).toEqual([mailSourceId]);
     expect(await clearDefault()).toMatchObject({ status: 404 });
   }, 60_000);
+
+  test("never widens a removed agent to the default unasked, and denies an agent by name", async () => {
+    await setDefault(bothLevel);
+    const narrow = await grant("instance:agent-c", mailLevel);
+    expect(await coverage(["instance:agent-c"])).toEqual([mailSourceId]);
+    const refused = await portalRequest(
+      harness.gatewayUrl,
+      authorized.portal,
+      "DELETE",
+      `/admin/access/host-agents/${narrow}`,
+    );
+    expect(refused).toMatchObject({ status: 409, body: { error: "default-would-apply" } });
+    expect(await coverage(["instance:agent-c"])).toEqual([mailSourceId]);
+    const meant = await portalRequest(
+      harness.gatewayUrl,
+      authorized.portal,
+      "DELETE",
+      `/admin/access/host-agents/${narrow}?fallback=default`,
+    );
+    expect(meant).toMatchObject({ status: 200, body: { revoked: true } });
+    expect(await coverage(["instance:agent-c"])).toEqual([mailSourceId, otherSourceId].sort());
+
+    const denied = await portalJson<{ agent: { agent: string; levelId: string | null } }>(
+      harness.gatewayUrl,
+      authorized.portal,
+      `/admin/access/connections/${authorized.principalId}/host-agents`,
+      { person: PERSON, agent: "instance:agent-c", levelId: null },
+      "PUT",
+    );
+    expect(denied.agent).toMatchObject({ agent: "instance:agent-c", levelId: null });
+    expect(await refusedWith(["instance:agent-c"])).toBe("denied");
+    expect(await refusedWith([AGENT_A, "instance:agent-c"])).toBe("denied");
+    expect(await coverage([AGENT_A])).toEqual([mailSourceId, otherSourceId].sort());
+
+    await grant("instance:Agent-D", mailLevel);
+    expect(await coverage(["instance:agent-d"])).toEqual([mailSourceId]);
+    expect(await refusedWith(["instance:Agent-D"])).toBe("agent-name-mismatch");
+
+    const db = new Database(harness.getDbPath(), { readonly: true });
+    try {
+      const denial = db
+        .prepare<[string], { detail: string }>(
+          `SELECT detail FROM access_audit_events
+            WHERE event_type = 'host-agent-denied' AND principal_id = ?
+            ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+        )
+        .get(authorized.principalId);
+      expect(JSON.parse(denial!.detail)).toMatchObject({
+        person: PERSON,
+        agent: "instance:agent-c",
+        levelId: null,
+      });
+    } finally {
+      db.close();
+    }
+  }, 90_000);
+
+  test("takes the host access with it when the connection is removed", async () => {
+    expect(await coverage([AGENT_A])).toEqual([mailSourceId, otherSourceId].sort());
+    await portalJson(harness.gatewayUrl, authorized.portal, "/portal/api/access/revoke", {
+      kind: "principal",
+      id: authorized.principalId,
+    });
+    const listed = await portalJson<{ bindings: unknown[] }>(
+      harness.gatewayUrl,
+      authorized.portal,
+      "/admin/access/host-identity",
+    );
+    expect(listed.bindings).toEqual([]);
+    const db = new Database(harness.getDbPath(), { readonly: true });
+    try {
+      expect(
+        db
+          .prepare<[string], { live: number }>(
+            `SELECT COUNT(*) AS live FROM access_host_agent_grants
+              WHERE principal_id = ? AND revoked_at IS NULL`,
+          )
+          .get(authorized.principalId)?.live,
+      ).toBe(0);
+      expect(
+        db
+          .prepare<[string], { bound: number }>(
+            "SELECT COUNT(*) AS bound FROM access_host_identity_bindings WHERE principal_id = ?",
+          )
+          .get(authorized.principalId)?.bound,
+      ).toBe(0);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
 });

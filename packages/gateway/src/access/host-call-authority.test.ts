@@ -18,8 +18,10 @@ import {
   lookupPrincipalAccessToken,
   recordMcpToolInvocationAudit,
   removeHostIdentityBinding,
+  revokeAccessEntity,
   revokeHostAgentGrant,
   setHostAgentDefault,
+  setHostAgentGrant,
   setHostIdentityBinding,
   updateAccessLevel,
 } from "./store.js";
@@ -739,6 +741,360 @@ describe("HostCallAuthorizer", () => {
       defaultOn(wideLevel);
       expect(removeHostIdentityBinding(db, { connectionId, actorTokenId: ACTOR }).ok).toBe(true);
       expect(deleteAccessLevel(db, { levelId: wideLevel, actorTokenId: ACTOR }).ok).toBe(true);
+    });
+
+    function events(prefix: string): Array<{ type: string; detail: Record<string, unknown> }> {
+      return db
+        .prepare<[string], { event_type: string; detail: string | null }>(
+          `SELECT event_type, detail FROM access_audit_events
+            WHERE event_type LIKE ? ORDER BY occurred_at, rowid`,
+        )
+        .all(`${prefix}%`)
+        .map((row) => ({
+          type: row.event_type,
+          detail: JSON.parse(row.detail ?? "{}") as Record<string, unknown>,
+        }));
+    }
+
+    function deny(agent: string, person = PERSON): string {
+      const created = createHostAgentGrant(db, {
+        connectionId,
+        person,
+        agent,
+        levelId: null,
+        actorTokenId: ACTOR,
+      });
+      if (!created.ok) throw new Error(`deny failed: ${created.error}`);
+      return created.value.id;
+    }
+
+    function fenced(authority: Awaited<ReturnType<typeof call>>): boolean {
+      if (authority.kind !== "authorized") throw new Error("expected an authorized caller");
+      return recordMcpToolInvocationAudit(db, audit({ hostCaller: authority.audit }));
+    }
+
+    it("refuses to widen an agent to the default when its grant is revoked, unless asked to", async () => {
+      bind();
+      const fallback = defaultOn(wideLevel);
+      const narrow = grant(RESEARCHER, mailLevel);
+      expect(revokeHostAgentGrant(db, { grantId: narrow, actorTokenId: ACTOR })).toEqual({
+        ok: false,
+        error: "default-would-apply",
+      });
+      await expect(call([RESEARCHER])).resolves.toMatchObject({
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+        audit: { grants: [{ grant: "exact", grantId: narrow }] },
+      });
+      expect(
+        revokeHostAgentGrant(db, { grantId: narrow, actorTokenId: ACTOR, fallback: "default" }),
+      ).toEqual({ ok: true, value: null });
+      await expect(call([RESEARCHER])).resolves.toMatchObject({
+        capabilities: [
+          rule("direct", "allowlist", ["mail:alpha", "notes:beta"]),
+          rule("notes", "all"),
+        ],
+        audit: { grants: [{ grant: "default", grantId: fallback }] },
+      });
+      expect(events("host-agent-revoked").at(-1)?.detail).toMatchObject({
+        hostAgentGrantId: narrow,
+        person: PERSON,
+        agent: RESEARCHER,
+        fallbackHostAgentGrantId: fallback,
+      });
+
+      setDefault(null);
+      const unwidened = grant(PLANNER, mailLevel);
+      expect(revokeHostAgentGrant(db, { grantId: unwidened, actorTokenId: ACTOR }).ok).toBe(true);
+    });
+
+    it("denies one agent by name, over the default and in any chain, and audits the denial", async () => {
+      bind();
+      defaultOn(wideLevel);
+      const denial = deny(RESEARCHER);
+      await expect(call([RESEARCHER])).resolves.toEqual({ kind: "refused", reason: "denied" });
+      await expect(call([AGENT_A, RESEARCHER])).resolves.toEqual({
+        kind: "refused",
+        reason: "denied",
+      });
+      expect((await call([AGENT_A])).kind).toBe("authorized");
+      expect(events("host-agent-denied")).toEqual([
+        {
+          type: "host-agent-denied",
+          detail: { hostAgentGrantId: denial, person: PERSON, agent: RESEARCHER, levelId: null },
+        },
+      ]);
+      expect(listHostIdentity(db).bindings[0]?.agents).toEqual([
+        expect.objectContaining({ id: denial, agent: RESEARCHER, levelId: null, levelName: null }),
+      ]);
+
+      const replaced = setHostAgentGrant(db, {
+        connectionId,
+        person: PERSON,
+        agent: RESEARCHER,
+        levelId: mailLevel,
+        actorTokenId: ACTOR,
+      });
+      expect(replaced).toMatchObject({
+        ok: true,
+        value: { agent: RESEARCHER, levelId: mailLevel },
+      });
+      await expect(call([RESEARCHER])).resolves.toMatchObject({
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+      });
+      expect(events("host-agent-granted").at(-1)?.detail).toMatchObject({
+        replacedHostAgentGrantId: denial,
+        levelId: mailLevel,
+      });
+      setHostAgentGrant(db, {
+        connectionId,
+        person: PERSON,
+        agent: RESEARCHER,
+        levelId: null,
+        actorTokenId: ACTOR,
+      });
+      await expect(call([RESEARCHER])).resolves.toEqual({ kind: "refused", reason: "denied" });
+    });
+
+    it("fences a defaulted call once its agent is denied", async () => {
+      bind();
+      defaultOn(wideLevel);
+      const running = await call([AGENT_A]);
+      expect(fenced(running)).toBe(true);
+      deny(AGENT_A);
+      expect(fenced(running)).toBe(false);
+    });
+
+    it("names a grant's agent in lower case and refuses a name the host cannot send", async () => {
+      bind();
+      defaultOn(wideLevel);
+      const mixed = createHostAgentGrant(db, {
+        connectionId,
+        person: PERSON,
+        agent: " instance:Researcher-1 ",
+        levelId: mailLevel,
+        actorTokenId: ACTOR,
+      });
+      expect(mixed).toMatchObject({ ok: true, value: { agent: RESEARCHER } });
+      await expect(call([RESEARCHER])).resolves.toMatchObject({
+        capabilities: [rule("direct", "allowlist", ["mail:alpha"])],
+        audit: { grants: [{ grant: "exact" }] },
+      });
+      for (const agent of [
+        "*",
+        " * ",
+        "*\n",
+        "instance:*",
+        "instance:agent-a*",
+        "instance:1-agent",
+        "instance:a",
+        "instance:agent.a",
+        "instance:agent_a",
+        `instance:a${"b".repeat(41)}`,
+        "agent-a",
+      ]) {
+        expect(
+          createHostAgentGrant(db, {
+            connectionId,
+            person: PERSON,
+            agent,
+            levelId: mailLevel,
+            actorTokenId: ACTOR,
+          }),
+        ).toEqual({ ok: false, error: "invalid-selection" });
+      }
+    });
+
+    it("refuses an agent a grant names only in other letter case instead of giving it the default", async () => {
+      bind();
+      defaultOn(wideLevel);
+      db.prepare(
+        `INSERT INTO access_host_agent_grants (id, principal_id, person, agent, level_id, created_at)
+         VALUES ('00000000-0000-4000-8000-0000000000c1', ?, ?, 'instance:Researcher-1', ?, 1)`,
+      ).run(connectionId, PERSON, mailLevel);
+      await expect(call([RESEARCHER])).resolves.toEqual({
+        kind: "refused",
+        reason: "agent-name-mismatch",
+      });
+      grant(PLANNER, mailLevel);
+      await expect(call(["instance:Planner-7"])).resolves.toEqual({
+        kind: "refused",
+        reason: "agent-name-mismatch",
+      });
+
+      const running = await call([AGENT_A]);
+      expect(fenced(running)).toBe(true);
+      db.prepare(
+        `INSERT INTO access_host_agent_grants (id, principal_id, person, agent, level_id, created_at)
+         VALUES ('00000000-0000-4000-8000-0000000000c2', ?, ?, 'instance:AGENT-A', ?, 1)`,
+      ).run(connectionId, PERSON, mailLevel);
+      expect(fenced(running)).toBe(false);
+    });
+
+    it("never lets a default, a grant or the clear route touch the other's rows", async () => {
+      bind();
+      const fallback = defaultOn(wideLevel);
+      expect(revokeHostAgentGrant(db, { grantId: fallback, actorTokenId: ACTOR })).toEqual({
+        ok: false,
+        error: "not-found",
+      });
+      expect(
+        revokeHostAgentGrant(db, { grantId: fallback, actorTokenId: ACTOR, fallback: "default" }),
+      ).toEqual({ ok: false, error: "not-found" });
+      expect((await call([AGENT_A])).kind).toBe("authorized");
+      expect(events("host-agent-revoked")).toEqual([]);
+    });
+
+    it("releases host access when the connection is removed, defaults included", async () => {
+      bind();
+      const fallback = defaultOn(wideLevel);
+      grant(RESEARCHER, mailLevel);
+      const running = await call([AGENT_A]);
+      expect(
+        revokeAccessEntity(db, { kind: "principal", id: connectionId, actorTokenId: ACTOR }),
+      ).toBe(true);
+      expect(
+        db
+          .prepare<[string], { live: number }>(
+            "SELECT COUNT(*) AS live FROM access_host_agent_grants WHERE principal_id = ? AND revoked_at IS NULL",
+          )
+          .get(connectionId)?.live,
+      ).toBe(0);
+      expect(listHostIdentity(db).bindings).toEqual([]);
+      expect(fenced(running)).toBe(false);
+      expect(deleteAccessLevel(db, { levelId: wideLevel, actorTokenId: ACTOR }).ok).toBe(true);
+      expect(events("host-identity-unbound").at(-1)?.detail).toEqual({
+        reason: "connection-removed",
+      });
+      expect(fallback).toBeTruthy();
+    });
+
+    it("releases host access when the connection's last grant is revoked", () => {
+      bind();
+      defaultOn(wideLevel);
+      expect(revokeAccessEntity(db, { kind: "grant", id: grantId, actorTokenId: ACTOR })).toBe(
+        true,
+      );
+      expect(
+        db
+          .prepare<[string], { bound: number }>(
+            "SELECT COUNT(*) AS bound FROM access_host_identity_bindings WHERE principal_id = ?",
+          )
+          .get(connectionId)?.bound,
+      ).toBe(0);
+      expect(setDefault(null)).toEqual({ ok: false, error: "not-found" });
+    });
+
+    it("hides and still clears a default left on a connection removed before it was released", () => {
+      bind();
+      defaultOn(wideLevel);
+      db.prepare("UPDATE access_principals SET revoked_at = 1 WHERE id = ?").run(connectionId);
+      expect(listHostIdentity(db).bindings).toEqual([]);
+      expect(setDefault(wideLevel)).toEqual({ ok: false, error: "not-found" });
+      expect(setDefault(null)).toEqual({ ok: true, value: null });
+      expect(deleteAccessLevel(db, { levelId: wideLevel, actorTokenId: ACTOR }).ok).toBe(true);
+    });
+
+    it("names the person in the audit of a default set, replaced and cleared", () => {
+      bind();
+      const first = defaultOn(mailLevel);
+      const second = defaultOn(wideLevel);
+      setDefault(null);
+      expect(events("host-agent-default")).toEqual([
+        {
+          type: "host-agent-default-set",
+          detail: { hostAgentGrantId: first, person: PERSON, levelId: mailLevel },
+        },
+        {
+          type: "host-agent-default-set",
+          detail: {
+            hostAgentGrantId: second,
+            person: PERSON,
+            levelId: wideLevel,
+            replacedHostAgentGrantId: first,
+          },
+        },
+        {
+          type: "host-agent-default-cleared",
+          detail: { hostAgentGrantId: second, person: PERSON, levelId: wideLevel },
+        },
+      ]);
+    });
+
+    it("sets a default only for an email address", () => {
+      bind();
+      for (const person of [
+        "*",
+        "maya",
+        "maya@",
+        "@example.com",
+        "maya@example",
+        "a b@example.com",
+      ]) {
+        expect(setDefault(mailLevel, person)).toEqual({ ok: false, error: "invalid-selection" });
+      }
+      expect(setDefault(mailLevel, "Maya.Reeves+agents@Example.com")).toMatchObject({
+        ok: true,
+        value: { person: "maya.reeves+agents@example.com" },
+      });
+    });
+
+    it("never lets an actor that only looks like an agent reach the default", async () => {
+      bind();
+      defaultOn(wideLevel);
+      const raw = (claims: Record<string, unknown>) =>
+        authorizer.authorize({
+          connectionId,
+          connectionCapabilities,
+          assertion: host.mint({ audience: RESOURCE, person: PERSON, agents: [], claims }),
+        });
+      for (const act of [
+        { sub: "*" },
+        { sub: "instance:*" },
+        { sub: " instance:agent-a" },
+        { sub: "instance:agent-a\n" },
+        { sub: "INSTANCE:agent-a" },
+        { sub: "instance\uff1aagent-a" },
+        { sub: "instance:agent\u2010a" },
+        { sub: "instance:" },
+        [{ sub: AGENT_A }],
+        { sub: AGENT_A, act: { sub: "*" } },
+        { sub: AGENT_A, act: "instance:agent-b" },
+        {},
+        undefined,
+      ]) {
+        await expect(raw({ act })).resolves.toEqual({ kind: "refused", reason: "malformed" });
+      }
+      for (const sub of [
+        "maya.reeves@example.com\u200b",
+        "maya.reeves@ex\u0430mple.com",
+        "",
+        42,
+        null,
+      ]) {
+        await expect(raw({ sub, act: { sub: AGENT_A } })).resolves.toEqual({
+          kind: "refused",
+          reason: "malformed",
+        });
+      }
+      expect((await raw({ sub: ` ${PERSON.toUpperCase()} `, act: { sub: AGENT_A } })).kind).toBe(
+        "authorized",
+      );
+      await expect(raw({ sub: "*", act: { sub: AGENT_A } })).resolves.toEqual({
+        kind: "refused",
+        reason: "no-grant",
+      });
+    });
+
+    it("keeps a running default call through unrelated grants, but not through a new default", async () => {
+      bind();
+      defaultOn(wideLevel);
+      const running = await call([AGENT_A]);
+      const other = grant(AGENT_A, mailLevel, "jamie.lopez@example.com");
+      expect(fenced(running)).toBe(true);
+      revokeHostAgentGrant(db, { grantId: other, actorTokenId: ACTOR });
+      setDefault(null);
+      defaultOn(wideLevel);
+      expect(fenced(running)).toBe(false);
     });
   });
 });

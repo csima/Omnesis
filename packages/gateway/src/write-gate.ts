@@ -132,6 +132,7 @@ import {
   removeHostIdentityBinding,
   revokeHostAgentGrant,
   setHostAgentDefault,
+  setHostAgentGrant,
   setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
@@ -1320,6 +1321,9 @@ export interface WriteGate extends KnowledgeWriteGate {
   setHostAgentDefault(
     input: HostAgentDefaultInput,
   ): Promise<AccessMutationResult<HostAgentDefault | null>>;
+  setHostAgentGrant(
+    input: HostAgentGrantCreateInput,
+  ): Promise<AccessMutationResult<HostAgentGrant>>;
   revokeAccessEntity(input: AccessRevocationInput): Promise<boolean>;
   recordMcpToolInvocationAudit(input: McpToolInvocationAuditInput): Promise<boolean>;
   touchPrincipalCredentialUsageBatch(
@@ -2559,6 +2563,7 @@ export function writeGateFromCall(call: WriterCallFn): WriteGate {
     createHostAgentGrant: (input) => call("access.hostAgentGrantCreate", [input]),
     revokeHostAgentGrant: (input) => call("access.hostAgentGrantRevoke", [input]),
     setHostAgentDefault: (input) => call("access.hostAgentDefaultSet", [input]),
+    setHostAgentGrant: (input) => call("access.hostAgentGrantSet", [input]),
     revokeAccessEntity: (input) => call("access.revoke", [input]),
     recordMcpToolInvocationAudit: (input) => call("access.mcpInvocationAudit", [input]),
     touchPrincipalCredentialUsageBatch: (rows) => call("access.credentialUsageTouchBatch", [rows]),
@@ -3163,6 +3168,7 @@ export function directWriteGate(db: Db): WriteGate {
     createHostAgentGrant: async (input) => createHostAgentGrant(db, input),
     revokeHostAgentGrant: async (input) => revokeHostAgentGrant(db, input),
     setHostAgentDefault: async (input) => setHostAgentDefault(db, input),
+    setHostAgentGrant: async (input) => setHostAgentGrant(db, input),
     revokeAccessEntity: async (input) => revokeAccessEntity(db, input),
     recordMcpToolInvocationAudit: async (input) => recordMcpToolInvocationAudit(db, input),
     touchPrincipalCredentialUsageBatch: async (rows) => {

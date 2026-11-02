@@ -238,6 +238,11 @@ export class AccessService {
     return this.writer.revokeHostAgentGrant(input);
   }
 
+  /** Give one agent its level, or deny it with `levelId: null`, replacing the grant it has. */
+  setHostAgent(input: HostAgentGrantCreateInput) {
+    return this.writer.setHostAgentGrant(input);
+  }
+
   /** Set or clear the level a person's agents get when no grant names them. */
   setHostAgentDefault(input: HostAgentDefaultInput) {
     return this.writer.setHostAgentDefault(input);

@@ -32,6 +32,7 @@ import {
   accessHostAgentBody,
   accessHostAgentDefaultBody,
   accessHostAgentDefaultQuery,
+  accessHostAgentRevokeQuery,
   accessHostIdentityBody,
   accessLevelCreateBody,
   accessLevelUpdateBody,
@@ -717,9 +718,35 @@ export function mountOAuthAuthorizationRoutes(
         return c.json({ error: result.error }, status);
       }
       log.info(
-        `Host agent ${result.value.agent} on connection ${connectionId.data} given access level ${result.value.levelId}`,
+        `Host agent ${result.value.agent} on connection ${connectionId.data} for ${result.value.person} ${result.value.levelId ? `given access level ${result.value.levelId}` : "denied"}`,
       );
       return c.json({ agent: result.value }, 201);
+    },
+  );
+  // Give an agent its level, or deny it with `levelId: null`, replacing the
+  // grant it has in one step, so a change never passes through the default.
+  app.put(
+    "/admin/access/connections/:id/host-agents",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostAgentBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.setHostAgent({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        const status =
+          result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
+        return c.json({ error: result.error }, status);
+      }
+      log.info(
+        `Host agent ${result.value.agent} on connection ${connectionId.data} for ${result.value.person} ${result.value.levelId ? `set to access level ${result.value.levelId}` : "denied"}`,
+      );
+      return c.json({ agent: result.value });
     },
   );
   // The level a person's agents get when no grant names them, so an agent
@@ -744,7 +771,7 @@ export function mountOAuthAuthorizationRoutes(
         return c.json({ error }, status);
       }
       log.info(
-        `Default host agent level on connection ${connectionId.data} set to ${result.value.levelId}`,
+        `Default host agent level for ${result.value.person} on connection ${connectionId.data} set to ${result.value.levelId}`,
       );
       return c.json({ default: result.value });
     },
@@ -769,19 +796,40 @@ export function mountOAuthAuthorizationRoutes(
           result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
         return c.json({ error: result.error }, status);
       }
-      log.info(`Default host agent level on connection ${connectionId.data} cleared`);
+      log.info(
+        `Default host agent level for ${query.data.person} on connection ${connectionId.data} cleared`,
+      );
       return c.json({ cleared: true });
     },
   );
+  // Revoking an agent's grant while its person has a default would hand the
+  // agent that default, so it is refused unless `?fallback=default` says so.
   app.delete("/admin/access/host-agents/:id", noStore, scope.portalAdmin(), async (c) => {
     const grantId = oauthApprovalId.safeParse(c.req.param("id"));
+    const query = accessHostAgentRevokeQuery.safeParse(c.req.query());
     if (!grantId.success) return c.json({ error: "not-found" }, 404);
+    if (!query.success) return c.json({ error: "invalid-selection" }, 400);
     const result = await access.revokeHostAgent({
       grantId: grantId.data,
       actorTokenId: c.get("auth").tokenId!,
+      ...(query.data.fallback ? { fallback: query.data.fallback } : {}),
     });
-    if (!result.ok) return c.json({ error: result.error }, 404);
-    log.info(`Host agent grant ${grantId.data} revoked`);
+    if (!result.ok) {
+      if (result.error === "default-would-apply") {
+        return c.json(
+          {
+            error: "default-would-apply",
+            message:
+              "This agent would get its person's default. Revoke with ?fallback=default for that, or deny the agent.",
+          },
+          409,
+        );
+      }
+      return c.json({ error: result.error }, 404);
+    }
+    log.info(
+      `Host agent grant ${grantId.data} revoked${query.data.fallback ? ", its agent now on the default" : ""}`,
+    );
     return c.json({ revoked: true });
   });
   // A device's access level decides what its `/answer` requests may read and

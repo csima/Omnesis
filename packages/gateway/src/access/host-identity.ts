@@ -40,6 +40,8 @@ const MAX_PERSON_LENGTH = 320;
 const MAX_TASK_LENGTH = 200;
 const MAX_JTI_LENGTH = 200;
 const AGENT_PATTERN = /^instance:[A-Za-z0-9._-]{1,128}$/u;
+const GRANT_AGENT_PATTERN = /^instance:[a-z][a-z0-9-]{1,40}$/u;
+const PERSON_EMAIL_PATTERN = /^[a-z0-9.!#$%&'+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/u;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
 export type HostIdentityRefusal =
@@ -135,8 +137,20 @@ export function normalizeHostPerson(value: string): string | null {
   return person;
 }
 
-export function isHostAgentName(value: string): boolean {
-  return AGENT_PATTERN.test(value);
+/**
+ * An agent as a grant names it: `instance:` and an id the host can mint,
+ * lower-cased — a letter, then letters, digits and hyphens, 2 to 41 in all.
+ * Null for anything else, so a grant can never name an agent only by a
+ * spelling the host would not send.
+ */
+export function normalizeHostAgentGrantName(value: string): string | null {
+  const agent = value.trim().toLowerCase();
+  return GRANT_AGENT_PATTERN.test(agent) ? agent : null;
+}
+
+/** Whether a normalized person is an email address, the only person a default is set for. */
+export function isHostPersonEmail(person: string): boolean {
+  return PERSON_EMAIL_PATTERN.test(person);
 }
 
 export class HostIdentityVerifier {

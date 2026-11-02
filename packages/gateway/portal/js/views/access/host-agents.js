@@ -4,20 +4,37 @@
 // Agent hosts: the connections an agent host calls through for many agents,
 // each agent with its own access level for the person it acts for.
 //
-// Under each bound connection, the agents are grouped by person. Each person
-// also has a "Default for other agents" choice: the access level every other
-// agent of that host gets when it acts for that person, or no access at all.
-// A level given to an agent by name always wins over the default, and the
-// connection's own level stays the ceiling of both. A default for a person no
-// agent is listed for yet is set from the form below the people.
+// Under each bound connection, the agents are grouped by person. Each agent
+// has a level or No access, which denies it even where the person's default
+// would admit it, and can be removed. Each person also has a "Default for
+// other agents" choice: the level every agent not listed gets when it acts for
+// that person, or no access at all. Removing an agent while its person has a
+// default would hand it that default, so the page asks which is meant: the
+// default, or denying the agent. A default for a person no agent is listed for
+// yet is set from the form below the people.
+//
+// The host identity is loaded by the Access view, which also reads it to say
+// which levels only agent hosts use; `onChanged` asks it to load again.
 
 import { html } from "htm/preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 
-import { clearHostAgentDefault, getHostIdentity, setHostAgentDefault } from "../../api.js";
+import {
+  clearHostAgentDefault,
+  revokeHostAgent,
+  setHostAgentDefault,
+  setHostAgentLevel,
+} from "../../api.js";
+import { ConfirmModal } from "../../components/confirm-modal.js";
 import { compareNames, errorMessage } from "./shared.js";
 
 const NO_ACCESS = "";
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/u;
+
+/** Whether the owner typed an email address, the only person a default is set for. */
+export function isPersonEmail(value) {
+  return EMAIL_PATTERN.test(value.trim());
+}
 
 /** Each person a binding names, with the agents granted for them and their default. */
 export function hostPeople(binding) {
@@ -31,22 +48,33 @@ export function hostPeople(binding) {
   return [...people.values()].sort((left, right) => compareNames(left.person, right.person));
 }
 
-function refusalMessage(error) {
+/** How many agent grants and defaults of every bound host use each level. */
+export function hostLevelUses(hostIdentity) {
+  const uses = new Map();
+  for (const binding of hostIdentity?.bindings ?? []) {
+    for (const entry of [...(binding.agents ?? []), ...(binding.defaults ?? [])]) {
+      if (entry.levelId) uses.set(entry.levelId, (uses.get(entry.levelId) ?? 0) + 1);
+    }
+  }
+  return uses;
+}
+
+function refusalMessage(error, fallback) {
   switch (error?.serverMessage) {
     case "inactive-grant":
       return "That access level no longer exists.";
     case "host-not-bound":
       return "This connection is no longer bound to an agent host.";
     case "invalid-selection":
-      return "Enter the person as the agent host names them, such as an email address.";
+      return "Enter the person as an email address.";
     case "not-found":
-      return "This default was already cleared.";
+      return "This connection or its entry no longer exists. The list has been refreshed.";
     default:
-      return errorMessage(error, "The default could not be saved.");
+      return errorMessage(error, fallback);
   }
 }
 
-function LevelSelect({ id, value, levels, disabled, onChange, label }) {
+function LevelSelect({ id, value, levels, disabled, onChange, label, placeholder = "No access" }) {
   return html`<select
     id=${id}
     class="access-host-select"
@@ -55,21 +83,41 @@ function LevelSelect({ id, value, levels, disabled, onChange, label }) {
     disabled=${disabled}
     onChange=${(event) => onChange(event.currentTarget.value)}
   >
-    <option value=${NO_ACCESS}>No access</option>
+    <option value=${NO_ACCESS}>${placeholder}</option>
     ${levels.map((level) => html`<option key=${level.id} value=${level.id}>${level.name}</option>`)}
   </select>`;
 }
 
-function PersonGroup({ binding, entry, levels, busy, onDefault }) {
+function AgentRow({ agent, levels, busy, onLevel, onRemove }) {
+  return html`<li class="access-host-agent">
+    <code>${agent.agent}</code>
+    <span class="access-host-agent-actions">
+      <${LevelSelect}
+        label=${`Access level of ${agent.agent} acting for ${agent.person}`}
+        value=${agent.levelId ?? NO_ACCESS}
+        levels=${levels}
+        disabled=${busy}
+        onChange=${(levelId) => onLevel(agent, levelId)}
+      />
+      <button type="button" class="btn-secondary access-host-remove" disabled=${busy} onClick=${() => onRemove(agent)}>Remove</button>
+    </span>
+  </li>`;
+}
+
+function PersonGroup({ binding, entry, levels, busy, onDefault, onLevel, onRemove }) {
   const selectId = `access-host-default-${binding.connectionId}-${entry.person}`;
   return html`<div class="access-level-section access-host-person">
     <h4 class="access-level-subhead">${entry.person} <span class="access-level-count">(${entry.agents.length})</span></h4>
     ${entry.agents.length > 0
       ? html`<ul class="access-host-agents" aria-label=${`Agents acting for ${entry.person}`}>
-          ${entry.agents.map((agent) => html`<li key=${agent.id} class="access-host-agent">
-            <code>${agent.agent}</code>
-            <span class="access-muted">${agent.levelName ?? "Level removed"}</span>
-          </li>`)}
+          ${entry.agents.map((agent) => html`<${AgentRow}
+            key=${agent.id}
+            agent=${agent}
+            levels=${levels}
+            busy=${busy}
+            onLevel=${onLevel}
+            onRemove=${onRemove}
+          />`)}
         </ul>`
       : null}
     <div class="access-host-default">
@@ -88,37 +136,38 @@ function PersonGroup({ binding, entry, levels, busy, onDefault }) {
 
 function NewPersonDefault({ binding, levels, busy, onDefault }) {
   const [person, setPerson] = useState("");
-  const [levelId, setLevelId] = useState(levels[0]?.id ?? NO_ACCESS);
+  const [levelId, setLevelId] = useState(NO_ACCESS);
   const personId = `access-host-new-person-${binding.connectionId}`;
-  const levelSelectId = `access-host-new-level-${binding.connectionId}`;
+  const ready = isPersonEmail(person) && levelId !== NO_ACCESS;
   return html`<form
     class="access-host-new"
     onSubmit=${async (event) => {
       event.preventDefault();
-      if (!person.trim() || !levelId) return;
-      if (await onDefault(person.trim(), levelId)) setPerson("");
+      if (!ready) return;
+      if (await onDefault(person.trim(), levelId)) {
+        setPerson("");
+        setLevelId(NO_ACCESS);
+      }
     }}
   >
     <label for=${personId}>Default for another person</label>
     <input
       id=${personId}
-      type="text"
+      type="email"
       placeholder="person@example.com"
       value=${person}
       disabled=${busy}
       onInput=${(event) => setPerson(event.currentTarget.value)}
     />
-    <select
-      id=${levelSelectId}
-      class="access-host-select"
-      aria-label="Access level for that person's agents"
+    <${LevelSelect}
+      label="Access level for that person's other agents"
       value=${levelId}
+      levels=${levels}
       disabled=${busy}
-      onChange=${(event) => setLevelId(event.currentTarget.value)}
-    >
-      ${levels.map((level) => html`<option key=${level.id} value=${level.id}>${level.name}</option>`)}
-    </select>
-    <button type="submit" class="btn-secondary" disabled=${busy || !person.trim() || !levelId}>Set default</button>
+      placeholder="Choose a level"
+      onChange=${setLevelId}
+    />
+    <button type="submit" class="btn-secondary" disabled=${busy || !ready}>Set default</button>
   </form>`;
 }
 
@@ -127,57 +176,89 @@ function NewPersonDefault({ binding, levels, busy, onDefault }) {
  * default. Renders nothing until a connection is bound; the binding itself is
  * made over the API, as the Connect docs describe.
  */
-export function HostAgents({ levels, entries }) {
-  const [overview, setOverview] = useState(null);
+export function HostAgents({ hostIdentity, levels, entries, onChanged = async () => {} }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  // The agent whose removal would hand it its person's default, while the
+  // owner chooses between the default and denying it.
+  const [fallbackChoice, setFallbackChoice] = useState(null);
   const inFlightRef = useRef(false);
 
-  async function load() {
-    try {
-      const loaded = await getHostIdentity();
-      setOverview({ bindings: loaded?.bindings ?? [] });
-    } catch {
-      setOverview({ bindings: [] });
-    }
-  }
-
-  useEffect(() => { void load(); }, []);
-
-  async function changeDefault(binding, person, levelId) {
+  /** Runs one change, says what it did, and reloads the list either way. */
+  async function change(action, failure) {
     if (inFlightRef.current) return false;
     inFlightRef.current = true;
     setBusy(true);
     try {
-      if (levelId === NO_ACCESS) {
-        await clearHostAgentDefault(binding.connectionId, person);
-        setNotice(`Other agents acting for ${person} now get no access.`);
-      } else {
-        const saved = await setHostAgentDefault(binding.connectionId, person, levelId);
-        const name = saved?.default?.levelName ?? levels.find((level) => level.id === levelId)?.name ?? "";
-        setNotice(`Other agents acting for ${saved?.default?.person ?? person} now get “${name}”.`);
-      }
+      const said = await action();
       setError("");
-      await load();
+      setNotice(said);
       return true;
-    } catch (failure) {
+    } catch (thrown) {
+      if (thrown?.serverMessage === "default-would-apply") throw thrown;
       setNotice("");
-      setError(refusalMessage(failure));
-      await load();
+      setError(refusalMessage(thrown, failure));
       return false;
     } finally {
       inFlightRef.current = false;
       setBusy(false);
+      await onChanged();
     }
   }
 
-  const bindings = overview?.bindings ?? [];
+  const levelName = (levelId) => levels.find((level) => level.id === levelId)?.name ?? "";
+
+  const changeDefault = (binding, person, levelId) =>
+    change(async () => {
+      if (levelId === NO_ACCESS) {
+        await clearHostAgentDefault(binding.connectionId, person);
+        return `Other agents acting for ${person} now get no access.`;
+      }
+      const saved = await setHostAgentDefault(binding.connectionId, person, levelId);
+      return `Other agents acting for ${saved?.default?.person ?? person} now get “${saved?.default?.levelName ?? levelName(levelId)}”.`;
+    }, "The default could not be saved.");
+
+  const changeLevel = (binding, agent, levelId) =>
+    change(async () => {
+      await setHostAgentLevel(binding.connectionId, agent.person, agent.agent, levelId || null);
+      return levelId === NO_ACCESS
+        ? `${agent.agent} is denied any access for ${agent.person}.`
+        : `${agent.agent} now gets “${levelName(levelId)}” for ${agent.person}.`;
+    }, "The agent's access could not be saved.");
+
+  async function remove(binding, agent) {
+    try {
+      await change(async () => {
+        await revokeHostAgent(agent.id);
+        return `${agent.agent} removed. It now gets no access for ${agent.person}.`;
+      }, "The agent could not be removed.");
+    } catch {
+      setFallbackChoice({ binding, agent });
+    }
+  }
+
+  async function chooseFallback(useDefault) {
+    const choice = fallbackChoice;
+    setFallbackChoice(null);
+    if (!choice) return;
+    const { binding, agent } = choice;
+    if (useDefault) {
+      await change(async () => {
+        await revokeHostAgent(agent.id, { fallback: "default" });
+        return `${agent.agent} removed. It now gets the default for ${agent.person}.`;
+      }, "The agent could not be removed.");
+    } else {
+      await changeLevel(binding, agent, NO_ACCESS);
+    }
+  }
+
+  const bindings = hostIdentity?.bindings ?? [];
   if (bindings.length === 0) return null;
   return html`<section class="access-host-agents-panel" aria-labelledby="access-host-title">
     <header class="access-host-header">
       <h3 id="access-host-title">Agent hosts</h3>
-      <p>Each agent of a host gets the level given to it for the person it acts for. Other agents get that person’s default, never more than the connection’s own level.</p>
+      <p>Each agent of a host gets the level given to it for the person it acts for, or no access. Other agents get that person’s default, never more than the connection’s own level.</p>
     </header>
     ${notice && html`<p class="access-notice" role="status">${notice}</p>`}
     ${error && html`<p class="access-error" role="alert">${error}</p>`}
@@ -200,6 +281,8 @@ export function HostAgents({ levels, entries }) {
             levels=${levels}
             busy=${busy}
             onDefault=${(person, levelId) => changeDefault(binding, person, levelId)}
+            onLevel=${(agent, levelId) => changeLevel(binding, agent, levelId)}
+            onRemove=${(agent) => remove(binding, agent)}
           />`)}
           ${levels.length > 0
             ? html`<${NewPersonDefault}
@@ -212,5 +295,18 @@ export function HostAgents({ levels, entries }) {
         </div>
       </section>`;
     })}
+    <${ConfirmModal}
+      open=${Boolean(fallbackChoice)}
+      title="Use the default, or deny this agent?"
+      body=${fallbackChoice
+        ? html`<p>${`${fallbackChoice.agent.person} has a default for other agents. Removing ${fallbackChoice.agent.agent} would give it that default.`}</p>`
+        : ""}
+      confirmLabel="Deny this agent"
+      destructive
+      secondaryLabel="Use the default"
+      onConfirm=${() => chooseFallback(false)}
+      onSecondary=${() => chooseFallback(true)}
+      onCancel=${() => setFallbackChoice(null)}
+    />
   </section>`;
 }

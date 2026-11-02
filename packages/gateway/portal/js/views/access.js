@@ -45,6 +45,7 @@ import {
   deleteAccessLevel,
   getAccessAuthorization,
   getAccessOverview,
+  getHostIdentity,
   moveConnectionLevel,
   renameAccessPrincipal,
   revokeAccess,
@@ -60,7 +61,7 @@ import {
   authorizationStatusNotice,
 } from "./access/authorization.js";
 import { ConnectAgentDialog } from "./access/connect-dialog.js";
-import { HostAgents } from "./access/host-agents.js";
+import { HostAgents, hostLevelUses } from "./access/host-agents.js";
 import { LevelEditorPage, NewLevelPage } from "./access/level-editor.js";
 import { MoveConnectionDialog } from "./access/move-dialog.js";
 import { LEVEL_NAME_TAKEN_MESSAGE } from "./access/name-fields.js";
@@ -108,6 +109,7 @@ export function AccessView({
   },
 } = {}) {
   const [overview, setOverview] = useState(EMPTY_OVERVIEW);
+  const [hostIdentity, setHostIdentity] = useState({ bindings: [] });
   const [overviewReady, setOverviewReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -151,8 +153,22 @@ export function AccessView({
    * is typing into — and a successful one clears only a failed load's own
    * banner, never a removal's.
    */
+  /**
+   * Re-reads the agent hosts. A failed read keeps what the page shows: the
+   * hosts are a section of the page, not a reason to take it away.
+   */
+  async function loadHostIdentity() {
+    try {
+      const loaded = await getHostIdentity();
+      setHostIdentity({ bindings: loaded?.bindings ?? [] });
+    } catch {
+      // Keeps the last read.
+    }
+  }
+
   async function refresh({ background = false } = {}) {
     try {
+      void loadHostIdentity();
       const loaded = await getAccessOverview();
       setOverview(loaded);
       setOverviewReady(true);
@@ -659,6 +675,7 @@ export function AccessView({
             entries=${entries}
             levels=${levels}
             overview=${overview}
+            hostLevelUses=${hostLevelUses(hostIdentity)}
             onConnect=${overview.oauth ? openConnect : null}
             levelActions=${{
               onEdit: (level) => navigate(levelEditorPath(level.id)),
@@ -672,7 +689,14 @@ export function AccessView({
             }}
           />`}
 
-      ${overviewReady ? html`<${HostAgents} levels=${levels} entries=${entries} />` : null}
+      ${overviewReady
+        ? html`<${HostAgents}
+            hostIdentity=${hostIdentity}
+            levels=${levels}
+            entries=${entries}
+            onChanged=${loadHostIdentity}
+          />`
+        : null}
 
       ${connectVisible && html`<${ConnectAgentDialog} oauth=${overview.oauth} onClose=${closeConnect} />`}
 

@@ -1024,6 +1024,24 @@ export const setHostAgentDefault = (connectionId, person, levelId) =>
     body: { person, levelId },
   });
 
+/**
+ * Give one agent of a bound host, acting for `person`, an access level, or
+ * deny it any access with `levelId: null`, replacing the grant it has.
+ */
+export const setHostAgentLevel = (connectionId, person, agent, levelId) =>
+  request("PUT", `/admin/access/connections/${encodeURIComponent(connectionId)}/host-agents`, {
+    body: { person, agent, levelId },
+  });
+
+/**
+ * Remove one agent's grant or denial. While its person has a default this is
+ * refused as `default-would-apply` unless `fallback: "default"` is passed.
+ */
+export const revokeHostAgent = (grantId, { fallback } = {}) =>
+  request("DELETE", `/admin/access/host-agents/${encodeURIComponent(grantId)}`, {
+    query: fallback ? { fallback } : undefined,
+  });
+
 /** Clear a person's default, so a host agent no grant names gets nothing again. */
 export const clearHostAgentDefault = (connectionId, person) =>
   request("DELETE", `/admin/access/connections/${encodeURIComponent(connectionId)}/host-agent-default`, {

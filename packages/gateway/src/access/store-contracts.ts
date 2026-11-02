@@ -14,6 +14,7 @@ export type AccessMutationError =
   | "level-in-use"
   | "host-not-bound"
   | "host-agent-exists"
+  | "default-would-apply"
   | "device-not-integration"
   | "invalid-code"
   | "invalid-client"

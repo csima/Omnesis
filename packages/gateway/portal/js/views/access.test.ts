@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
   getHostIdentity: vi.fn(),
   setHostAgentDefault: vi.fn(),
   clearHostAgentDefault: vi.fn(),
+  setHostAgentLevel: vi.fn(),
+  revokeHostAgent: vi.fn(),
   listDevices: vi.fn(),
   lookupAccessAuthorization: vi.fn(),
   moveConnectionLevel: vi.fn(),

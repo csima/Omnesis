@@ -63,11 +63,12 @@ export class HostCallAuthorizer {
       if (error instanceof HostIdentityError) return { kind: "refused", reason: error.reason };
       throw error;
     }
-    const grants = resolveHostAgentGrants(this.reader, input.connectionId, caller.person, [
+    const resolution = resolveHostAgentGrants(this.reader, input.connectionId, caller.person, [
       caller.agent,
       ...caller.delegators,
     ]);
-    if (!grants) return { kind: "refused", reason: "no-grant" };
+    if (!resolution.ok) return { kind: "refused", reason: resolution.reason };
+    const grants = resolution.grants;
     const capabilities = intersectCapabilities([
       input.connectionCapabilities,
       ...grants.map((grant) => grant.capabilities),

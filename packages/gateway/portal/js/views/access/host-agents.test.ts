@@ -6,45 +6,55 @@ import { parseHTML } from "linkedom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  getHostIdentity: vi.fn(),
   setHostAgentDefault: vi.fn(),
   clearHostAgentDefault: vi.fn(),
+  setHostAgentLevel: vi.fn(),
+  revokeHostAgent: vi.fn(),
 }));
 
 vi.mock("../../api.js", () => api);
 
 // @ts-expect-error — portal modules are plain JS without sibling declarations.
-import { HostAgents, hostPeople } from "./host-agents.js";
+import { HostAgents, hostLevelUses, hostPeople, isPersonEmail } from "./host-agents.js";
+// @ts-expect-error — portal modules are plain JS without sibling declarations.
+import { AccessList } from "./access-list.js";
 
 const CONNECTION = "00000000-0000-4000-8000-000000000010";
+const ANSWER = "00000000-0000-4000-8000-0000000000a1";
+const READER = "00000000-0000-4000-8000-0000000000a2";
 const LEVELS = [
-  { id: "00000000-0000-4000-8000-0000000000a1", name: "Answer only" },
-  { id: "00000000-0000-4000-8000-0000000000a2", name: "Mail reader" },
+  { id: ANSWER, name: "Answer only", revision: 1 },
+  { id: READER, name: "Mail reader", revision: 1 },
 ];
 const ENTRIES = [{ id: CONNECTION, name: "Fictional agent host" }];
+const AGENT = {
+  id: "grant-1",
+  person: "maya@example.com",
+  agent: "instance:agent-a",
+  levelId: READER,
+  levelName: "Mail reader",
+};
 
-function binding(defaults: unknown[] = []) {
+function identity(defaults: unknown[] = [], agents: unknown[] = [AGENT]) {
   return {
-    connectionId: CONNECTION,
-    issuer: "https://agents.example.com",
-    audience: "https://omnesis.example.com/mcp",
-    agents: [
+    bindings: [
       {
-        id: "grant-1",
-        person: "maya@example.com",
-        agent: "instance:agent-a",
-        levelId: LEVELS[1]!.id,
-        levelName: "Mail reader",
+        connectionId: CONNECTION,
+        issuer: "https://agents.example.com",
+        audience: "https://omnesis.example.com/mcp",
+        agents,
+        defaults,
       },
     ],
-    defaults,
   };
 }
 
-describe("hostPeople", () => {
+const MAYA_DEFAULT = { id: "default-1", person: "maya@example.com", levelId: ANSWER };
+
+describe("host agent helpers", () => {
   test("groups agents and defaults by person, a default without agents included", () => {
     const people = hostPeople(
-      binding([{ id: "default-2", person: "jamie@example.com", levelId: LEVELS[0]!.id }]),
+      identity([{ id: "default-2", person: "jamie@example.com", levelId: ANSWER }]).bindings[0],
     );
     expect(people.map((entry: { person: string }) => entry.person)).toEqual([
       "jamie@example.com",
@@ -53,15 +63,34 @@ describe("hostPeople", () => {
     expect(people[0]).toMatchObject({ agents: [], default: { id: "default-2" } });
     expect(people[1]).toMatchObject({ agents: [{ agent: "instance:agent-a" }], default: null });
   });
+
+  test("counts the grants and defaults on each level, never a denial", () => {
+    const uses = hostLevelUses(
+      identity([MAYA_DEFAULT], [AGENT, { ...AGENT, id: "grant-2", levelId: null }]),
+    );
+    expect([...uses.entries()]).toEqual([
+      [READER, 1],
+      [ANSWER, 1],
+    ]);
+  });
+
+  test("takes only an email address as a person", () => {
+    expect(isPersonEmail("maya@example.com")).toBe(true);
+    for (const value of ["*", "maya", "maya@", "maya@example", "a b@example.com"]) {
+      expect(isPersonEmail(value)).toBe(false);
+    }
+  });
 });
 
 describe("HostAgents", () => {
   let host: HTMLElement;
+  let onChanged: ReturnType<typeof vi.fn>;
   let originalDocument: typeof globalThis.document | undefined;
   let originalWindow: typeof globalThis.window | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    onChanged = vi.fn().mockResolvedValue(undefined);
     originalDocument = globalThis.document;
     originalWindow = globalThis.window;
     const parsed = parseHTML("<html><body><main id='root'></main></body></html>");
@@ -77,12 +106,15 @@ describe("HostAgents", () => {
     else globalThis.window = originalWindow;
   });
 
-  async function mount() {
+  async function mount(hostIdentity: unknown) {
     await act(async () => {
-      render(h(HostAgents, { levels: LEVELS, entries: ENTRIES }), host);
+      render(h(HostAgents, { hostIdentity, levels: LEVELS, entries: ENTRIES, onChanged }), host);
       await Promise.resolve();
     });
-    await act(async () => { await Promise.resolve(); });
+  }
+
+  async function settle() {
+    for (let i = 0; i < 4; i += 1) await act(async () => { await Promise.resolve(); });
   }
 
   // linkedom's select has no settable `value`: Preact falls back to the
@@ -95,66 +127,153 @@ describe("HostAgents", () => {
     await act(async () => {
       Object.defineProperty(select, "value", { configurable: true, get: () => value });
       select.dispatchEvent(new window.Event("change", { bubbles: true }));
-      await Promise.resolve();
     });
-    await act(async () => { await Promise.resolve(); });
+    await settle();
   }
 
-  function defaultSelect() {
-    return host.querySelector<HTMLSelectElement>(".access-host-default select")!;
+  async function click(element: Element) {
+    await act(async () => { (element as HTMLElement).click(); });
+    await settle();
   }
+
+  async function type(input: HTMLInputElement, value: string) {
+    await act(async () => {
+      Object.defineProperty(input, "value", { configurable: true, get: () => value });
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+  }
+
+  const defaultSelect = () => host.querySelector<HTMLSelectElement>(".access-host-default select")!;
+  const agentSelect = () => host.querySelector<HTMLSelectElement>(".access-host-agent select")!;
+  const button = (label: string) =>
+    [...host.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)!;
 
   test("renders nothing until a connection is bound to an agent host", async () => {
-    api.getHostIdentity.mockResolvedValue({ bindings: [] });
-    await mount();
+    await mount({ bindings: [] });
     expect(host.innerHTML).toBe("");
   });
 
-  test("lists each person's agents and their default for other agents", async () => {
-    api.getHostIdentity.mockResolvedValue({
-      bindings: [binding([{ id: "default-1", person: "maya@example.com", levelId: LEVELS[0]!.id }])],
-    });
-    await mount();
+  test("lists each person's agents with their level and the default for other agents", async () => {
+    await mount(identity([MAYA_DEFAULT], [AGENT, { ...AGENT, id: "grant-2", agent: "instance:agent-b", levelId: null, levelName: null }]));
     expect(host.textContent).toContain("Fictional agent host");
-    expect(host.textContent).toContain("https://agents.example.com");
     expect(host.textContent).toContain("instance:agent-a");
-    expect(host.textContent).toContain("Default for other agents");
-    expect(chosen(defaultSelect())).toBe(LEVELS[0]!.id);
+    const selects = [...host.querySelectorAll<HTMLSelectElement>(".access-host-agent select")];
+    expect(selects.map(chosen)).toEqual([READER, ""]);
+    expect(chosen(defaultSelect())).toBe(ANSWER);
   });
 
-  test("sets the default, and clears it with No access", async () => {
-    api.getHostIdentity.mockResolvedValue({ bindings: [binding()] });
+  test("sets and clears the default, and says when a cleared one was already gone", async () => {
     api.setHostAgentDefault.mockResolvedValue({
-      default: { person: "maya@example.com", levelId: LEVELS[0]!.id, levelName: "Answer only" },
+      default: { person: "maya@example.com", levelId: ANSWER, levelName: "Answer only" },
     });
-    await mount();
-    expect(chosen(defaultSelect())).toBe("");
-    await choose(defaultSelect(), LEVELS[0]!.id);
-    expect(api.setHostAgentDefault).toHaveBeenCalledWith(
-      CONNECTION,
-      "maya@example.com",
-      LEVELS[0]!.id,
-    );
+    await mount(identity());
+    await choose(defaultSelect(), ANSWER);
+    expect(api.setHostAgentDefault).toHaveBeenCalledWith(CONNECTION, "maya@example.com", ANSWER);
     expect(host.querySelector(".access-notice")?.textContent).toContain("“Answer only”");
+    expect(onChanged).toHaveBeenCalled();
 
-    api.getHostIdentity.mockResolvedValue({
-      bindings: [binding([{ id: "default-1", person: "maya@example.com", levelId: LEVELS[0]!.id }])],
-    });
-    api.clearHostAgentDefault.mockResolvedValue({ cleared: true });
+    await mount(identity([MAYA_DEFAULT]));
+    api.clearHostAgentDefault.mockRejectedValue(
+      Object.assign(new Error("gone"), { status: 404, serverMessage: "not-found" }),
+    );
     await choose(defaultSelect(), "");
     expect(api.clearHostAgentDefault).toHaveBeenCalledWith(CONNECTION, "maya@example.com");
-    expect(host.querySelector(".access-notice")?.textContent).toContain("no access");
+    expect(host.querySelector(".access-error")?.textContent).toBe(
+      "This connection or its entry no longer exists. The list has been refreshed.",
+    );
   });
 
-  test("says why the gateway refused a default", async () => {
-    api.getHostIdentity.mockResolvedValue({ bindings: [binding()] });
-    api.setHostAgentDefault.mockRejectedValue(
-      Object.assign(new Error("refused"), { status: 409, serverMessage: "inactive-grant" }),
+  test("denies an agent with No access and changes its level in one step", async () => {
+    api.setHostAgentLevel.mockResolvedValue({ agent: {} });
+    await mount(identity());
+    await choose(agentSelect(), "");
+    expect(api.setHostAgentLevel).toHaveBeenCalledWith(
+      CONNECTION,
+      "maya@example.com",
+      "instance:agent-a",
+      null,
     );
-    await mount();
-    await choose(defaultSelect(), LEVELS[1]!.id);
-    expect(host.querySelector(".access-error")?.textContent).toBe(
-      "That access level no longer exists.",
+    expect(host.querySelector(".access-notice")?.textContent).toContain("denied any access");
+    await choose(agentSelect(), ANSWER);
+    expect(api.setHostAgentLevel).toHaveBeenLastCalledWith(
+      CONNECTION,
+      "maya@example.com",
+      "instance:agent-a",
+      ANSWER,
     );
+  });
+
+  test("asks whether a removed agent gets the default or is denied", async () => {
+    const wouldApply = Object.assign(new Error("default"), {
+      status: 409,
+      serverMessage: "default-would-apply",
+    });
+    api.revokeHostAgent.mockRejectedValueOnce(wouldApply).mockResolvedValueOnce({ revoked: true });
+    await mount(identity([MAYA_DEFAULT]));
+    await click(button("Remove"));
+    expect(api.revokeHostAgent).toHaveBeenCalledWith("grant-1");
+    expect(host.textContent).toContain("Use the default, or deny this agent?");
+    await click(button("Use the default"));
+    expect(api.revokeHostAgent).toHaveBeenLastCalledWith("grant-1", { fallback: "default" });
+    expect(host.querySelector(".access-notice")?.textContent).toContain("now gets the default");
+
+    api.revokeHostAgent.mockRejectedValueOnce(wouldApply);
+    api.setHostAgentLevel.mockResolvedValue({ agent: {} });
+    await click(button("Remove"));
+    await click(button("Deny this agent"));
+    expect(api.setHostAgentLevel).toHaveBeenLastCalledWith(
+      CONNECTION,
+      "maya@example.com",
+      "instance:agent-a",
+      null,
+    );
+  });
+
+  test("sets a default for another person only once an email and a level are chosen", async () => {
+    api.setHostAgentDefault.mockResolvedValue({ default: { person: "jamie@example.com" } });
+    await mount(identity());
+    const form = host.querySelector(".access-host-new")!;
+    const submit = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
+    const levelSelect = form.querySelector<HTMLSelectElement>("select")!;
+    expect(chosen(levelSelect)).toBe("");
+    expect(levelSelect.querySelector("option")?.textContent).toBe("Choose a level");
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    await type(form.querySelector<HTMLInputElement>("input")!, "jamie");
+    await choose(levelSelect, ANSWER);
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    await type(form.querySelector<HTMLInputElement>("input")!, "jamie@example.com");
+    await settle();
+    expect(submit.hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("AccessList with agent hosts", () => {
+  test("says a level only agent hosts use is in use, and keeps it from deletion", async () => {
+    const parsed = parseHTML("<html><body><main id='root'></main></body></html>");
+    const previous = { document: globalThis.document, window: globalThis.window };
+    Object.assign(globalThis, { document: parsed.document, window: parsed.window });
+    const root = parsed.document.querySelector("#root") as unknown as HTMLElement;
+    try {
+      const level = { ...LEVELS[0], rules: [], connectionCount: 0, devices: [] };
+      await act(async () => {
+        render(
+          h(AccessList, {
+            entries: [],
+            levels: [level],
+            overview: { levels: [level], principals: [] },
+            hostLevelUses: new Map([[ANSWER, 2]]),
+            levelActions: { onEdit: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() },
+            connectionActions: { onRename: vi.fn(), onMove: vi.fn(), onRemove: vi.fn() },
+          }),
+          root,
+        );
+      });
+      expect(root.querySelector(".access-level-empty")?.textContent).toBe(
+        "Used only by agent host grants and defaults (2).",
+      );
+      render(null, root);
+    } finally {
+      Object.assign(globalThis, previous);
+    }
   });
 });
