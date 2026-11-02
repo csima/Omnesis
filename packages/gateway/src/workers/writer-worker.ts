@@ -71,17 +71,30 @@ let state: {
 // copies whatever is left, so a quiet writer leaves nothing waiting.
 const CHECKPOINT_IDLE_INTERVAL_MS = 1_000;
 
-/** Run what the WAL needs and report it; the runner keeps the counts and logs. */
+/** A failing checkpoint is reported at most this often. */
+const CHECKPOINT_WARN_INTERVAL_MS = 60_000;
+let lastCheckpointWarnMs = Number.NEGATIVE_INFINITY;
+let unreportedCheckpointFailures = 0;
+
+/**
+ * Run what the WAL needs and report it; the runner keeps the counts and logs.
+ * The checkpointer backs off after a throw; the warning is rate-limited too.
+ */
 function runCheckpoint(checkpointer: WalCheckpointer, minPending?: number): void {
   try {
     const run = checkpointer.maintain(minPending);
     if (run) post({ type: "checkpoint", run });
   } catch (err) {
+    unreportedCheckpointFailures += 1;
+    const now = Date.now();
+    if (now - lastCheckpointWarnMs < CHECKPOINT_WARN_INTERVAL_MS) return;
     log(
       "warn",
       "writer-worker",
-      `wal_checkpoint failed: ${err instanceof Error ? err.message : String(err)}`,
+      `wal_checkpoint failed (${unreportedCheckpointFailures} since the last report): ${err instanceof Error ? err.message : String(err)}`,
     );
+    lastCheckpointWarnMs = now;
+    unreportedCheckpointFailures = 0;
   }
 }
 

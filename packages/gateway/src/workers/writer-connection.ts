@@ -50,6 +50,10 @@ export function openWriteConn(
     // limit the file keeps its largest size forever. The WAL is read with
     // pread, never mapped.
     db.exec(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES}`);
+    // On macOS a plain fsync leaves writes in the drive's cache. A rewind lets
+    // new frames overwrite copied ones, so the copy must be on the medium
+    // first: F_FULLFSYNC for checkpoint syncs (a no-op elsewhere).
+    db.exec("PRAGMA checkpoint_fullfsync = ON");
   }
   // synchronous = FULL narrows the fsync window. Mozilla belt-and-
   // suspenders recipe; useful in both modes.

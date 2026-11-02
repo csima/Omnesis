@@ -116,7 +116,7 @@ describe("WalCheckpointer", () => {
     expect(wal(db).log).toBeLessThan(POLICY.pendingFrames);
     expect(checkpointer.maintain()).toBeNull();
 
-    expect(checkpointer.maintain(1)).toMatchObject({ mode: "PASSIVE" });
+    expect(checkpointer.maintain(1)).toMatchObject({ mode: "PASSIVE", outcome: "copied" });
     expect(wal(db).checkpointed).toBe(wal(db).log);
 
     write(db, 200);
@@ -140,7 +140,8 @@ describe("WalCheckpointer", () => {
     expect(wal(db).log).toBeGreaterThanOrEqual(POLICY.restartFrames);
 
     const run = checkpointer.maintain();
-    expect(run).toMatchObject({ mode: "RESTART", restarted: true });
+    expect(run).toMatchObject({ mode: "RESTART", outcome: "rewound", log: 0, checkpointed: 0 });
+    expect(run!.rewoundFrames).toBeGreaterThanOrEqual(POLICY.restartFrames);
     write(db, 1);
     expect(wal(db).log).toBeLessThan(10);
     expect(db.pragma("busy_timeout", { simple: true })).toBe(POLICY.busyTimeoutMs);
@@ -152,7 +153,7 @@ describe("WalCheckpointer", () => {
     const checkpointer = new WalCheckpointer(db, { ...POLICY, pendingFrames: 1_000_000 });
     write(db, 1_200);
     expect(statSync(`${path}-wal`).size).toBeGreaterThan(4 * 1024 * 1024);
-    expect(checkpointer.maintain()).toMatchObject({ restarted: true });
+    expect(checkpointer.maintain()).toMatchObject({ outcome: "rewound" });
     write(db, 1);
     expect(statSync(`${path}-wal`).size).toBeLessThanOrEqual(1024 * 1024);
   });
@@ -174,13 +175,13 @@ describe("WalCheckpointer", () => {
     const started = performance.now();
     const blocked = checkpointer.maintain();
     expect(performance.now() - started).toBeLessThan(POLICY.restartWaitMs + 150);
-    expect(blocked).toMatchObject({ mode: "RESTART", restarted: false });
+    expect(blocked).toMatchObject({ mode: "RESTART", outcome: "deferred" });
     expect(wal(db).log).toBeGreaterThanOrEqual(POLICY.restartFrames);
     expect(checkpointer.maintain()).toBeNull();
 
     held.exec("COMMIT");
     clock += POLICY.restartRetryMinMs;
-    expect(checkpointer.maintain()).toMatchObject({ mode: "RESTART", restarted: true });
+    expect(checkpointer.maintain()).toMatchObject({ mode: "RESTART", outcome: "rewound" });
     expect(db.pragma("busy_timeout", { simple: true })).toBe(POLICY.busyTimeoutMs);
   });
 
@@ -194,10 +195,98 @@ describe("WalCheckpointer", () => {
     write(db, 1_200);
 
     const run = checkpointer.maintain();
-    expect(run).toMatchObject({ mode: "RESTART", restarted: true });
+    expect(run).toMatchObject({ mode: "RESTART", outcome: "rewound" });
     expect(run!.ms).toBeLessThan(POLICY.restartWaitMs + 150);
     write(db, 1);
     expect(wal(db).log).toBeLessThan(10);
     for (const r of readers) expect(await r.stop()).toBeGreaterThan(0);
+  });
+
+  describe("against a connection whose checkpoints are scripted", () => {
+    interface Row {
+      busy: number;
+      log: number;
+      checkpointed: number;
+    }
+    function scripted(script: { passive: () => Row; restart?: () => Row; log?: number }) {
+      const calls: string[] = [];
+      let busyTimeout = POLICY.busyTimeoutMs;
+      const db = {
+        prepare: (sql: string) => ({
+          get: (): Row => {
+            const mode = /\((\w+)\)/.exec(sql)![1]!;
+            calls.push(mode);
+            if (mode === "NOOP") return { busy: 0, log: script.log ?? 20_000, checkpointed: 0 };
+            if (mode === "PASSIVE") return script.passive();
+            return script.restart!();
+          },
+        }),
+        pragma: (text: string) => {
+          const set = /busy_timeout = (\d+)/.exec(text);
+          if (set) busyTimeout = Number(set[1]);
+        },
+      } as unknown as Database.Database;
+      return { db, calls, busyTimeout: () => busyTimeout };
+    }
+    const full = (): never => {
+      throw Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+    };
+
+    it("backs off after a copy throws instead of retrying after every op", () => {
+      let clock = 0;
+      const conn = scripted({ passive: full, log: 5_000 });
+      const checkpointer = new WalCheckpointer(conn.db, POLICY, () => clock);
+      expect(() => checkpointer.maintain()).toThrow("database or disk is full");
+      for (let op = 0; op < 10; op++) expect(checkpointer.maintain()).toBeNull();
+      expect(conn.calls.filter((c) => c === "PASSIVE")).toHaveLength(1);
+
+      clock += POLICY.restartRetryMinMs;
+      expect(() => checkpointer.maintain()).toThrow();
+      clock += POLICY.restartRetryMinMs;
+      expect(checkpointer.maintain()).toBeNull();
+      clock += POLICY.restartRetryMinMs;
+      expect(() => checkpointer.maintain()).toThrow();
+      expect(conn.calls.filter((c) => c === "PASSIVE")).toHaveLength(3);
+    });
+
+    it("backs off after a rewind throws and restores the busy timeout", () => {
+      let clock = 0;
+      const conn = scripted({
+        passive: () => ({ busy: 0, log: 20_000, checkpointed: 20_000 }),
+        restart: () => {
+          throw Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+        },
+      });
+      const checkpointer = new WalCheckpointer(conn.db, POLICY, () => clock);
+      expect(() => checkpointer.maintain()).toThrow("disk I/O error");
+      expect(conn.busyTimeout()).toBe(POLICY.busyTimeoutMs);
+      for (let op = 0; op < 10; op++) expect(checkpointer.maintain()).toBeNull();
+      expect(conn.calls.filter((c) => c === "RESTART")).toHaveLength(1);
+      clock += POLICY.restartRetryMinMs;
+      expect(() => checkpointer.maintain()).toThrow();
+      expect(conn.calls.filter((c) => c === "RESTART")).toHaveLength(2);
+    });
+
+    it("does not count a rewind whose own copy spent the wait as deferred, and tries again next op", () => {
+      let clock = 0;
+      let slowCopy = true;
+      const conn = scripted({
+        passive: () => {
+          if (slowCopy) clock += POLICY.restartWaitMs + 1;
+          return { busy: 0, log: 20_000, checkpointed: 20_000 };
+        },
+        restart: () => ({ busy: 0, log: 20_000, checkpointed: 20_000 }),
+      });
+      const checkpointer = new WalCheckpointer(conn.db, POLICY, () => clock);
+      expect(checkpointer.maintain()).toMatchObject({ mode: "RESTART", outcome: "copied" });
+      expect(conn.calls).not.toContain("RESTART");
+      slowCopy = false;
+      expect(checkpointer.maintain()).toMatchObject({
+        outcome: "rewound",
+        log: 0,
+        checkpointed: 0,
+        rewoundFrames: 20_000,
+      });
+    });
   });
 });

@@ -60,7 +60,7 @@ const CHECKPOINT_SAMPLES = 16_384;
 interface CheckpointSample {
   ts: number;
   ms: number;
-  outcome: "copy" | "rewound" | "deferred";
+  outcome: WalCheckpointRun["outcome"];
 }
 
 export interface WriterTaskRunnerOptions {
@@ -313,17 +313,17 @@ export class WriterTaskRunner implements TaskRunner {
     this.checkpointSamples.push({
       ts: Date.now(),
       ms: run.ms,
-      outcome: run.mode === "PASSIVE" ? "copy" : run.restarted ? "rewound" : "deferred",
+      outcome: run.outcome,
     });
     if (this.checkpointSamples.length > CHECKPOINT_SAMPLES) this.checkpointSamples.shift();
-    if (run.mode === "RESTART" && run.restarted) {
+    if (run.outcome === "rewound") {
       stats.rewinds += 1;
       if (this.deferredSinceRewind > 0)
         log.info(
-          `WAL rewound from ${run.log} frames after ${this.deferredSinceRewind} deferred attempts`,
+          `WAL rewound from ${run.rewoundFrames ?? 0} frames after ${this.deferredSinceRewind} deferred attempts`,
         );
       this.deferredSinceRewind = 0;
-    } else if (run.mode === "RESTART") {
+    } else if (run.outcome === "deferred") {
       stats.deferredRewinds += 1;
       this.deferredSinceRewind += 1;
     }
