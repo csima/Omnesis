@@ -88,9 +88,10 @@ export const APPLY_CHUNK_ROW_BUDGET = 2_000;
 
 /**
  * Removes one doc's bucket rows. Pinned to the doc index: with no
- * `sqlite_stat1` the planner rates `algo_version = ?` on the primary key as
- * selective as `doc_id = ?`, prefers the key because it covers the row, and
- * reads every bucket row of the active algo to delete a doc's sixteen.
+ * `sqlite_stat1` (a database the planner statistics task has not analyzed yet)
+ * the planner rates `algo_version = ?` on the primary key as selective as
+ * `doc_id = ?`, prefers the key because it covers the row, and reads every
+ * bucket row of the active algo to delete a doc's sixteen.
  */
 export const BUCKET_DELETE_FOR_DOC_SQL = `DELETE FROM near_dup_lsh_buckets INDEXED BY idx_near_dup_lsh_doc
   WHERE doc_id = ? AND algo_version = ?`;

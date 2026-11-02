@@ -36,10 +36,12 @@ import {
   sweepAccumulateTask,
   runBackfillTick,
   isIdleResult,
+  sweepCollapsedCandidates,
   type IdleResult,
 } from "./backfill-helpers.js";
 import type { TokenLabelRow } from "../../merge-candidates.js";
 import type { PeopleCountRow } from "../../data/repositories/PersonRepository.js";
+import type { SqliteTableStatsRow } from "../../sqlite-catalog.js";
 import type { PeriodicTask } from "../types.js";
 import type { BackfillTaskOptsInternal } from "./backfill.js";
 
@@ -716,7 +718,7 @@ export function mergeRulesEvalTask(
     // (queries only `pending` rows). Catches ongoing drift and
     // pre-deploy stale rows that aren't tied to a rule-version bump.
     preStep: async () => {
-      const candSweep = await writeGate.sweepCollapsedMergeCandidates();
+      const candSweep = await sweepCollapsedCandidates(ioGate, writeGate);
       lastCandSweep = candSweep.swept;
       if (candSweep.swept > 0) {
         log.info(`merge rules eval: ${candSweep.swept} stale-candidates-swept`);
@@ -748,7 +750,7 @@ export function mergeRulesEvalTask(
         // failure (writer backpressure) the next tick's pre-step
         // catches up.
         try {
-          const postSweep = await writeGate.sweepCollapsedMergeCandidates();
+          const postSweep = await sweepCollapsedCandidates(ioGate, writeGate);
           lastCandSweep += postSweep.swept;
         } catch (err) {
           log.warn(
@@ -1041,7 +1043,7 @@ export function tokenIdentityClassifyTask(
 export function catalogRefreshTask(
   opts: BackfillTaskOptsInternal,
 ): PeriodicTask<unknown, IdleResult> {
-  const { writeGate, log, catalogRefreshIntervalMs } = opts;
+  const { writeGate, ioGate, log, catalogRefreshIntervalMs } = opts;
   const taskName = "backfill.catalogRefresh";
   return {
     name: taskName,
@@ -1053,9 +1055,53 @@ export function catalogRefreshTask(
     async run() {
       return runBackfillTick(taskName, log, async () => {
         const startMs = Date.now();
-        await writeGate.refreshSqliteTableStats();
-        log.info(`refreshed sqlite_table_stats in ${Date.now() - startMs}ms`);
+        const rows: SqliteTableStatsRow[] = [];
+        for (const tableName of await ioGate.catalogTableNames()) {
+          const row = await ioGate.sqliteTableStats(tableName);
+          if (row) rows.push(row);
+        }
+        const computedMs = Date.now() - startMs;
+        await writeGate.upsertSqliteTableStats(rows);
+        log.info(
+          `refreshed sqlite_table_stats for ${rows.length} tables in ${Date.now() - startMs}ms (compute=${computedMs}ms)`,
+        );
         return { idle: false };
+      });
+    },
+  };
+}
+
+// ── Planner statistics (off by default) ───────────────────────────────
+//
+// SQLite's advice for a long-lived connection: `PRAGMA optimize` with the
+// all-tables bit when it opens and plain `PRAGMA optimize` every hour or day.
+// One task covers both — its first tick after boot also picks up any index a
+// migration created — and the writer op splits the ANALYZE work per index.
+// Statistics change query plans, so the task runs only when the operator sets
+// `gateway.backfill.plannerStatistics.interval`.
+
+export function plannerStatisticsTask(
+  opts: BackfillTaskOptsInternal,
+): PeriodicTask<unknown, IdleResult> {
+  const { writeGate, log, plannerStatisticsIntervalMs } = opts;
+  const taskName = "backfill.plannerStatistics";
+  return {
+    name: taskName,
+    runner: "main",
+    priority: "background",
+    periodMs: plannerStatisticsIntervalMs,
+    startDelayMs: Math.min(10 * 60_000, plannerStatisticsIntervalMs),
+    initialArgs: undefined,
+    async run() {
+      return runBackfillTick(taskName, log, async () => {
+        const startMs = Date.now();
+        const { analyzed, tables } = await writeGate.refreshPlannerStatistics();
+        if (analyzed > 0) {
+          log.info(
+            `planner statistics: analyzed ${analyzed} indexes or tables across ${tables} tables in ${Date.now() - startMs}ms`,
+          );
+        }
+        return { idle: analyzed === 0 };
       });
     },
   };
