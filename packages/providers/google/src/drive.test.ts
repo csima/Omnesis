@@ -4,7 +4,7 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import { resolveAttachmentConfig } from "@omnesis/core";
 import { SourceId, ProviderId, SyncError } from "@omnesis/types";
-import { GoogleDriveSource } from "./drive.js";
+import { GoogleDriveSource, isRejectedPageTokenError } from "./drive.js";
 import {
   createMockDrive,
   createDriveSource,
@@ -983,5 +983,229 @@ describe("GoogleDriveSource", () => {
 
       expect(result.documents).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * Drive's 400 for a request parameter it will not accept, in the shape
+ * googleapis throws: the envelope's fields copied onto the error, and the
+ * body kept on its response.
+ */
+function driveInvalidValue(location: string): Error {
+  const errors = [
+    {
+      domain: "global",
+      reason: "invalid",
+      message: "Invalid Value",
+      locationType: "parameter",
+      location,
+    },
+  ];
+  return Object.assign(new Error("Invalid Value"), {
+    code: 400,
+    status: 400,
+    errors,
+    response: { status: 400, data: { error: { code: 400, message: "Invalid Value", errors } } },
+  });
+}
+
+/**
+ * A Drive double that pages `files.list` the way Drive does: each page token
+ * is bound to the query it was issued for, and one presented with another
+ * query, or one it never issued, is refused as `Invalid Value` on
+ * `pageToken`. `createdTime >= '…'` in the query filters the files.
+ */
+function createPagingDrive(files: ReturnType<typeof makeDriveFile>[], pageSize: number) {
+  const drive = createMockDrive();
+  const issued = new Map<string, { q: string; offset: number }>();
+  let tokens = 0;
+  drive.files.list = vi.fn(({ q, pageToken }: { q: string; pageToken?: string }) => {
+    let offset = 0;
+    if (pageToken) {
+      const token = issued.get(pageToken);
+      if (!token || token.q !== q) return Promise.reject(driveInvalidValue("pageToken"));
+      offset = token.offset;
+    }
+    const floor = /createdTime >= '([^']+)'/.exec(q)?.[1];
+    const matching = files.filter((f) => !floor || f.createdTime! >= floor);
+    const next = offset + pageSize < matching.length ? `drive-page-${++tokens}` : undefined;
+    if (next) issued.set(next, { q, offset: offset + pageSize });
+    return Promise.resolve({
+      data: { files: matching.slice(offset, offset + pageSize), nextPageToken: next },
+    });
+  });
+  drive.files.export = vi.fn(({ fileId }: { fileId: string }) =>
+    Promise.resolve({ data: `Planning notes for ${fileId}` }),
+  );
+  return drive;
+}
+
+async function walk(source: GoogleDriveSource, cursor: any) {
+  const ids: string[] = [];
+  let next = cursor;
+  for (let page = 0; page < 20; page += 1) {
+    const result = await source.sync(next);
+    ids.push(...result.documents.map((d) => d.externalId));
+    next = result.cursor;
+    if (!result.hasMore) break;
+  }
+  return { ids, cursor: next };
+}
+
+describe("GoogleDriveSource bootstrap page tokens", () => {
+  const CUTOFF = "2024-11-02T00:00:00.000Z";
+  const library = [
+    makeDriveFile({ id: "budget-2019", name: "Budget 2019", createdTime: "2019-03-01T00:00:00Z" }),
+    makeDriveFile({
+      id: "roadmap-2021",
+      name: "Roadmap 2021",
+      createdTime: "2021-05-01T00:00:00Z",
+    }),
+    makeDriveFile({
+      id: "offsite-2025",
+      name: "Offsite 2025",
+      createdTime: "2025-02-01T00:00:00Z",
+    }),
+    makeDriveFile({ id: "review-2025", name: "Review 2025", createdTime: "2025-06-01T00:00:00Z" }),
+    makeDriveFile({ id: "plan-2026", name: "Plan 2026", createdTime: "2026-01-15T00:00:00Z" }),
+  ];
+
+  test("records the query its page token belongs to", async () => {
+    const drive = createPagingDrive(library, 2);
+    const result = await createDriveSource(drive).sync(null);
+    expect(result.cursor).toMatchObject({ phase: "bootstrap", listQuery: "trashed=false" });
+    const done = await walk(createDriveSource(drive), result.cursor);
+    expect((done.cursor as any).listQuery).toBeUndefined();
+    expect((done.cursor as any).phase).toBe("incremental");
+  });
+
+  test("a changed cutoff drops the saved token instead of sending it", async () => {
+    const drive = createPagingDrive(library, 2);
+    const first = await createDriveSource(drive).sync(null);
+    expect(first.documents.map((d) => d.externalId)).toEqual(["budget-2019", "roadmap-2021"]);
+
+    const narrowed = createDriveSource(drive, { dataCutoff: CUTOFF });
+    drive.files.list.mockClear();
+    const { ids, cursor } = await walk(narrowed, first.cursor);
+
+    const [firstCall] = drive.files.list.mock.calls[0];
+    expect(firstCall.pageToken).toBeUndefined();
+    expect(firstCall.q).toContain(`createdTime >= '${CUTOFF}'`);
+    for (const [call] of drive.files.list.mock.calls) {
+      expect(call.q).toContain(`createdTime >= '${CUTOFF}'`);
+    }
+    expect(ids).toEqual(["offsite-2025", "review-2025", "plan-2026"]);
+    expect(cursor).toMatchObject({ phase: "incremental", startPageToken: "start-token-1" });
+    expect(drive.changes.getStartPageToken).toHaveBeenCalledTimes(1);
+  });
+
+  test("a token Drive rejects restarts the listing from the first page", async () => {
+    const drive = createPagingDrive(library, 2);
+    const first = await createDriveSource(drive).sync(null);
+    const { listQuery: _recorded, ...savedBeforeQueriesWereRecorded } = first.cursor as any;
+
+    const narrowed = createDriveSource(drive, { dataCutoff: CUTOFF });
+    drive.files.list.mockClear();
+    const resumed = await narrowed.sync(savedBeforeQueriesWereRecorded);
+
+    const calls = drive.files.list.mock.calls.map(([call]: any[]) => call);
+    expect(calls).toHaveLength(2);
+    expect(calls[0].pageToken).toBe(savedBeforeQueriesWereRecorded.pageToken);
+    expect(calls[1].pageToken).toBeUndefined();
+    expect(calls[1].q).toBe(calls[0].q);
+    expect(resumed.documents.map((d) => d.externalId)).toEqual(["offsite-2025", "review-2025"]);
+    expect(resumed.cursor).toMatchObject({
+      phase: "bootstrap",
+      listQuery: calls[0].q,
+      startPageToken: "start-token-1",
+    });
+    const { ids } = await walk(narrowed, resumed.cursor);
+    expect(ids).toEqual(["plan-2026"]);
+  });
+
+  test("an expired token under an unchanged query restarts too, re-listing what it already made", async () => {
+    const drive = createPagingDrive(library, 2);
+    const source = createDriveSource(drive);
+    const first = await source.sync(null);
+    const expired = { ...(first.cursor as any), pageToken: "drive-page-expired" };
+
+    const restarted = await source.sync(expired);
+
+    expect(restarted.documents.map((d) => [d.externalId, d.contentHash])).toEqual(
+      first.documents.map((d) => [d.externalId, d.contentHash]),
+    );
+    expect((restarted.cursor as any).startPageToken).toBe("start-token-1");
+  });
+
+  test("a 400 about another parameter still surfaces", async () => {
+    const drive = createMockDrive();
+    drive.files.list = vi.fn(() => Promise.reject(driveInvalidValue("q")));
+    const source = createDriveSource(drive);
+
+    await expect(
+      source.sync({ phase: "bootstrap", pageToken: "drive-page-3", startPageToken: "changes-9" }),
+    ).rejects.toBeInstanceOf(SyncError);
+    expect(drive.files.list).toHaveBeenCalledTimes(1);
+  });
+
+  test("a rejected token on the first page has nothing to drop and surfaces", async () => {
+    const drive = createMockDrive();
+    drive.files.list = vi.fn(() => Promise.reject(driveInvalidValue("pageToken")));
+
+    await expect(createDriveSource(drive).sync(null)).rejects.toBeInstanceOf(SyncError);
+    expect(drive.files.list).toHaveBeenCalledTimes(1);
+  });
+
+  test("a restarted listing that fails again surfaces instead of looping", async () => {
+    const drive = createMockDrive();
+    drive.files.list = vi
+      .fn()
+      .mockRejectedValueOnce(driveInvalidValue("pageToken"))
+      .mockRejectedValueOnce(driveInvalidValue("q"));
+
+    await expect(
+      createDriveSource(drive).sync({ phase: "bootstrap", pageToken: "drive-page-3" }),
+    ).rejects.toBeInstanceOf(SyncError);
+    expect(drive.files.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isRejectedPageTokenError", () => {
+  test("matches Drive's 400 naming pageToken, on the error or its response", () => {
+    expect(isRejectedPageTokenError(driveInvalidValue("pageToken"))).toBe(true);
+    const bodyOnly = driveInvalidValue("pageToken") as any;
+    delete bodyOnly.errors;
+    expect(isRejectedPageTokenError(bodyOnly)).toBe(true);
+  });
+
+  test("does not match a 400 about anything else, or a non-400", () => {
+    expect(isRejectedPageTokenError(driveInvalidValue("q"))).toBe(false);
+    expect(isRejectedPageTokenError(Object.assign(new Error("Invalid Value"), { code: 400 }))).toBe(
+      false,
+    );
+    expect(
+      isRejectedPageTokenError(
+        Object.assign(driveInvalidValue("pageToken"), { code: 500, status: 500 }),
+      ),
+    ).toBe(false);
+    expect(isRejectedPageTokenError(undefined)).toBe(false);
+  });
+});
+
+describe("GoogleDriveSource text that once stalled address extraction", () => {
+  test("normalizes a file of a megabyte of dots and hyphens promptly", async () => {
+    const drive = createMockDrive();
+    mockDriveFilesList(drive, [makeDriveFile({ id: "ledger-export" })]);
+    const filler = `${".".repeat(500_000)}${"-".repeat(500_000)}`;
+    drive.files.export = vi.fn(() =>
+      Promise.resolve({ data: `${filler}\nOwner: david.lin@example.org` }),
+    );
+
+    const start = performance.now();
+    const result = await createDriveSource(drive).sync(null);
+
+    expect(performance.now() - start).toBeLessThan(5_000);
+    const mentioned = result.documents[0]!.metadata.people?.filter((p) => p.role === "mentioned");
+    expect(mentioned?.flatMap((p) => p.emails ?? [])).toEqual(["david.lin@example.org"]);
   });
 });
