@@ -397,17 +397,19 @@
           connection's access token. It is an ES256 JWT of type
           <code>agent-host-identity+jwt</code> naming the person in <code>sub</code>, the calling
           agent as <code>instance:&lt;id&gt;</code> in <code>act</code>, and each agent that asked
-          it nested inside as its own <code>act</code>. Omnesis checks the signature against the
-          keys the host publishes at <code>&lt;issuer&gt;/.well-known/jwks.json</code> (cached for
-          five minutes and fetched again for a key it has not seen), that the type, issuer and
-          audience are exactly the ones you configured, that it has not expired, allowing five
-          seconds of clock difference, that it lives no longer than two minutes, and that its
-          <code>jti</code> has not been used before. The issuer is an <code>https://</code> origin,
-          or an <code>http://</code> loopback origin for a host on the same machine; the audience is
-          one of this gateway's MCP URLs as the host saved it, without query, fragment or trailing
-          slash, and a binding to any other audience is refused. A person is compared lower-cased
-          and must be plain ASCII that Unicode NFKC normalization leaves unchanged; any other
-          <code>sub</code> is refused.
+          it nested inside as its own <code>act</code>. Every agent in that chain is named in lower
+          case, as <code>instance:</code> followed by a letter and then letters, digits and hyphens,
+          up to 41 characters, exactly as a grant names it; an assertion naming any agent another
+          way is refused. Omnesis checks the signature against the keys the host publishes at
+          <code>&lt;issuer&gt;/.well-known/jwks.json</code> (cached for five minutes and fetched
+          again for a key it has not seen), that the type, issuer and audience are exactly the ones
+          you configured, that it has not expired, allowing five seconds of clock difference, that
+          it lives no longer than two minutes, and that its <code>jti</code> has not been used
+          before. The issuer is an <code>https://</code> origin, or an <code>http://</code> loopback
+          origin for a host on the same machine; the audience is one of this gateway's MCP URLs as
+          the host saved it, without query, fragment or trailing slash, and a binding to any other
+          audience is refused. A person is compared lower-cased and must be plain ASCII that Unicode
+          NFKC normalization leaves unchanged; any other <code>sub</code> is refused.
         </p>
         <p>
           A call is granted by the calling agent and the person together. When other agents asked
@@ -447,11 +449,10 @@
           name gets nothing, whatever the default, and a call it takes part in is refused as
           <code>denied</code>. Removing an agent's level or denial while its person has a default
           would hand the agent that default, so Omnesis refuses the removal unless you say the
-          default is meant. Agents are named in lower case, as <code>instance:</code> followed by a
-          letter and then letters, digits and hyphens, up to 41 characters; a call from an agent
-          that a grant names only in other letter case is refused as
-          <code>agent-name-mismatch</code>
-          rather than given the default.
+          default is meant. A denial applies to one person: an agent denied for one person can still
+          act for another person under that person's default, so deny it for each person it should
+          not act for. A grant is saved under the agent's lower-case name, and giving an agent a
+          level or denial replaces every grant that names it in any letter case.
         </p>
         <p>
           The binding and the agents' levels are set from a portal session: bind a connection with
@@ -485,10 +486,13 @@
           <strong>No access</strong>, or with <code>DELETE</code> on the same path and
           <code>?person=maya.reeves%40example.com</code>.
           <code>GET /admin/access/host-identity</code> lists each binding's defaults under
-          <code>defaults</code>, apart from its agents, and only for connections that are still
-          live. Changing the issuer or audience, removing the binding or removing the connection
-          clears its defaults with its agents' levels. A default is cleared only on its own path,
-          never with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>.
+          <code>defaults</code>, apart from its agents, for every connection you have not removed. A
+          connection whose access has expired is listed with <code>"state": "expired"</code> and
+          shown as Expired: nothing calls through it, but its agents' levels and defaults stand,
+          keep their levels in use, and can still be denied, removed and cleared, until you remove
+          the connection. Changing the issuer or audience, removing the binding or removing the
+          connection clears its defaults with its agents' levels. A default is cleared only on its
+          own path, never with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>.
         </p>
 
         <h2 id="privacy-policy">Privacy policy</h2>

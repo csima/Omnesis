@@ -24,6 +24,7 @@ import type {
   HostAgentGrant,
   HostAgentGrantCreateInput,
   HostAgentGrantRevokeInput,
+  HostAgentRevocation,
   HostIdentityBinding,
   HostIdentityBindingInput,
   HostIdentityOverview,
@@ -111,9 +112,11 @@ export function getHostIdentityBinding(db: Db, connectionId: string): HostIdenti
 }
 
 /**
- * Every bound connection that is still live, its live host agent grants and
- * each person's default. A removed connection's binding is not listed: nothing
- * can call through it, and removing it releases its host access.
+ * Every bound connection the owner has not removed, its live host agent
+ * grants and each person's default. An expired connection is listed as
+ * `expired`: its grants still keep their levels in use, and only revocation
+ * releases them. A removed connection's binding is not listed, since removing
+ * it releases its host access.
  */
 export function listHostIdentity(db: Db, now = Date.now()): HostIdentityOverview {
   if (!hasHostIdentityTables(db)) return { bindings: [] };
@@ -122,7 +125,7 @@ export function listHostIdentity(db: Db, now = Date.now()): HostIdentityOverview
       "SELECT * FROM access_host_identity_bindings ORDER BY created_at, principal_id",
     )
     .all()
-    .filter((row) => getConnectionGrant(db, row.principal_id, now) !== null);
+    .filter((row) => connectionHeld(db, row.principal_id));
   const grants = db.prepare<[string], AgentGrantRow>(
     `SELECT h.*, l.name AS level_name
        FROM access_host_agent_grants h
@@ -135,6 +138,7 @@ export function listHostIdentity(db: Db, now = Date.now()): HostIdentityOverview
       const live = grants.all(row.principal_id);
       return {
         ...bindingFromRow(row),
+        state: getConnectionGrant(db, row.principal_id, now) ? "active" : "expired",
         agents: live.filter((grant) => grant.agent !== HOST_AGENT_DEFAULT).map(agentGrantFromRow),
         defaults: live
           .filter((grant) => grant.agent === HOST_AGENT_DEFAULT)
@@ -239,23 +243,29 @@ function writeHostAgentGrant(
   if (!person || !agent) return { ok: false, error: "invalid-selection" };
   try {
     return db.transaction((): AccessMutationResult<HostAgentGrant> => {
-      if (!getConnectionGrant(db, input.connectionId, now)) {
-        return { ok: false, error: "not-found" };
-      }
+      // A denial only narrows, so an expired connection may still take one;
+      // a level needs the connection live.
+      const held =
+        input.levelId === null
+          ? connectionHeld(db, input.connectionId)
+          : getConnectionGrant(db, input.connectionId, now) !== null;
+      if (!held) return { ok: false, error: "not-found" };
       if (!getHostIdentityBinding(db, input.connectionId)) {
         return { ok: false, error: "host-not-bound" };
       }
       if (input.levelId !== null && !getLiveLevelRow(db, input.levelId)) {
         return { ok: false, error: "inactive-grant" };
       }
-      const current = replace ? findLiveAgentGrant(db, input.connectionId, person, agent) : null;
-      if (current && current.levelId === input.levelId) return { ok: true, value: current };
-      if (current) {
-        db.prepare("UPDATE access_host_agent_grants SET revoked_at = ? WHERE id = ?").run(
-          now,
-          current.id,
-        );
+      // Every live grant naming this agent in any letter case is the agent's:
+      // a create is refused while there is one, and a replace revokes them all.
+      const variants = findLiveAgentGrants(db, input.connectionId, person, agent);
+      if (!replace && variants.length > 0) return { ok: false, error: "host-agent-exists" };
+      const [only] = variants;
+      if (variants.length === 1 && only?.agent === agent && only.levelId === input.levelId) {
+        return { ok: true, value: only };
       }
+      const revoke = db.prepare("UPDATE access_host_agent_grants SET revoked_at = ? WHERE id = ?");
+      for (const variant of variants) revoke.run(now, variant.id);
       const id = randomUUID();
       db.prepare(
         `INSERT INTO access_host_agent_grants (id, principal_id, person, agent, level_id, created_at)
@@ -270,7 +280,9 @@ function writeHostAgentGrant(
           person,
           agent,
           levelId: input.levelId,
-          ...(current ? { replacedHostAgentGrantId: current.id } : {}),
+          ...(variants.length > 0
+            ? { replacedHostAgentGrantIds: variants.map((variant) => variant.id) }
+            : {}),
         },
         now,
       });
@@ -292,8 +304,8 @@ export function revokeHostAgentGrant(
   db: Db,
   input: HostAgentGrantRevokeInput,
   now = Date.now(),
-): AccessMutationResult<null> {
-  return db.transaction((): AccessMutationResult<null> => {
+): AccessMutationResult<HostAgentRevocation> {
+  return db.transaction((): AccessMutationResult<HostAgentRevocation> => {
     const grant = getHostAgentGrant(db, input.grantId);
     if (!grant || grant.revokedAt !== null || grant.agent === HOST_AGENT_DEFAULT) {
       return { ok: false, error: "not-found" };
@@ -319,23 +331,46 @@ export function revokeHostAgentGrant(
       },
       now,
     });
-    return { ok: true, value: null };
+    return { ok: true, value: { onDefault: fallback !== null } };
   })();
 }
 
-function findLiveAgentGrant(
+function findLiveAgentGrants(
   db: Db,
   connectionId: string,
   person: string,
   agent: string,
-): HostAgentGrant | null {
-  const row = db
-    .prepare<[string, string, string], { id: string }>(
+): HostAgentGrant[] {
+  return db
+    .prepare<[string, string, string, string], { id: string }>(
       `SELECT id FROM access_host_agent_grants
-        WHERE principal_id = ? AND person = ? AND agent = ? AND revoked_at IS NULL`,
+        WHERE principal_id = ? AND person = ? AND agent = ? COLLATE NOCASE
+          AND agent <> ? AND revoked_at IS NULL
+        ORDER BY created_at, id`,
     )
-    .get(connectionId, person, agent);
-  return row ? getHostAgentGrant(db, row.id) : null;
+    .all(connectionId, person, agent, HOST_AGENT_DEFAULT)
+    .map((row) => getHostAgentGrant(db, row.id)!);
+}
+
+/**
+ * Whether a connection still holds access the owner has not revoked: its
+ * principal and at least one of its grants are unrevoked, expired or not.
+ * Only revocation releases a binding, so an expired connection keeps its
+ * host access listed, and it can still be narrowed and cleared.
+ */
+function connectionHeld(db: Db, connectionId: string): boolean {
+  return (
+    db
+      .prepare<[string], { present: number }>(
+        `SELECT 1 AS present FROM access_principals p
+          WHERE p.id = ? AND p.revoked_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM access_grants g
+               WHERE g.principal_id = p.id AND g.revoked_at IS NULL
+            )`,
+      )
+      .get(connectionId) !== undefined
+  );
 }
 
 /**

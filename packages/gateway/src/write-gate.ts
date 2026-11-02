@@ -165,6 +165,7 @@ import type {
   HostAgentGrant,
   HostAgentGrantCreateInput,
   HostAgentGrantRevokeInput,
+  HostAgentRevocation,
   HostIdentityBinding,
   HostIdentityBindingInput,
   HostIdentityUnbindInput,
@@ -1317,7 +1318,9 @@ export interface WriteGate extends KnowledgeWriteGate {
   createHostAgentGrant(
     input: HostAgentGrantCreateInput,
   ): Promise<AccessMutationResult<HostAgentGrant>>;
-  revokeHostAgentGrant(input: HostAgentGrantRevokeInput): Promise<AccessMutationResult<null>>;
+  revokeHostAgentGrant(
+    input: HostAgentGrantRevokeInput,
+  ): Promise<AccessMutationResult<HostAgentRevocation>>;
   setHostAgentDefault(
     input: HostAgentDefaultInput,
   ): Promise<AccessMutationResult<HostAgentDefault | null>>;

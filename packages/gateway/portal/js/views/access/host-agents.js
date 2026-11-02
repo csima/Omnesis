@@ -13,6 +13,10 @@
 // default, or denying the agent. A default for a person no agent is listed for
 // yet is set from the form below the people.
 //
+// An expired connection is listed as Expired: nothing calls through it, but
+// its grants and defaults stand until it is removed, so it can still be
+// narrowed and cleared, though no new default is offered for it.
+//
 // The host identity is loaded by the Access view, which also reads it to say
 // which levels only agent hosts use; `onChanged` asks it to load again.
 
@@ -265,12 +269,19 @@ export function HostAgents({ hostIdentity, levels, entries, onChanged = async ()
     ${bindings.map((binding) => {
       const connection = entries.find((entry) => entry.id === binding.connectionId);
       const titleId = `access-host-binding-${binding.connectionId}`;
+      const expired = binding.state === "expired";
       return html`<section key=${binding.connectionId} class="access-level-group" aria-labelledby=${titleId}>
         <div class="access-level-head">
           <div class="access-level-title">
             <span class="access-level-kicker" aria-hidden="true">Agent host</span>
-            <h3 id=${titleId} class="access-level-name">${connection?.name ?? "Connection"}</h3>
+            <h3 id=${titleId} class="access-level-name">
+              ${connection?.name ?? "Connection"}
+              ${expired ? html` <span class="access-revoked">Expired</span>` : null}
+            </h3>
             <span class="access-host-issuer">${binding.issuer}</span>
+            ${expired
+              ? html`<span class="access-host-expired-note">Nothing calls through this connection while it is expired. Its agents and defaults stand until it is removed; you can still deny or remove agents and clear defaults.</span>`
+              : null}
           </div>
         </div>
         <div class="access-level-body">
@@ -284,7 +295,7 @@ export function HostAgents({ hostIdentity, levels, entries, onChanged = async ()
             onLevel=${(agent, levelId) => changeLevel(binding, agent, levelId)}
             onRemove=${(agent) => remove(binding, agent)}
           />`)}
-          ${levels.length > 0
+          ${levels.length > 0 && !expired
             ? html`<${NewPersonDefault}
                 binding=${binding}
                 levels=${levels}

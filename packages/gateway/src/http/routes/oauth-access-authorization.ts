@@ -828,9 +828,9 @@ export function mountOAuthAuthorizationRoutes(
       return c.json({ error: result.error }, 404);
     }
     log.info(
-      `Host agent grant ${grantId.data} revoked${query.data.fallback ? ", its agent now on the default" : ""}`,
+      `Host agent grant ${grantId.data} revoked${result.value.onDefault ? ", its agent now on the default" : ""}`,
     );
-    return c.json({ revoked: true });
+    return c.json({ revoked: true, onDefault: result.value.onDefault });
   });
   // A device's access level decides what its `/answer` requests may read and
   // whether they are reviewed, so it is authored like every other access

@@ -606,7 +606,9 @@ describe("MCP through an agent host that says who is calling", () => {
 
     await grant("instance:Agent-D", mailLevel);
     expect(await coverage(["instance:agent-d"])).toEqual([mailSourceId]);
-    expect(await refusedWith(["instance:Agent-D"])).toBe("agent-name-mismatch");
+    expect(await refusedWith(["instance:Agent-D"])).toBe("malformed");
+    expect(await refusedWith(["instance:agent_d"])).toBe("malformed");
+    expect(await refusedWith([AGENT_A, "instance:Agent-D"])).toBe("malformed");
 
     const db = new Database(harness.getDbPath(), { readonly: true });
     try {

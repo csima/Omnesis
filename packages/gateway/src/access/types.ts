@@ -182,8 +182,24 @@ export interface HostAgentDefault {
   createdAt: number;
 }
 
+/**
+ * Each binding the owner has not removed. `expired` marks a connection whose
+ * grant has expired: nothing calls through it, but its host access stands
+ * until it is revoked.
+ */
 export interface HostIdentityOverview {
-  bindings: Array<HostIdentityBinding & { agents: HostAgentGrant[]; defaults: HostAgentDefault[] }>;
+  bindings: Array<
+    HostIdentityBinding & {
+      state: "active" | "expired";
+      agents: HostAgentGrant[];
+      defaults: HostAgentDefault[];
+    }
+  >;
+}
+
+/** A revoked agent grant, and whether the agent now gets its person's default. */
+export interface HostAgentRevocation {
+  onDefault: boolean;
 }
 
 export interface HostIdentityBindingInput {

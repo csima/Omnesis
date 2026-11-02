@@ -298,7 +298,7 @@ describe("agent grants and the default together", () => {
     });
     expect(await call("DELETE", `/admin/access/host-agents/${id}?fallback=default`)).toEqual({
       status: 200,
-      body: { revoked: true },
+      body: { revoked: true, onDefault: true },
     });
     expect((await listed()).bindings[0]?.agents).toEqual([]);
   });

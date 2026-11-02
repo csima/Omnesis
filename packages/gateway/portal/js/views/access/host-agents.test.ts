@@ -153,6 +153,20 @@ describe("HostAgents", () => {
     expect(host.innerHTML).toBe("");
   });
 
+  test("marks an expired connection, and offers it no new default", async () => {
+    const expired = identity([MAYA_DEFAULT]);
+    await mount({ bindings: [{ ...expired.bindings[0], state: "expired" }] });
+    expect(host.querySelector(".access-level-name .access-revoked")?.textContent).toBe("Expired");
+    expect(host.textContent).toContain("Nothing calls through this connection while it is expired.");
+    expect(host.querySelector(".access-host-new")).toBeNull();
+    expect(host.querySelector(".access-host-default select")).not.toBeNull();
+    expect(host.querySelector(".access-host-remove")).not.toBeNull();
+
+    await mount({ bindings: [{ ...expired.bindings[0], state: "active" }] });
+    expect(host.querySelector(".access-revoked")).toBeNull();
+    expect(host.querySelector(".access-host-new")).not.toBeNull();
+  });
+
   test("lists each person's agents with their level and the default for other agents", async () => {
     await mount(identity([MAYA_DEFAULT], [AGENT, { ...AGENT, id: "grant-2", agent: "instance:agent-b", levelId: null, levelName: null }]));
     expect(host.textContent).toContain("Fictional agent host");
