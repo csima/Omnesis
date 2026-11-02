@@ -185,6 +185,7 @@ interface Bench {
   dbPath: string;
   keyHex: string;
   scheduler: Scheduler;
+  runner: WriterTaskRunner;
   gate: WriteGate;
 }
 
@@ -215,6 +216,7 @@ async function startBench(seedExtra?: (db: Database.Database) => void): Promise<
     dbPath,
     keyHex: key.toString("hex"),
     scheduler,
+    runner,
     gate: writeGateFromScheduler(scheduler),
   };
 }
@@ -264,7 +266,10 @@ async function runUnderLoad(bench: Bench, label: string, readers: ReaderOptions[
   let maxWalBytes = 0;
   let shrinks = 0;
   let lastWalBytes = 0;
+  let reportedLogFrames = 0;
   const sampler = setInterval(() => {
+    const frames = bench.runner.walCheckpointMetrics(1)?.lastLogFrames ?? 0;
+    reportedLogFrames = Math.max(reportedLogFrames, frames);
     const size = existsSync(`${dbPath}-wal`) ? statSync(`${dbPath}-wal`).size : 0;
     maxWalBytes = Math.max(maxWalBytes, size);
     if (size < lastWalBytes) shrinks += 1;
@@ -295,7 +300,17 @@ async function runUnderLoad(bench: Bench, label: string, readers: ReaderOptions[
         .map(([op, ms]) => `${op}:${ms.toFixed(0)}`)
         .join(",")}\n`,
   );
-  return { written, readerStats, metrics, stats, sorted, p, maxWalBytes, shrinks };
+  return {
+    written,
+    readerStats,
+    metrics,
+    stats,
+    sorted,
+    p,
+    maxWalBytes,
+    shrinks,
+    reportedLogFrames,
+  };
 }
 
 describe("writer WAL checkpoints under sustained writes and constant readers", () => {
@@ -328,7 +343,9 @@ describe("writer WAL checkpoints under sustained writes and constant readers", (
     expect(run.maxWalBytes).toBeLessThan(WAL_SIZE_LIMIT_BYTES * 2);
     expect(metrics).toMatchObject({ runs: stats.runs, maxMs: stats.maxMs, rewinds: stats.rewinds });
     expect(metrics.p95Ms).toBeLessThanOrEqual(metrics.maxMs);
-    expect(metrics.lastLogFrames).toBeGreaterThan(0);
+    expect(run.reportedLogFrames).toBeGreaterThan(0);
+    expect(metrics.lastLogFrames).toBeGreaterThanOrEqual(0);
+    expect(metrics.lastCheckpointedFrames).toBeLessThanOrEqual(metrics.lastLogFrames!);
   }, 900_000);
 });
 
