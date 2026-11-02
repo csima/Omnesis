@@ -62,6 +62,7 @@ const HOLD_BUDGET_MS = 250;
 /** The longest statement, and so the longest snapshot, a background read may take. */
 const READ_BUDGET_MS = 1_000;
 const PROBE_EVERY_MS = 50;
+const MAX_DEFERRED_STREAK = 4;
 const CURSOR: SyncCursor = {
   type: "incremental",
   lastSyncTime: "2026-01-05T09:00:00.000Z",
@@ -285,7 +286,7 @@ async function runUnderLoad(bench: Bench, label: string, readers: ReaderOptions[
   process.stdout.write(
     `[${label}] docs=${DOCS} seconds=${SECONDS} written=${written} ` +
       `checkpoints=${stats.runs} maxCheckpointMs=${stats.maxMs.toFixed(0)} totalCheckpointMs=${stats.totalMs.toFixed(0)} ` +
-      `rewinds=${stats.rewinds} deferredRewinds=${stats.deferredRewinds} ` +
+      `rewinds=${stats.rewinds} deferredRewinds=${stats.deferredRewinds} maxDeferredStreak=${stats.maxDeferredStreak} ` +
       `maxWalMiB=${(maxWalBytes / 2 ** 20).toFixed(1)} finalWalMiB=${(lastWalBytes / 2 ** 20).toFixed(1)} walShrinks=${shrinks} ` +
       `probes=${probeMs.length} probeP50=${p(0.5).toFixed(0)}ms probeP99=${p(0.99).toFixed(0)}ms probeMax=${sorted.at(-1)!.toFixed(0)}ms ` +
       `upsertMax=${upsert?.max.toFixed(0)}ms reads=${readerStats.map((r) => r.reads).join("/")} ` +
@@ -342,7 +343,7 @@ describe("writer WAL checkpoints while the gateway's own background reads run ba
     await stopBench(bench);
   });
 
-  test("every statement stays short, rewinds mostly succeed, and no checkpoint holds the writer", async () => {
+  test("every statement stays short, readers never starve the rewind, and no checkpoint holds the writer", async () => {
     const real = {
       statsSourceId: BACKLOG_SOURCE,
       algoVersion: PILOT_ALGO,
@@ -363,7 +364,7 @@ describe("writer WAL checkpoints while the gateway's own background reads run ba
     expect(sorted.at(-1)!).toBeLessThan(HOLD_BUDGET_MS * 2);
     expect(p(0.99)).toBeLessThan(HOLD_BUDGET_MS);
     expect(stats.rewinds).toBeGreaterThan(0);
-    expect(stats.rewinds).toBeGreaterThan(stats.deferredRewinds);
+    expect(stats.maxDeferredStreak).toBeLessThanOrEqual(MAX_DEFERRED_STREAK);
     expect(run.shrinks).toBeGreaterThan(0);
     expect(run.maxWalBytes).toBeLessThan(WAL_SIZE_LIMIT_BYTES * 2);
   }, 900_000);
