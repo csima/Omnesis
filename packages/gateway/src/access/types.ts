@@ -117,8 +117,17 @@ export interface McpToolInvocationAuditInput {
   hostCaller?: HostCallerAudit;
 }
 
+/**
+ * How an agent got the level a call used: a grant naming it, or the
+ * default the person's agents get when no grant names them.
+ */
+export type HostAgentGrantKind = "exact" | "default";
+
 /** One host agent grant a call relied on, with the level revision it read. */
 export interface HostAgentAuthority {
+  /** The agent this grant was read for, `instance:<id>`. */
+  agent: string;
+  grant: HostAgentGrantKind;
   grantId: string;
   levelId: string;
   levelRevision: number;
@@ -144,20 +153,53 @@ export interface HostIdentityBinding {
   updatedAt: number;
 }
 
-/** One agent of a bound host, acting for one person, on one access level. */
+/**
+ * One agent of a bound host, acting for one person, on one access level, or
+ * denied any access when `levelId` is null. A grant naming the agent, a denial
+ * included, always wins over the person's default.
+ */
 export interface HostAgentGrant {
   id: string;
   connectionId: string;
   person: string;
   agent: string;
-  levelId: string;
+  levelId: string | null;
   levelName: string | null;
   createdAt: number;
   revokedAt: number | null;
 }
 
+/**
+ * The level every agent of a bound host gets, acting for one person, when no
+ * grant names that agent. A grant naming the agent always wins over it.
+ */
+export interface HostAgentDefault {
+  id: string;
+  connectionId: string;
+  person: string;
+  levelId: string;
+  levelName: string | null;
+  createdAt: number;
+}
+
+/**
+ * Each binding the owner has not removed. `expired` marks a connection whose
+ * grant has expired: nothing calls through it, but its host access stands
+ * until it is revoked.
+ */
 export interface HostIdentityOverview {
-  bindings: Array<HostIdentityBinding & { agents: HostAgentGrant[] }>;
+  bindings: Array<
+    HostIdentityBinding & {
+      state: "active" | "expired";
+      agents: HostAgentGrant[];
+      defaults: HostAgentDefault[];
+    }
+  >;
+}
+
+/** A revoked agent grant, and whether the agent now gets its person's default. */
+export interface HostAgentRevocation {
+  onDefault: boolean;
 }
 
 export interface HostIdentityBindingInput {
@@ -172,16 +214,31 @@ export interface HostIdentityUnbindInput {
   actorTokenId: string;
 }
 
+/** `levelId: null` denies the agent any access, whatever the person's default. */
 export interface HostAgentGrantCreateInput {
   connectionId: string;
   person: string;
   agent: string;
-  levelId: string;
+  levelId: string | null;
   actorTokenId: string;
 }
 
+/**
+ * Revoke one agent's grant. While the person has a default the agent would
+ * then get it, so the revocation is refused as `default-would-apply` unless
+ * `fallback` says the default is meant.
+ */
 export interface HostAgentGrantRevokeInput {
   grantId: string;
+  actorTokenId: string;
+  fallback?: "default";
+}
+
+/** Set one person's default level on a bound connection, or clear it with `levelId: null`. */
+export interface HostAgentDefaultInput {
+  connectionId: string;
+  person: string;
+  levelId: string | null;
   actorTokenId: string;
 }
 

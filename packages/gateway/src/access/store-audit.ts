@@ -46,6 +46,10 @@ export function recordMcpToolInvocationAudit(
                 ? { hostTask: boundedAuditField(input.hostCaller.task) }
                 : {}),
               hostAgentGrantIds: input.hostCaller.grants.map((grant) => grant.grantId),
+              hostAgentGrants: input.hostCaller.grants.map((grant) => ({
+                agent: boundedAuditField(grant.agent),
+                grant: grant.grant,
+              })),
             }
           : {}),
       },

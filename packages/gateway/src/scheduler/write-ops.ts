@@ -345,6 +345,8 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   { name: "access.hostIdentityUnbind", priority: "user" },
   { name: "access.hostAgentGrantCreate", priority: "user" },
   { name: "access.hostAgentGrantRevoke", priority: "user" },
+  { name: "access.hostAgentDefaultSet", priority: "user" },
+  { name: "access.hostAgentGrantSet", priority: "user" },
   { name: "access.revoke", priority: "user" },
   { name: "access.mcpInvocationAudit", priority: "user" },
   { name: "access.credentialUsageTouchBatch", priority: "background" },

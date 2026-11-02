@@ -137,6 +137,7 @@ import { compactKnowledgeJournal } from "./migration-205-knowledge-journal.js";
 import { addConversationAuthors } from "./migration-206-conversation-authors.js";
 import { compactKnowledgeHistoryTargets } from "./migration-207-knowledge-history-targets.js";
 import { createHostAgentGrantTables } from "./migration-213-host-agent-grants.js";
+import { allowHostAgentDenials } from "./migration-215-host-agent-denials.js";
 import {
   createLegacyBriefClaimsTables,
   createLegacyBriefTables,
@@ -4985,6 +4986,11 @@ export const MIGRATIONS: readonly Migration[] = [
     description:
       "mark stored web pages and visits due a background redaction pass with the shaped rules",
     up: markWebRedactionDue,
+  },
+  {
+    version: 215,
+    description: "host agents denied by name, and no host access left behind a removed connection",
+    up: (db) => allowHostAgentDenials(db),
   },
 ];
 

@@ -263,7 +263,7 @@ function PencilGlyph() {
  * nor keep it from being deleted. A new name another listed level already has
  * is refused in the field, before it is sent.
  */
-function LevelGroup({ level, levels, connections, overview, levelActions, connectionActions }) {
+function LevelGroup({ level, levels, connections, overview, hostUses = 0, levelActions, connectionActions }) {
   const [renaming, setRenaming] = useState(false);
   const actionsRef = useRef(null);
   const closeRename = () => {
@@ -274,7 +274,7 @@ function LevelGroup({ level, levels, connections, overview, levelActions, connec
   const titleId = `access-level-title-${level.id}`;
   const count = liveConnectionCount(level, connections);
   const devices = levelDevices(level);
-  const inUse = count > 0 || devices.length > 0;
+  const inUse = count > 0 || devices.length > 0 || hostUses > 0;
   const items = [
     { label: "Rename", onSelect: () => setRenaming(true) },
     {
@@ -284,11 +284,13 @@ function LevelGroup({ level, levels, connections, overview, levelActions, connec
       disabled: inUse,
       hint: !inUse
         ? undefined
-        : devices.length === 0
-          ? "Move or remove its connections first."
-          : count === 0
-            ? "Move its integrations to another access level first."
-            : "Move its connections and integrations off it first.",
+        : count === 0 && devices.length === 0
+          ? "Move the agent host grants and defaults that use it to another level first."
+          : devices.length === 0
+            ? "Move or remove its connections first."
+            : count === 0
+              ? "Move its integrations to another access level first."
+              : "Move its connections and integrations off it first.",
     },
   ];
 
@@ -328,7 +330,9 @@ function LevelGroup({ level, levels, connections, overview, levelActions, connec
             <${ConnectionList} connections=${connections} label=${`Connections using ${level.name}`} actions=${connectionActions} />
           </${LevelSection}>`
         : devices.length === 0
-          ? html`<p class="access-level-empty">No connections use this access level yet.</p>`
+          ? html`<p class="access-level-empty">${hostUses > 0
+              ? `Used only by agent host grants and defaults (${hostUses}).`
+              : "No connections use this access level yet."}</p>`
           : null}
       ${devices.length > 0
         ? html`<${LevelSection} title="Used by integrations" count=${devices.length}>
@@ -368,7 +372,15 @@ export function accessListIsEmpty(entries, levels) {
  * `onMove(entry)` and `onRemove(entry)`. Both renames answer whether the name
  * was taken.
  */
-export function AccessList({ entries, levels, overview, levelActions, connectionActions, onConnect = null }) {
+export function AccessList({
+  entries,
+  levels,
+  overview,
+  levelActions,
+  connectionActions,
+  onConnect = null,
+  hostLevelUses = new Map(),
+}) {
   if (accessListIsEmpty(entries, levels)) {
     return html`
       <div class="access-empty">
@@ -388,6 +400,7 @@ export function AccessList({ entries, levels, overview, levelActions, connection
       levels=${levels}
       connections=${connections}
       overview=${overview}
+      hostUses=${hostLevelUses.get(level.id) ?? 0}
       levelActions=${levelActions}
       connectionActions=${connectionActions}
     />`)}

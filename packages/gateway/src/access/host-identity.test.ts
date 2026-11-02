@@ -243,6 +243,31 @@ describe("HostIdentityVerifier", () => {
     ).toBe("malformed");
   });
 
+  it("refuses an agent at any depth that is not named as the host mints it", async () => {
+    for (const name of [
+      "instance:Researcher-1",
+      "INSTANCE:researcher-1",
+      "instance:researcher_1",
+      "instance:researcher.1",
+      "instance:1-researcher",
+      "instance:r",
+      `instance:r${"e".repeat(41)}`,
+    ]) {
+      for (const agents of [[name], [RESEARCHER, name], [RESEARCHER, PLANNER, name]]) {
+        expect(await refusal(host.mint({ audience: AUDIENCE, person: PERSON, agents }))).toBe(
+          "malformed",
+        );
+      }
+    }
+    const longest = `instance:r${"e".repeat(40)}`;
+    await expect(
+      verifier.verify(
+        host.mint({ audience: AUDIENCE, person: PERSON, agents: [longest, PLANNER] }),
+        trust(),
+      ),
+    ).resolves.toMatchObject({ agent: longest, delegators: [PLANNER] });
+  });
+
   it("refuses a key the host does not publish and caches the key set", async () => {
     await verifier.verify(
       host.mint({ audience: AUDIENCE, person: PERSON, agents: [RESEARCHER] }),

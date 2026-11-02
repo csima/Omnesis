@@ -10,7 +10,10 @@ import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
  * many agents can attach, to each tool call, a short-lived assertion saying
  * which person the call acts for and which agent is calling — the agent as
  * `act.sub`, and any agents that asked it nested inside as their own `act`
- * (RFC 8693 §4.1). The assertion is an ES256 JWT of type
+ * (RFC 8693 §4.1). Every agent in that chain must be named exactly as the
+ * host mints it and a grant names it — `instance:` and a lower-case id — or
+ * the assertion is refused as malformed, so no call carries an agent a grant
+ * could not name or deny. The assertion is an ES256 JWT of type
  * `agent-host-identity+jwt`, bound to this gateway's MCP URL by `aud`, valid
  * for two minutes and unique by `jti`. The host publishes its keys as a JWK
  * Set at `<iss>/.well-known/jwks.json`.
@@ -39,7 +42,8 @@ const MAX_ISSUERS = 32;
 const MAX_PERSON_LENGTH = 320;
 const MAX_TASK_LENGTH = 200;
 const MAX_JTI_LENGTH = 200;
-const AGENT_PATTERN = /^instance:[A-Za-z0-9._-]{1,128}$/u;
+const GRANT_AGENT_PATTERN = /^instance:[a-z][a-z0-9-]{1,40}$/u;
+const PERSON_EMAIL_PATTERN = /^[a-z0-9.!#$%&'+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/u;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
 export type HostIdentityRefusal =
@@ -135,8 +139,20 @@ export function normalizeHostPerson(value: string): string | null {
   return person;
 }
 
-export function isHostAgentName(value: string): boolean {
-  return AGENT_PATTERN.test(value);
+/**
+ * An agent as a grant names it: `instance:` and an id the host can mint,
+ * lower-cased — a letter, then letters, digits and hyphens, 2 to 41 in all.
+ * Null for anything else, so a grant can never name an agent only by a
+ * spelling the host would not send.
+ */
+export function normalizeHostAgentGrantName(value: string): string | null {
+  const agent = value.trim().toLowerCase();
+  return GRANT_AGENT_PATTERN.test(agent) ? agent : null;
+}
+
+/** Whether a normalized person is an email address, the only person a default is set for. */
+export function isHostPersonEmail(person: string): boolean {
+  return PERSON_EMAIL_PATTERN.test(person);
 }
 
 export class HostIdentityVerifier {
@@ -244,7 +260,7 @@ function actors(act: unknown): string[] {
       throw new HostIdentityError("malformed");
     }
     const { sub, act: inner } = node as { sub?: unknown; act?: unknown };
-    if (typeof sub !== "string" || !AGENT_PATTERN.test(sub)) {
+    if (typeof sub !== "string" || !GRANT_AGENT_PATTERN.test(sub)) {
       throw new HostIdentityError("malformed");
     }
     chain.push(sub);

@@ -397,17 +397,19 @@
           connection's access token. It is an ES256 JWT of type
           <code>agent-host-identity+jwt</code> naming the person in <code>sub</code>, the calling
           agent as <code>instance:&lt;id&gt;</code> in <code>act</code>, and each agent that asked
-          it nested inside as its own <code>act</code>. Omnesis checks the signature against the
-          keys the host publishes at <code>&lt;issuer&gt;/.well-known/jwks.json</code> (cached for
-          five minutes and fetched again for a key it has not seen), that the type, issuer and
-          audience are exactly the ones you configured, that it has not expired, allowing five
-          seconds of clock difference, that it lives no longer than two minutes, and that its
-          <code>jti</code> has not been used before. The issuer is an <code>https://</code> origin,
-          or an <code>http://</code> loopback origin for a host on the same machine; the audience is
-          one of this gateway's MCP URLs as the host saved it, without query, fragment or trailing
-          slash, and a binding to any other audience is refused. A person is compared lower-cased
-          and must be plain ASCII that Unicode NFKC normalization leaves unchanged; any other
-          <code>sub</code> is refused.
+          it nested inside as its own <code>act</code>. Every agent in that chain is named in lower
+          case, as <code>instance:</code> followed by a letter and then letters, digits and hyphens,
+          up to 41 characters, exactly as a grant names it; an assertion naming any agent another
+          way is refused. Omnesis checks the signature against the keys the host publishes at
+          <code>&lt;issuer&gt;/.well-known/jwks.json</code> (cached for five minutes and fetched
+          again for a key it has not seen), that the type, issuer and audience are exactly the ones
+          you configured, that it has not expired, allowing five seconds of clock difference, that
+          it lives no longer than two minutes, and that its <code>jti</code> has not been used
+          before. The issuer is an <code>https://</code> origin, or an <code>http://</code> loopback
+          origin for a host on the same machine; the audience is one of this gateway's MCP URLs as
+          the host saved it, without query, fragment or trailing slash, and a binding to any other
+          audience is refused. A person is compared lower-cased and must be plain ASCII that Unicode
+          NFKC normalization leaves unchanged; any other <code>sub</code> is refused.
         </p>
         <p>
           A call is granted by the calling agent and the person together. When other agents asked
@@ -424,6 +426,35 @@
           the calling agent, the agents that asked it and the agent levels it used.
         </p>
         <p>
+          A host that starts agents often, including one-off workers, can give a person's agents a
+          default instead of a level each. The default is an access level that every agent of the
+          host acting for that person gets when you have not given that agent a level of its own. A
+          level given to an agent by name always wins over the default, even when it is narrower.
+          The default changes nothing about the checks above: it applies only to an assertion that
+          passes every one of them and whose <code>sub</code> is that person, it belongs to one
+          binding, and the connection's own level stays its ceiling. In a delegated call, each agent
+          in the chain without a level of its own is cut by the default. Clearing the default
+          refuses those agents again from the next call, and a call already running when the default
+          changes, or when an agent it covered is given a level of its own, releases nothing. The
+          ledger entry of each tool call lists, in <code>hostAgentGrants</code>, every agent in the
+          chain with <code>"grant": "exact"</code> for a level given by name or
+          <code>"grant": "default"</code> for the person's default.
+        </p>
+        <p>
+          While a person has a default, the host's <code>sub</code> is the only thing that decides
+          which of that person's agents the default reaches: any agent of the host that the host
+          says acts for that person, and that you have not named, gets it. Set a default only for a
+          person whose agents the host attributes correctly, and name an agent to treat it
+          differently. To keep one agent out, deny it: an agent given <strong>No access</strong> by
+          name gets nothing, whatever the default, and a call it takes part in is refused as
+          <code>denied</code>. Removing an agent's level or denial while its person has a default
+          would hand the agent that default, so Omnesis refuses the removal unless you say the
+          default is meant. A denial applies to one person: an agent denied for one person can still
+          act for another person under that person's default, so deny it for each person it should
+          not act for. A grant is saved under the agent's lower-case name, and giving an agent a
+          level or denial replaces every grant that names it in any letter case.
+        </p>
+        <p>
           The binding and the agents' levels are set from a portal session: bind a connection with
           <code>PUT /admin/access/connections/&lt;connection&gt;/host-identity</code> and a body of
           <code
@@ -434,10 +465,34 @@
           <code
             >{"person": "maya.reeves@example.com", "agent": "instance:researcher-1", "levelId":
             "&lt;level&gt;"}</code
-          >; revoke one with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>; and list them
-          with <code>GET /admin/access/host-identity</code>. Changing the issuer or audience, or
-          removing the binding with <code>DELETE</code> on the binding, revokes every agent's level,
-          and a level that an agent still uses cannot be deleted.
+          >, or <code>"levelId": null</code> to deny it; change an agent's level or denial in one
+          step with <code>PUT</code> on the same path and the same body; revoke one with
+          <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>, which answers
+          <code>409</code> with <code>default-would-apply</code> while its person has a default and
+          revokes it onto the default only with <code>?fallback=default</code>; and list them with
+          <code>GET /admin/access/host-identity</code>. Changing the issuer or audience, or removing
+          the binding with <code>DELETE</code> on the binding, revokes every agent's level, and a
+          level that an agent still uses cannot be deleted. Removing the connection does the same,
+          and drops its binding.
+        </p>
+        <p>
+          Under Settings → Access → Agent hosts, each agent has its level or
+          <strong>No access</strong>, and <strong>Remove</strong> asks whether the agent should get
+          its person's default or be denied. Set a person's default there with
+          <strong>Default for other agents</strong>, or with
+          <code>PUT /admin/access/connections/&lt;connection&gt;/host-agent-default</code> and
+          <code>{"person": "maya.reeves@example.com", "levelId": "&lt;level&gt;"}</code>; the person
+          is an email address. Setting it again replaces it. Clear it by choosing
+          <strong>No access</strong>, or with <code>DELETE</code> on the same path and
+          <code>?person=maya.reeves%40example.com</code>.
+          <code>GET /admin/access/host-identity</code> lists each binding's defaults under
+          <code>defaults</code>, apart from its agents, for every connection you have not removed. A
+          connection whose access has expired is listed with <code>"state": "expired"</code> and
+          shown as Expired: nothing calls through it, but its agents' levels and defaults stand,
+          keep their levels in use, and can still be denied, removed and cleared, until you remove
+          the connection. Changing the issuer or audience, removing the binding or removing the
+          connection clears its defaults with its agents' levels. A default is cleared only on its
+          own path, never with <code>DELETE /admin/access/host-agents/&lt;id&gt;</code>.
         </p>
 
         <h2 id="privacy-policy">Privacy policy</h2>

@@ -255,10 +255,26 @@ export const accessHostIdentityBody = z
   })
   .strict();
 
+export const accessHostAgentDefaultBody = z
+  .object({
+    person: z.string().min(1).max(320),
+    levelId: z.string().uuid(),
+  })
+  .strict();
+
+export const accessHostAgentDefaultQuery = z
+  .object({ person: z.string().min(1).max(320) })
+  .strict();
+
+/** `levelId: null` denies the agent any access, whatever the person's default. */
 export const accessHostAgentBody = z
   .object({
     person: z.string().min(1).max(320),
     agent: z.string().min(1).max(160),
-    levelId: z.string().uuid(),
+    levelId: z.string().uuid().nullable(),
   })
+  .strict();
+
+export const accessHostAgentRevokeQuery = z
+  .object({ fallback: z.literal("default").optional() })
   .strict();

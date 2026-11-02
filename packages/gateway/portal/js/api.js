@@ -1017,6 +1017,40 @@ export const moveConnectionLevel = (connectionId, target, expectedGrantRevision)
     body: { ...target, expectedGrantRevision },
   });
 
+/** Every connection bound to an agent host, with its agents' levels and each person's default. */
+export const getHostIdentity = () =>
+  request("GET", "/admin/access/host-identity", { cache: "no-store" });
+
+/** Give every agent of a bound host that no grant names, acting for `person`, an access level. */
+export const setHostAgentDefault = (connectionId, person, levelId) =>
+  request("PUT", `/admin/access/connections/${encodeURIComponent(connectionId)}/host-agent-default`, {
+    body: { person, levelId },
+  });
+
+/**
+ * Give one agent of a bound host, acting for `person`, an access level, or
+ * deny it any access with `levelId: null`, replacing the grant it has.
+ */
+export const setHostAgentLevel = (connectionId, person, agent, levelId) =>
+  request("PUT", `/admin/access/connections/${encodeURIComponent(connectionId)}/host-agents`, {
+    body: { person, agent, levelId },
+  });
+
+/**
+ * Remove one agent's grant or denial. While its person has a default this is
+ * refused as `default-would-apply` unless `fallback: "default"` is passed.
+ */
+export const revokeHostAgent = (grantId, { fallback } = {}) =>
+  request("DELETE", `/admin/access/host-agents/${encodeURIComponent(grantId)}`, {
+    query: fallback ? { fallback } : undefined,
+  });
+
+/** Clear a person's default, so a host agent no grant names gets nothing again. */
+export const clearHostAgentDefault = (connectionId, person) =>
+  request("DELETE", `/admin/access/connections/${encodeURIComponent(connectionId)}/host-agent-default`, {
+    query: { person },
+  });
+
 /**
  * Put a device on an access level, whose Answer rule then applies to what it
  * asks over `/answer`, or with `levelId: null` on none. The expected revision
