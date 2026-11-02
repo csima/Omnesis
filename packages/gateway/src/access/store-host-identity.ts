@@ -4,7 +4,8 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  isHostAgentName,
+  isHostPersonEmail,
+  normalizeHostAgentGrantName,
   normalizeHostAudience,
   normalizeHostIssuer,
   normalizeHostPerson,
@@ -18,14 +19,23 @@ import type { AccessMutationResult } from "./store-contracts.js";
 import type {
   AccessGrantCapability,
   HostAgentAuthority,
+  HostAgentDefault,
+  HostAgentDefaultInput,
   HostAgentGrant,
   HostAgentGrantCreateInput,
   HostAgentGrantRevokeInput,
+  HostAgentRevocation,
   HostIdentityBinding,
   HostIdentityBindingInput,
   HostIdentityOverview,
   HostIdentityUnbindInput,
 } from "./types.js";
+
+/**
+ * The `agent` of a person's default grant row. No agent can be named this:
+ * an assertion's agents and a grant's agent are both `instance:<id>`.
+ */
+export const HOST_AGENT_DEFAULT = "*";
 
 interface BindingRow {
   principal_id: string;
@@ -40,7 +50,7 @@ interface AgentGrantRow {
   principal_id: string;
   person: string;
   agent: string;
-  level_id: string;
+  level_id: string | null;
   level_name: string | null;
   created_at: number;
   revoked_at: number | null;
@@ -63,6 +73,17 @@ function bindingFromRow(row: BindingRow): HostIdentityBinding {
     audience: row.audience,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function agentDefaultFromRow(row: AgentGrantRow): HostAgentDefault {
+  return {
+    id: row.id,
+    connectionId: row.principal_id,
+    person: row.person,
+    levelId: row.level_id ?? "",
+    levelName: row.level_name,
+    createdAt: row.created_at,
   };
 }
 
@@ -90,15 +111,22 @@ export function getHostIdentityBinding(db: Db, connectionId: string): HostIdenti
   return row ? bindingFromRow(row) : null;
 }
 
-/** Every bound connection and its live host agent grants. */
-export function listHostIdentity(db: Db): HostIdentityOverview {
+/**
+ * Every bound connection the owner has not removed, its live host agent
+ * grants and each person's default. An expired connection is listed as
+ * `expired`: its grants still keep their levels in use, and only revocation
+ * releases them. A removed connection's binding is not listed, since removing
+ * it releases its host access.
+ */
+export function listHostIdentity(db: Db, now = Date.now()): HostIdentityOverview {
   if (!hasHostIdentityTables(db)) return { bindings: [] };
   const bindings = db
     .prepare<[], BindingRow>(
       "SELECT * FROM access_host_identity_bindings ORDER BY created_at, principal_id",
     )
-    .all();
-  const agents = db.prepare<[string], AgentGrantRow>(
+    .all()
+    .filter((row) => connectionHeld(db, row.principal_id));
+  const grants = db.prepare<[string], AgentGrantRow>(
     `SELECT h.*, l.name AS level_name
        FROM access_host_agent_grants h
        LEFT JOIN access_levels l ON l.id = h.level_id AND l.revoked_at IS NULL
@@ -106,10 +134,17 @@ export function listHostIdentity(db: Db): HostIdentityOverview {
       ORDER BY h.person, h.agent`,
   );
   return {
-    bindings: bindings.map((row) => ({
-      ...bindingFromRow(row),
-      agents: agents.all(row.principal_id).map(agentGrantFromRow),
-    })),
+    bindings: bindings.map((row) => {
+      const live = grants.all(row.principal_id);
+      return {
+        ...bindingFromRow(row),
+        state: getConnectionGrant(db, row.principal_id, now) ? "active" : "expired",
+        agents: live.filter((grant) => grant.agent !== HOST_AGENT_DEFAULT).map(agentGrantFromRow),
+        defaults: live
+          .filter((grant) => grant.agent === HOST_AGENT_DEFAULT)
+          .map(agentDefaultFromRow),
+      };
+    }),
   };
 }
 
@@ -171,33 +206,84 @@ export function removeHostIdentityBinding(
   })();
 }
 
+/**
+ * Give one agent, acting for one person, an access level, or deny it any
+ * access with `levelId: null`. Refused as `host-agent-exists` while the agent
+ * already has a grant; `setHostAgentGrant` replaces one.
+ */
 export function createHostAgentGrant(
   db: Db,
   input: HostAgentGrantCreateInput,
   now = Date.now(),
 ): AccessMutationResult<HostAgentGrant> {
+  return writeHostAgentGrant(db, input, false, now);
+}
+
+/**
+ * Give one agent its access level, or deny it with `levelId: null`, replacing
+ * the grant it has. A replaced grant is revoked and a new one made, so a call
+ * already running on the old one releases nothing.
+ */
+export function setHostAgentGrant(
+  db: Db,
+  input: HostAgentGrantCreateInput,
+  now = Date.now(),
+): AccessMutationResult<HostAgentGrant> {
+  return writeHostAgentGrant(db, input, true, now);
+}
+
+function writeHostAgentGrant(
+  db: Db,
+  input: HostAgentGrantCreateInput,
+  replace: boolean,
+  now: number,
+): AccessMutationResult<HostAgentGrant> {
   const person = normalizeHostPerson(input.person);
-  const agent = input.agent.trim();
-  if (!person || !isHostAgentName(agent)) return { ok: false, error: "invalid-selection" };
+  const agent = normalizeHostAgentGrantName(input.agent);
+  if (!person || !agent) return { ok: false, error: "invalid-selection" };
   try {
     return db.transaction((): AccessMutationResult<HostAgentGrant> => {
-      if (!getConnectionGrant(db, input.connectionId, now)) {
-        return { ok: false, error: "not-found" };
-      }
+      // A denial only narrows, so an expired connection may still take one;
+      // a level needs the connection live.
+      const held =
+        input.levelId === null
+          ? connectionHeld(db, input.connectionId)
+          : getConnectionGrant(db, input.connectionId, now) !== null;
+      if (!held) return { ok: false, error: "not-found" };
       if (!getHostIdentityBinding(db, input.connectionId)) {
         return { ok: false, error: "host-not-bound" };
       }
-      if (!getLiveLevelRow(db, input.levelId)) return { ok: false, error: "inactive-grant" };
+      if (input.levelId !== null && !getLiveLevelRow(db, input.levelId)) {
+        return { ok: false, error: "inactive-grant" };
+      }
+      // Every live grant naming this agent in any letter case is the agent's:
+      // a create is refused while there is one, and a replace revokes them all.
+      const variants = findLiveAgentGrants(db, input.connectionId, person, agent);
+      if (!replace && variants.length > 0) return { ok: false, error: "host-agent-exists" };
+      const [only] = variants;
+      if (variants.length === 1 && only?.agent === agent && only.levelId === input.levelId) {
+        return { ok: true, value: only };
+      }
+      const revoke = db.prepare("UPDATE access_host_agent_grants SET revoked_at = ? WHERE id = ?");
+      for (const variant of variants) revoke.run(now, variant.id);
       const id = randomUUID();
       db.prepare(
         `INSERT INTO access_host_agent_grants (id, principal_id, person, agent, level_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       ).run(id, input.connectionId, person, agent, input.levelId, now);
       appendAudit(db, {
-        eventType: "host-agent-granted",
+        eventType: input.levelId === null ? "host-agent-denied" : "host-agent-granted",
         principalId: input.connectionId,
         actorTokenId: input.actorTokenId,
-        detail: { hostAgentGrantId: id, agent, levelId: input.levelId },
+        detail: {
+          hostAgentGrantId: id,
+          person,
+          agent,
+          levelId: input.levelId,
+          ...(variants.length > 0
+            ? { replacedHostAgentGrantIds: variants.map((variant) => variant.id) }
+            : {}),
+        },
         now,
       });
       return { ok: true, value: getHostAgentGrant(db, id)! };
@@ -208,14 +294,26 @@ export function createHostAgentGrant(
   }
 }
 
+/**
+ * Revoke one agent's grant or denial. The agent then gets the person's
+ * default, so while there is one the revocation is refused as
+ * `default-would-apply` unless `fallback: "default"` says that is meant. A
+ * person's default is not an agent's grant and is not revoked here.
+ */
 export function revokeHostAgentGrant(
   db: Db,
   input: HostAgentGrantRevokeInput,
   now = Date.now(),
-): AccessMutationResult<null> {
-  return db.transaction((): AccessMutationResult<null> => {
+): AccessMutationResult<HostAgentRevocation> {
+  return db.transaction((): AccessMutationResult<HostAgentRevocation> => {
     const grant = getHostAgentGrant(db, input.grantId);
-    if (!grant || grant.revokedAt !== null) return { ok: false, error: "not-found" };
+    if (!grant || grant.revokedAt !== null || grant.agent === HOST_AGENT_DEFAULT) {
+      return { ok: false, error: "not-found" };
+    }
+    const fallback = getHostAgentDefault(db, grant.connectionId, grant.person);
+    if (fallback && input.fallback !== "default") {
+      return { ok: false, error: "default-would-apply" };
+    }
     db.prepare("UPDATE access_host_agent_grants SET revoked_at = ? WHERE id = ?").run(
       now,
       grant.id,
@@ -224,11 +322,140 @@ export function revokeHostAgentGrant(
       eventType: "host-agent-revoked",
       principalId: grant.connectionId,
       actorTokenId: input.actorTokenId,
-      detail: { hostAgentGrantId: grant.id, agent: grant.agent, levelId: grant.levelId },
+      detail: {
+        hostAgentGrantId: grant.id,
+        person: grant.person,
+        agent: grant.agent,
+        levelId: grant.levelId,
+        ...(fallback ? { fallbackHostAgentGrantId: fallback.id } : {}),
+      },
       now,
     });
-    return { ok: true, value: null };
+    return { ok: true, value: { onDefault: fallback !== null } };
   })();
+}
+
+function findLiveAgentGrants(
+  db: Db,
+  connectionId: string,
+  person: string,
+  agent: string,
+): HostAgentGrant[] {
+  return db
+    .prepare<[string, string, string, string], { id: string }>(
+      `SELECT id FROM access_host_agent_grants
+        WHERE principal_id = ? AND person = ? AND agent = ? COLLATE NOCASE
+          AND agent <> ? AND revoked_at IS NULL
+        ORDER BY created_at, id`,
+    )
+    .all(connectionId, person, agent, HOST_AGENT_DEFAULT)
+    .map((row) => getHostAgentGrant(db, row.id)!);
+}
+
+/**
+ * Whether a connection still holds access the owner has not revoked: its
+ * principal and at least one of its grants are unrevoked, expired or not.
+ * Only revocation releases a binding, so an expired connection keeps its
+ * host access listed, and it can still be narrowed and cleared.
+ */
+function connectionHeld(db: Db, connectionId: string): boolean {
+  return (
+    db
+      .prepare<[string], { present: number }>(
+        `SELECT 1 AS present FROM access_principals p
+          WHERE p.id = ? AND p.revoked_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM access_grants g
+               WHERE g.principal_id = p.id AND g.revoked_at IS NULL
+            )`,
+      )
+      .get(connectionId) !== undefined
+  );
+}
+
+/**
+ * Give every agent of a bound host, acting for one person, the level it gets
+ * when no grant names it, or clear that default with `levelId: null`. The
+ * default is a grant row whose agent is `HOST_AGENT_DEFAULT`, so it is revoked
+ * with the binding like every grant, and a changed default is a new row: a
+ * call already running on the old one releases nothing.
+ */
+export function setHostAgentDefault(
+  db: Db,
+  input: HostAgentDefaultInput,
+  now = Date.now(),
+): AccessMutationResult<HostAgentDefault | null> {
+  const person = normalizeHostPerson(input.person);
+  if (!person) return { ok: false, error: "invalid-selection" };
+  if (input.levelId !== null && !isHostPersonEmail(person)) {
+    return { ok: false, error: "invalid-selection" };
+  }
+  return db.transaction((): AccessMutationResult<HostAgentDefault | null> => {
+    const current = getHostAgentDefault(db, input.connectionId, person);
+    if (input.levelId === null) {
+      // Clearing never needs the connection live: a default left on a removed
+      // connection must still be clearable.
+      if (!current) return { ok: false, error: "not-found" };
+      db.prepare("UPDATE access_host_agent_grants SET revoked_at = ? WHERE id = ?").run(
+        now,
+        current.id,
+      );
+      appendAudit(db, {
+        eventType: "host-agent-default-cleared",
+        principalId: input.connectionId,
+        actorTokenId: input.actorTokenId,
+        detail: { hostAgentGrantId: current.id, person, levelId: current.levelId },
+        now,
+      });
+      return { ok: true, value: null };
+    }
+    if (!getConnectionGrant(db, input.connectionId, now)) return { ok: false, error: "not-found" };
+    if (!getHostIdentityBinding(db, input.connectionId)) {
+      return { ok: false, error: "host-not-bound" };
+    }
+    if (!getLiveLevelRow(db, input.levelId)) return { ok: false, error: "inactive-grant" };
+    if (current?.levelId === input.levelId) return { ok: true, value: current };
+    if (current) {
+      db.prepare("UPDATE access_host_agent_grants SET revoked_at = ? WHERE id = ?").run(
+        now,
+        current.id,
+      );
+    }
+    const id = randomUUID();
+    db.prepare(
+      `INSERT INTO access_host_agent_grants (id, principal_id, person, agent, level_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, input.connectionId, person, HOST_AGENT_DEFAULT, input.levelId, now);
+    appendAudit(db, {
+      eventType: "host-agent-default-set",
+      principalId: input.connectionId,
+      actorTokenId: input.actorTokenId,
+      detail: {
+        hostAgentGrantId: id,
+        person,
+        levelId: input.levelId,
+        ...(current ? { replacedHostAgentGrantId: current.id } : {}),
+      },
+      now,
+    });
+    return { ok: true, value: getHostAgentDefault(db, input.connectionId, person)! };
+  })();
+}
+
+function getHostAgentDefault(
+  db: Db,
+  connectionId: string,
+  person: string,
+): HostAgentDefault | null {
+  const row = db
+    .prepare<[string, string, string], AgentGrantRow>(
+      `SELECT h.*, l.name AS level_name
+         FROM access_host_agent_grants h
+         LEFT JOIN access_levels l ON l.id = h.level_id AND l.revoked_at IS NULL
+        WHERE h.principal_id = ? AND h.person = ? AND h.agent = ? AND h.revoked_at IS NULL`,
+    )
+    .get(connectionId, person, HOST_AGENT_DEFAULT);
+  return row ? agentDefaultFromRow(row) : null;
 }
 
 function getHostAgentGrant(db: Db, id: string): HostAgentGrant | null {
@@ -256,44 +483,96 @@ export interface ResolvedHostAgentGrant extends HostAgentAuthority {
   capabilities: AccessGrantCapability[];
 }
 
+/** Why the agents of a call get nothing. */
+export type HostAgentRefusal = "no-grant" | "denied" | "agent-name-mismatch";
+
+export type HostAgentResolution =
+  { ok: true; grants: ResolvedHostAgentGrant[] } | { ok: false; reason: HostAgentRefusal };
+
 /**
  * The live grant of each named agent acting for one person through one
  * connection, read on every call so a revocation or a level edit applies to
- * the next one. Null when any of the agents has none: an agent nobody granted
- * contributes nothing, and an intersection with nothing is nothing.
+ * the next one. An agent no grant names gets that person's default on this
+ * connection, when there is one. A grant naming the agent always wins: a
+ * denial refuses the call as `denied`, and a grant on a level that is gone
+ * gives nothing. A grant naming the agent in other letter case refuses the
+ * call as `agent-name-mismatch` rather than let the agent fall to the
+ * default. When any agent has nothing, the call has nothing: an intersection
+ * with nothing is nothing.
  */
 export function resolveHostAgentGrants(
   db: Db,
   connectionId: string,
   person: string,
   agents: readonly string[],
-): ResolvedHostAgentGrant[] | null {
-  if (!hasHostIdentityTables(db) || agents.length === 0) return null;
-  const find = db.prepare<
+): HostAgentResolution {
+  if (!hasHostIdentityTables(db) || agents.length === 0) return { ok: false, reason: "no-grant" };
+  const named = db.prepare<
     [string, string, string],
-    { id: string; level_id: string; revision: number }
+    { id: string; agent: string; level_id: string | null; revision: number | null }
   >(
-    `SELECT h.id, h.level_id, l.revision
+    `SELECT h.id, h.agent, h.level_id, l.revision
        FROM access_host_agent_grants h
-       JOIN access_levels l ON l.id = h.level_id AND l.revoked_at IS NULL
-      WHERE h.principal_id = ? AND h.person = ? AND h.agent = ? AND h.revoked_at IS NULL`,
+       LEFT JOIN access_levels l ON l.id = h.level_id AND l.revoked_at IS NULL
+      WHERE h.principal_id = ? AND h.person = ? AND h.agent = ? COLLATE NOCASE
+        AND h.revoked_at IS NULL`,
   );
+  const fallback = named
+    .all(connectionId, person, HOST_AGENT_DEFAULT)
+    .find((row) => row.agent === HOST_AGENT_DEFAULT);
   const resolved: ResolvedHostAgentGrant[] = [];
   for (const agent of new Set(agents)) {
-    const row = find.get(connectionId, person, agent);
-    if (!row) return null;
+    if (agent === HOST_AGENT_DEFAULT) return { ok: false, reason: "no-grant" };
+    const rows = named.all(connectionId, person, agent);
+    const exact = rows.find((row) => row.agent === agent);
+    if (rows.length > 0 && !exact) return { ok: false, reason: "agent-name-mismatch" };
+    if (exact && exact.level_id === null) return { ok: false, reason: "denied" };
+    const row = exact ?? fallback;
+    if (!row || row.level_id === null || row.revision === null) {
+      return { ok: false, reason: "no-grant" };
+    }
     resolved.push({
       agent,
+      grant: exact ? "exact" : "default",
       grantId: row.id,
       levelId: row.level_id,
       levelRevision: row.revision,
       capabilities: getLevelCapabilities(db, row.level_id),
     });
   }
-  return resolved;
+  return { ok: true, grants: resolved };
 }
 
-/** Whether every grant a call relied on is still live, on the level revision it read. */
+/**
+ * A connection that is no longer live takes its host access with it: once
+ * its last grant or its principal is revoked, every host agent grant and
+ * default under it is revoked and its binding dropped, as unbinding does.
+ * Nothing happens while the connection still holds a live grant.
+ */
+export function releaseHostIdentityOfGoneConnection(
+  db: Db,
+  connectionId: string,
+  actorTokenId: string,
+  now: number,
+): void {
+  if (!getHostIdentityBinding(db, connectionId)) return;
+  if (getConnectionGrant(db, connectionId, now)) return;
+  revokeConnectionAgentGrants(db, connectionId, now);
+  db.prepare("DELETE FROM access_host_identity_bindings WHERE principal_id = ?").run(connectionId);
+  appendAudit(db, {
+    eventType: "host-identity-unbound",
+    principalId: connectionId,
+    actorTokenId,
+    detail: { reason: "connection-removed" },
+    now,
+  });
+}
+
+/**
+ * Whether every grant a call relied on is still live, on the level revision it
+ * read. A default holds only while it is still the agent's: a grant naming the
+ * agent made while the call ran replaces it, so the call releases nothing.
+ */
 export function hostAgentAuthorityHolds(
   db: Db,
   connectionId: string,
@@ -301,18 +580,45 @@ export function hostAgentAuthorityHolds(
 ): boolean {
   if (!hasHostIdentityTables(db)) return false;
   if (!getHostIdentityBinding(db, connectionId)) return false;
-  const live = db.prepare<[string, string, string, number], { present: number }>(
+  const exact = db.prepare<[string, string, string, string, number], { present: number }>(
     `SELECT 1 AS present
        FROM access_host_agent_grants h
        JOIN access_levels l ON l.id = h.level_id AND l.revoked_at IS NULL
-      WHERE h.id = ? AND h.principal_id = ? AND h.revoked_at IS NULL
+      WHERE h.id = ? AND h.principal_id = ? AND h.agent = ? AND h.revoked_at IS NULL
         AND l.id = ? AND l.revision = ?`,
+  );
+  const fallback = db.prepare<[string, string, string, number, string], { present: number }>(
+    `SELECT 1 AS present
+       FROM access_host_agent_grants h
+       JOIN access_levels l ON l.id = h.level_id AND l.revoked_at IS NULL
+      WHERE h.id = ? AND h.principal_id = ? AND h.agent = '${HOST_AGENT_DEFAULT}'
+        AND h.revoked_at IS NULL AND l.id = ? AND l.revision = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM access_host_agent_grants e
+           WHERE e.principal_id = h.principal_id AND e.person = h.person
+             AND e.agent = ? COLLATE NOCASE AND e.revoked_at IS NULL
+        )`,
   );
   return (
     grants.length > 0 &&
-    grants.every(
-      (grant) =>
-        live.get(grant.grantId, connectionId, grant.levelId, grant.levelRevision) !== undefined,
+    grants.every((grant) =>
+      grant.grant === "default"
+        ? grant.agent !== HOST_AGENT_DEFAULT &&
+          fallback.get(
+            grant.grantId,
+            connectionId,
+            grant.levelId,
+            grant.levelRevision,
+            grant.agent,
+          ) !== undefined
+        : grant.grant === "exact" &&
+          exact.get(
+            grant.grantId,
+            connectionId,
+            grant.agent,
+            grant.levelId,
+            grant.levelRevision,
+          ) !== undefined,
     )
   );
 }

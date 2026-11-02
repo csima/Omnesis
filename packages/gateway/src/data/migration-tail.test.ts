@@ -65,6 +65,9 @@ const WOUND_BACK = [
   205, 206,
   // 207 re-redacts stored web pages; it repairs data, not shape.
   207,
+  // 208 rebuilds the host agent grants that undoHostAgentGrants drops, so 206
+  // recreates them in the shape 208 relaxes.
+  208,
 ];
 
 let dir: string;

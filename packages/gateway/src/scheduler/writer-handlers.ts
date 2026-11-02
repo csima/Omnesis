@@ -172,6 +172,8 @@ import {
   createHostAgentGrant,
   removeHostIdentityBinding,
   revokeHostAgentGrant,
+  setHostAgentDefault,
+  setHostAgentGrant,
   setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
@@ -598,6 +600,7 @@ import {
 import type { WorthAnswer } from "../worth/answers.js";
 import type { SelfIdentitySource } from "../self-identity-sources.js";
 import type {
+  HostAgentDefaultInput,
   HostAgentGrantCreateInput,
   HostAgentGrantRevokeInput,
   HostIdentityBindingInput,
@@ -1094,6 +1097,10 @@ export const writerHandlers = {
     createHostAgentGrant(db, input),
   "access.hostAgentGrantRevoke": (db: Db, input: HostAgentGrantRevokeInput) =>
     revokeHostAgentGrant(db, input),
+  "access.hostAgentDefaultSet": (db: Db, input: HostAgentDefaultInput) =>
+    setHostAgentDefault(db, input),
+  "access.hostAgentGrantSet": (db: Db, input: HostAgentGrantCreateInput) =>
+    setHostAgentGrant(db, input),
   "access.revoke": (db: Db, input: AccessRevocationInput) => revokeAccessEntity(db, input),
   "access.mcpInvocationAudit": (db: Db, input: McpToolInvocationAuditInput): boolean =>
     recordMcpToolInvocationAudit(db, input),
