@@ -9,7 +9,8 @@
  * small sources), scaled to `docs`.
  *
  * Seeded with plain INSERTs on a handle the caller closes before a writer
- * opens the file. Document inserts fire the schema's own triggers, so the
+ * opens the file. Ids are deterministic but scattered, like a live install's
+ * UUIDs, and the access ledger ties on its timestamp. Document inserts fire the schema's own triggers, so the
  * knowledge source revisions and cascade jobs a sync leaves behind are there
  * too. Every value is invented.
  */
@@ -69,10 +70,23 @@ export const PILOT_ALGO = "synth-algo-v1";
 const BANDS = 16;
 const personName = (p: number): string => `synth contact ${p.toString(36)}`;
 
-export const pilotDocId = (i: number): string => `synth-doc-${i.toString(36).padStart(5, "0")}`;
-export const pilotPersonId = (i: number): string =>
-  `synth-person-${i.toString(36).padStart(4, "0")}`;
-export const pilotEmail = (i: number): string => `person${i}@example.com`;
+/**
+ * A deterministic id in random key order. A live install's ids are UUIDs, so
+ * an index on an id column starts at an arbitrary row; an approximate ANALYZE
+ * samples the start of each index, and sequential ids would put the same
+ * rows (the owner, the oldest documents) first in every one of them.
+ */
+function scatteredId(prefix: string, n: number): string {
+  let h = Math.imul(n + 0x9e3779b9, 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return `${prefix}-${(h >>> 0).toString(16).padStart(8, "0")}-${n.toString(36)}`;
+}
+
+export const pilotDocId = (i: number): string => scatteredId("synth-doc", i);
+export const pilotPersonId = (i: number): string => scatteredId("synth-person", i);
+export const pilotEmail = (i: number): string => `${scatteredId("person", i)}@example.com`;
+export const pilotExternalId = (i: number): string => scatteredId("ext", i);
 
 /** Deterministic, uneven: a few people are in most documents, most in a handful. */
 function mentionedPerson(doc: number, slot: number, people: number): number {
@@ -139,6 +153,15 @@ export function seedPilotCorpus(db: Db, options: PilotCorpusOptions): PilotCorpu
        side_b_alias, score, detection_kind, status, detected_at)
      VALUES (?, ?, ?, ?, ?, 0.8, 'name-token', 'pending', '2026-10-01T00:00:00Z')`,
   );
+  const insertDecided = db.prepare(
+    `INSERT INTO merge_candidates (id, side_a_alias_type, side_a_alias, side_b_alias_type,
+       side_b_alias, score, detection_kind, status, detected_at, decided_at)
+     VALUES (?, 'email', ?, 'email', ?, 0.7, 'name-token', ?, '2026-09-01T00:00:00Z', ?)`,
+  );
+  const insertAudit = db.prepare(
+    `INSERT INTO access_audit_events (id, occurred_at, event_type, principal_id, detail)
+     VALUES (?, ?, 'grant.used', ?, '{}')`,
+  );
   const insertSyncState = db.prepare(
     `INSERT OR IGNORE INTO sync_state (source_id, cursor, last_synced_at) VALUES (?, '{}', ?)`,
   );
@@ -161,10 +184,16 @@ export function seedPilotCorpus(db: Db, options: PilotCorpusOptions): PilotCorpu
         1,
         2,
       );
-      insertAlias.run(`synth-alias-e-${p}`, pilotPersonId(p), pilotEmail(p), "email", seen);
+      insertAlias.run(
+        scatteredId("synth-alias-e", p),
+        pilotPersonId(p),
+        pilotEmail(p),
+        "email",
+        seen,
+      );
       if (p % 3 === 0)
         insertAlias.run(
-          `synth-alias-n-${p}`,
+          scatteredId("synth-alias-n", p),
           pilotPersonId(p),
           `${personName(p)} ${p}`,
           "name",
@@ -172,7 +201,7 @@ export function seedPilotCorpus(db: Db, options: PilotCorpusOptions): PilotCorpu
         );
       if (p % 10 === 0)
         insertAlias.run(
-          `synth-alias-p-${p}`,
+          scatteredId("synth-alias-p", p),
           pilotPersonId(p),
           `+15550100${(p % 1_000).toString().padStart(3, "0")}`,
           "phone",
@@ -180,13 +209,17 @@ export function seedPilotCorpus(db: Db, options: PilotCorpusOptions): PilotCorpu
         );
       if (p % 2 === 0)
         insertAlias.run(
-          `synth-alias-x-${p}`,
+          scatteredId("synth-alias-x", p),
           pilotPersonId(p),
-          `alt${p}@example.org`,
+          `${scatteredId("alt", p)}@example.org`,
           "email",
           seen,
         );
     }
+    // One person in twenty-five is a merged duplicate of another, as rule
+    // and contact merges leave behind on a live install.
+    const merge = db.prepare("UPDATE people SET merged_into = ? WHERE id = ?");
+    for (let p = 24; p < people; p += 25) merge.run(pilotPersonId(p - 5), pilotPersonId(p));
     for (let i = 0; i < docs; i++) {
       const source = sourceFor(i, docs);
       const id = pilotDocId(i);
@@ -215,7 +248,7 @@ export function seedPilotCorpus(db: Db, options: PilotCorpusOptions): PilotCorpu
         id,
         source.providerId,
         source.sourceId,
-        `ext-${i}`,
+        pilotExternalId(i),
         `Quarterly planning note ${i}`,
         `Agenda item ${i % 97} for the review.`,
         `hash-${i}`,
@@ -251,17 +284,40 @@ export function seedPilotCorpus(db: Db, options: PilotCorpusOptions): PilotCorpu
         if (i % 42 === 6) insertEdge.run(pilotDocId(i - 6), id, PILOT_ALGO);
       }
     }
+    // The access ledger, three events to a millisecond so keyset pages tie.
+    const auditEvents = Math.max(200, Math.floor(docs / 20));
+    for (let k = 0; k < auditEvents; k++)
+      insertAudit.run(
+        scatteredId("synth-audit", k),
+        start + Math.floor(k / 3) * 1_000,
+        `synth-principal-${k % 5}`,
+      );
     for (let c = 0; c < pendingCandidates; c++) {
-      const id = `synth-candidate-${c}`;
+      const id = scatteredId("synth-candidate", c);
       if (c % collapsedEvery === 0) {
         const p = 2 + 2 * Math.floor(c / collapsedEvery);
-        insertCandidate.run(id, "email", pilotEmail(p), "email", `alt${p}@example.org`);
+        insertCandidate.run(
+          id,
+          "email",
+          pilotEmail(p),
+          "email",
+          `${scatteredId("alt", p)}@example.org`,
+        );
         collapsedCandidateIds.push(id);
       } else {
         const p = 1 + (c % (people - 2));
         insertCandidate.run(id, "email", pilotEmail(p), "email", pilotEmail(p + 1));
       }
     }
+    // The operator's decided history outnumbers what is still pending.
+    for (let c = 0; c < pendingCandidates * 3; c++)
+      insertDecided.run(
+        scatteredId("synth-decided", c),
+        `${scatteredId("decided-a", c)}@example.com`,
+        `${scatteredId("decided-b", c)}@example.com`,
+        c % 4 === 0 ? "denied" : "accepted",
+        iso(start + span - c * 60_000),
+      );
   })();
   return { docs, people, sources: PILOT_SOURCES, unresolvedDocIds, collapsedCandidateIds };
 }

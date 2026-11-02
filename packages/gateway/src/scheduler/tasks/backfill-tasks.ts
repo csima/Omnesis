@@ -1071,34 +1071,34 @@ export function catalogRefreshTask(
   };
 }
 
-// ── Planner statistics (hourly) ───────────────────────────────────────
+// ── Planner statistics (off by default) ───────────────────────────────
 //
 // SQLite's advice for a long-lived connection: `PRAGMA optimize` with the
 // all-tables bit when it opens and plain `PRAGMA optimize` every hour or day.
 // One task covers both — its first tick after boot also picks up any index a
-// migration created — and the writer op splits the ANALYZE work per table.
-
-const PLANNER_STATISTICS_INTERVAL_MS = 60 * 60_000;
+// migration created — and the writer op splits the ANALYZE work per index.
+// Statistics change query plans, so the task runs only when the operator sets
+// `gateway.backfill.plannerStatistics.interval`.
 
 export function plannerStatisticsTask(
   opts: BackfillTaskOptsInternal,
 ): PeriodicTask<unknown, IdleResult> {
-  const { writeGate, log } = opts;
+  const { writeGate, log, plannerStatisticsIntervalMs } = opts;
   const taskName = "backfill.plannerStatistics";
   return {
     name: taskName,
     runner: "main",
     priority: "background",
-    periodMs: PLANNER_STATISTICS_INTERVAL_MS,
-    startDelayMs: 10 * 60_000,
+    periodMs: plannerStatisticsIntervalMs,
+    startDelayMs: Math.min(10 * 60_000, plannerStatisticsIntervalMs),
     initialArgs: undefined,
     async run() {
       return runBackfillTick(taskName, log, async () => {
         const startMs = Date.now();
-        const { analyzed } = await writeGate.refreshPlannerStatistics();
+        const { analyzed, tables } = await writeGate.refreshPlannerStatistics();
         if (analyzed > 0) {
           log.info(
-            `analyzed ${analyzed} tables for planner statistics in ${Date.now() - startMs}ms`,
+            `planner statistics: analyzed ${analyzed} indexes or tables across ${tables} tables in ${Date.now() - startMs}ms`,
           );
         }
         return { idle: analyzed === 0 };

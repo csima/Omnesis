@@ -1253,9 +1253,10 @@ export interface WriteGate extends KnowledgeWriteGate {
   upsertSqliteTableStats(rows: SqliteTableStatsRow[]): Promise<{ upserted: number }>;
   /**
    * Analyze the tables `PRAGMA optimize` says need it, one bounded ANALYZE
-   * per table; see `data/planner-statistics.ts`.
+   * per index; see `data/planner-statistics.ts`. `analyzed` counts indexes
+   * and index-less tables, `tables` the tables they belong to.
    */
-  refreshPlannerStatistics(): Promise<{ analyzed: number }>;
+  refreshPlannerStatistics(): Promise<{ analyzed: number; tables: number }>;
 
   // ── access / MCP OAuth ────────────────────────────────────────────
   registerOAuthClient(input: OAuthClientRegistrationInput): Promise<OAuthClientRegistration>;
@@ -3155,9 +3156,10 @@ export function directWriteGate(db: Db): WriteGate {
     reconcileLinkStatsCounters: async () => reconcileLinkStatsCounters(db),
 
     upsertSqliteTableStats: async (rows) => upsertSqliteTableStats(db, rows),
-    refreshPlannerStatistics: async () => ({
-      analyzed: refreshPlannerStatistics(db, undefined).analyzed.length,
-    }),
+    refreshPlannerStatistics: async () => {
+      const result = refreshPlannerStatistics(db, undefined);
+      return { analyzed: result.analyzed.length, tables: result.tables.length };
+    },
 
     registerOAuthClient: async (input) => registerOAuthClient(db, input),
     upsertOAuthMetadataClient: async (input) => upsertOAuthMetadataClient(db, input),

@@ -337,15 +337,15 @@ export class Materializer {
     }
 
     const rows = this.deps.db
-      .prepare<[string, string, string, number], DocumentRow>(
+      .prepare<[string, string, number], DocumentRow>(
         `SELECT id, source_id, provider_id, title, content_hash, metadata, source_created_at, updated_at,
                 people_resolved_at
            FROM documents
-          WHERE updated_at > ? OR (updated_at = ? AND id > ?)
+          WHERE (updated_at, id) > (?, ?)
           ORDER BY updated_at ASC, id ASC
           LIMIT ?`,
       )
-      .all(checkpoint.at, checkpoint.at, checkpoint.id, SWEEP_PAGE);
+      .all(checkpoint.at, checkpoint.id, SWEEP_PAGE);
     if (rows.length === 0) return true;
 
     let cursor = checkpoint;
@@ -646,14 +646,14 @@ export class Materializer {
     }
 
     const rows = indexDb
-      .prepare<[string, string, string, number], { document_id: string; indexed_at: string }>(
+      .prepare<[string, string, number], { document_id: string; indexed_at: string }>(
         `SELECT document_id, event_indexed_at AS indexed_at
            FROM indexed_documents
-          WHERE event_indexed_at > ? OR (event_indexed_at = ? AND document_id > ?)
+          WHERE (event_indexed_at, document_id) > (?, ?)
           ORDER BY event_indexed_at ASC, document_id ASC
           LIMIT ?`,
       )
-      .all(stored.at, stored.at, stored.id, SWEEP_PAGE);
+      .all(stored.at, stored.id, SWEEP_PAGE);
     if (rows.length === 0) return;
 
     let last = stored;

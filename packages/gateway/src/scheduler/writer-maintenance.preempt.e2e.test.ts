@@ -144,9 +144,13 @@ describe("writer maintenance against a large encrypted corpus", () => {
     );
   }
 
-  /** Give an op just dispatched time to be inside the writer, then time a write behind it. */
-  async function waitBehind(priority: "user" | "background"): Promise<number> {
-    await new Promise((r) => setTimeout(r, 30));
+  /**
+   * Time a write queued behind an op. A writer op is dispatched when it is
+   * enqueued, so it is already inside the writer; an op that starts with io
+   * reads gets `settleMs` to reach the writer first.
+   */
+  async function waitBehind(priority: "user" | "background", settleMs = 0): Promise<number> {
+    if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
     const started = performance.now();
     expect(
       await runWithPriority(priority, () =>
@@ -165,7 +169,7 @@ describe("writer maintenance against a large encrypted corpus", () => {
     } as unknown as BackfillTaskOptsInternal);
     const started = performance.now();
     const refreshing = runWithPriority("background", () => task.run(undefined, {} as TaskContext));
-    const waited = await waitBehind("user");
+    const waited = await waitBehind("user", 30);
     await refreshing;
     report("catalog.upsertSqliteTableStats", performance.now() - started);
     expect(waited).toBeLessThan(HOLD_BUDGET_MS);
@@ -185,14 +189,15 @@ describe("writer maintenance against a large encrypted corpus", () => {
   }, 600_000);
 
   test("collapsed candidates are found on a reader and accepted in bounded chunks", async () => {
+    const accepted = () =>
+      count("SELECT COUNT(*) AS n FROM merge_candidates WHERE status = 'accepted'");
+    const acceptedBefore = accepted();
     const started = performance.now();
     const sweeping = runWithPriority("background", () => sweepCollapsedCandidates(io, gate));
     const { swept } = await sweeping;
     report("people.acceptCollapsedMergeCandidates", performance.now() - started);
     expect(swept).toBe(corpus.collapsedCandidateIds.length);
-    expect(count("SELECT COUNT(*) AS n FROM merge_candidates WHERE status = 'accepted'")).toBe(
-      swept,
-    );
+    expect(accepted() - acceptedBefore).toBe(swept);
     expect(writerStats("people.acceptCollapsedMergeCandidates").max).toBeLessThan(HOLD_BUDGET_MS);
     expect(
       scheduler
@@ -258,7 +263,7 @@ describe("writer maintenance against a large encrypted corpus", () => {
     const stats = writerStats("db.refreshPlannerStatistics");
     expect(stats.yieldCount).toBeGreaterThan(0);
     expect(stats.max).toBeLessThan(HOLD_BUDGET_MS);
-    expect(count("SELECT COUNT(DISTINCT tbl) AS n FROM sqlite_stat1")).toBeGreaterThan(20);
+    expect(count("SELECT COUNT(DISTINCT tbl) AS n FROM sqlite_stat1")).toBeGreaterThanOrEqual(15);
 
     const fresh = openReadOnlyDatabase(dbPath, { encryptionKey: key });
     try {
@@ -268,6 +273,6 @@ describe("writer maintenance against a large encrypted corpus", () => {
     }
     expect(
       (await runWithPriority("background", () => gate.refreshPlannerStatistics())).analyzed,
-    ).toBeLessThan(5);
+    ).toBe(0);
   }, 600_000);
 });

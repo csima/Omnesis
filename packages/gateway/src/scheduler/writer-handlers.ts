@@ -62,6 +62,11 @@ const BACKGROUND_BATCH_SLICE_MS = 100;
 // (the slice plus the document it is on) inside the same bound.
 const PEOPLE_BACKFILL_SLICE_MS = 50;
 
+// One ANALYZE unit costs a walk of its whole index: this SQLite build enables
+// STAT4, so ANALYZE counts an index's entries exactly whatever the analysis
+// limit. The slice leaves room for one more unit inside the same bound.
+const PLANNER_STATISTICS_SLICE_MS = 50;
+
 function sliceDeadline(token: PreemptToken, sliceMs: number): () => boolean {
   const deadline = performance.now() + sliceMs;
   return () => token.requested() || performance.now() >= deadline;
@@ -2164,17 +2169,19 @@ export const writerYieldableHandlers = {
   "db.refreshPlannerStatistics": (
     db: Db,
     token: PreemptToken,
-    tables?: string[],
+    units?: string[],
     analyzedSoFar = 0,
+    tablesSoFar: string[] = [],
   ) => {
-    const result = refreshPlannerStatistics(db, tables, {
-      shouldStop: sliceDeadline(token, BACKGROUND_BATCH_SLICE_MS),
+    const result = refreshPlannerStatistics(db, units, {
+      shouldStop: sliceDeadline(token, PLANNER_STATISTICS_SLICE_MS),
     });
     const analyzed = analyzedSoFar + result.analyzed.length;
+    const tables = [...new Set([...tablesSoFar, ...result.tables])];
     if (result.remaining.length > 0) {
-      return { kind: "yield" as const, resume: [result.remaining, analyzed] };
+      return { kind: "yield" as const, resume: [result.remaining, analyzed, tables] };
     }
-    return { analyzed };
+    return { analyzed, tables: tables.length };
   },
 
   /**
