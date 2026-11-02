@@ -279,7 +279,7 @@ import {
   applyMergeAdjudication,
   autoApproveHighConfidenceCandidates,
   denyMergeCandidate,
-  sweepCollapsedMergeCandidates,
+  acceptCollapsedMergeCandidates,
   pruneSuppressedMergeCandidates,
   reconcilePendingMergeCandidates,
   upsertTokenLabels,
@@ -459,7 +459,8 @@ import {
   zeroPeopleCountsForLosers,
   recomputeNamePrimaries,
 } from "./data/repositories/PersonRepository.js";
-import { refreshSqliteTableStats } from "./sqlite-catalog.js";
+import { upsertSqliteTableStats, type SqliteTableStatsRow } from "./sqlite-catalog.js";
+import { refreshPlannerStatistics } from "./data/planner-statistics.js";
 import { reconcileSelfFromConfig } from "./domain/SelfIdentity.js";
 import type { SelfIdentitySource } from "./self-identity-sources.js";
 import {
@@ -1134,12 +1135,12 @@ export interface WriteGate extends KnowledgeWriteGate {
    */
   denyMergeCandidate(candidateId: string): Promise<MergeCandidateRow>;
   /**
-   * Sweep `pending` candidates whose two sides currently resolve to
-   * the same single person — these are stale (drift collapsed them
-   * post-detection) and the operator shouldn't see them as
-   * decisions to make. Marks them `accepted` with `rule_id=NULL`.
+   * Accept the `pending` candidates an io reader found collapsed — both sides
+   * now resolve to the same single person, so they are stale and the operator
+   * shouldn't see them as decisions to make. Re-checks each on the writer and
+   * marks it `accepted` with `rule_id=NULL`. See `sweepCollapsedCandidates`.
    */
-  sweepCollapsedMergeCandidates(): Promise<{ swept: number }>;
+  acceptCollapsedMergeCandidates(ids: string[]): Promise<{ swept: number }>;
 
   /**
    * Delete `pending` candidates the role-mailbox suppression rule now
@@ -1248,7 +1249,13 @@ export interface WriteGate extends KnowledgeWriteGate {
   reconcileLinkStatsCounters(): Promise<{ corrected: number }>;
 
   // ── sqlite-catalog.ts ─────────────────────────────────────────────
-  refreshSqliteTableStats(): Promise<void>;
+  /** Store catalog stats measured on an io read handle; see `computeSqliteTableStats`. */
+  upsertSqliteTableStats(rows: SqliteTableStatsRow[]): Promise<{ upserted: number }>;
+  /**
+   * Analyze the tables `PRAGMA optimize` says need it, one bounded ANALYZE
+   * per table; see `data/planner-statistics.ts`.
+   */
+  refreshPlannerStatistics(): Promise<{ analyzed: number }>;
 
   // ── access / MCP OAuth ────────────────────────────────────────────
   registerOAuthClient(input: OAuthClientRegistrationInput): Promise<OAuthClientRegistration>;
@@ -2511,7 +2518,7 @@ export function writeGateFromCall(call: WriterCallFn): WriteGate {
     upsertMergeCandidates: (proposals) => call("people.upsertMergeCandidates", [proposals]),
     acceptMergeCandidate: (input) => call("people.acceptMergeCandidate", [input]),
     denyMergeCandidate: (candidateId) => call("people.denyMergeCandidate", [candidateId]),
-    sweepCollapsedMergeCandidates: () => call("people.sweepCollapsedMergeCandidates", []),
+    acceptCollapsedMergeCandidates: (ids) => call("people.acceptCollapsedMergeCandidates", [ids]),
     pruneSuppressedMergeCandidates: () => call("people.pruneSuppressedMergeCandidates", []),
     autoApproveHighConfidenceCandidates: () =>
       call("people.autoApproveHighConfidenceCandidates", []),
@@ -2539,7 +2546,8 @@ export function writeGateFromCall(call: WriterCallFn): WriteGate {
     upsertLinkStats: (agg) => call("links.upsertLinkStats", [agg]),
     reconcileLinkStatsCounters: () => call("links.reconcileLinkStatsCounters", []),
 
-    refreshSqliteTableStats: () => call("catalog.refreshSqliteTableStats", []),
+    upsertSqliteTableStats: (rows) => call("catalog.upsertSqliteTableStats", [rows]),
+    refreshPlannerStatistics: () => call("db.refreshPlannerStatistics", []),
 
     registerOAuthClient: (input) => call("access.oauthClientRegister", [input]),
     upsertOAuthMetadataClient: (input) => call("access.oauthMetadataClientUpsert", [input]),
@@ -3115,7 +3123,9 @@ export function directWriteGate(db: Db): WriteGate {
     upsertMergeCandidates: async (proposals) => upsertMergeCandidates(db, proposals),
     acceptMergeCandidate: async (input) => acceptMergeCandidate(db, input),
     denyMergeCandidate: async (candidateId) => denyMergeCandidate(db, candidateId),
-    sweepCollapsedMergeCandidates: async () => sweepCollapsedMergeCandidates(db),
+    acceptCollapsedMergeCandidates: async (ids) => ({
+      swept: acceptCollapsedMergeCandidates(db, ids).swept,
+    }),
     pruneSuppressedMergeCandidates: async () => pruneSuppressedMergeCandidates(db),
     autoApproveHighConfidenceCandidates: async () => autoApproveHighConfidenceCandidates(db),
     applyMergeAdjudication: async (input) => applyMergeAdjudication(db, input),
@@ -3144,9 +3154,10 @@ export function directWriteGate(db: Db): WriteGate {
     upsertLinkStats: async (agg) => upsertLinkStats(db, agg),
     reconcileLinkStatsCounters: async () => reconcileLinkStatsCounters(db),
 
-    refreshSqliteTableStats: async () => {
-      refreshSqliteTableStats(db);
-    },
+    upsertSqliteTableStats: async (rows) => upsertSqliteTableStats(db, rows),
+    refreshPlannerStatistics: async () => ({
+      analyzed: refreshPlannerStatistics(db, undefined).analyzed.length,
+    }),
 
     registerOAuthClient: async (input) => registerOAuthClient(db, input),
     upsertOAuthMetadataClient: async (input) => upsertOAuthMetadataClient(db, input),

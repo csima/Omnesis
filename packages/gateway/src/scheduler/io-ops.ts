@@ -45,6 +45,7 @@ import type {
 } from "../data/repositories/AbsenceRepository.js";
 import type { LinkReconcileBatch, LinkStatsAggregation } from "../links.js";
 import type { LinkStats } from "../data/repositories/LinkStatsRepository.js";
+import type { SqliteTableStatsRow } from "../sqlite-catalog.js";
 import type { Scheduler } from "./scheduler.js";
 import type { MessageCountsQuery } from "../domain/message-counts.js";
 import type { MessageCountsBody } from "@omnesis/agent";
@@ -221,6 +222,19 @@ export interface IoGate {
    * sum of content/title/metadata sizes. Multi-second on large sources.
    */
   sourceStatsRow(sourceId: string): Promise<SourceStatsAggregation>;
+  /**
+   * Ids of the pending merge candidates whose two sides now resolve to one
+   * identity. Pairs with the writer's `acceptCollapsedMergeCandidates`.
+   */
+  collapsedMergeCandidates(): Promise<string[]>;
+  /** The catalog tables present in this database. */
+  catalogTableNames(): Promise<string[]>;
+  /**
+   * Row count and date range of one catalog table: a scan of the table or its
+   * smallest index, tens of seconds on a large encrypted corpus. Pairs with the
+   * writer's `upsertSqliteTableStats`.
+   */
+  sqliteTableStats(tableName: string): Promise<SqliteTableStatsRow | null>;
   /**
    * Walk up to `limit` unresolved `document_links` rows past the
    * persisted reconcile cursor and compute the resolution for each on
@@ -493,6 +507,9 @@ const COMPUTE_OP_DEFS: readonly IoOpDef[] = [
   { name: "io.resolvePairWinner", priority: "background" },
   { name: "io.dirtyStatsSourceIds", priority: "background" },
   { name: "io.sourceStatsRow", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
+  { name: "io.catalogTableNames", priority: "background" },
+  { name: "io.collapsedMergeCandidates", priority: "background" },
+  { name: "io.sqliteTableStats", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
   { name: "io.linkResolutions", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
   {
     name: "io.seedFromContactsPlan",
@@ -618,6 +635,9 @@ export function ioGateFromScheduler(scheduler: Scheduler): IoGate {
     resolvePairWinner: (a, b) => call("io.resolvePairWinner", [a, b]),
     dirtyStatsSourceIds: () => call("io.dirtyStatsSourceIds", []),
     sourceStatsRow: (sourceId) => call("io.sourceStatsRow", [sourceId]),
+    catalogTableNames: () => call("io.catalogTableNames", []),
+    collapsedMergeCandidates: () => call("io.collapsedMergeCandidates", []),
+    sqliteTableStats: (tableName) => call("io.sqliteTableStats", [tableName]),
     linkResolutions: (
       limit,
       fallbackRepresentationSourcePrefixes,

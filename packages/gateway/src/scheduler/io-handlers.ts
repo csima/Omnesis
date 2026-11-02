@@ -17,6 +17,7 @@
 
 import type Database from "better-sqlite3";
 import { readOccMeta } from "../data/occ-materialized.js";
+import { computeSqliteTableStats, listCatalogTableNames } from "../sqlite-catalog.js";
 import { collectorRosterSnapshot } from "../collector-declaration-roster.js";
 type Db = Database.Database;
 
@@ -56,6 +57,7 @@ import { resolvePersonId } from "../domain/PeopleResolutionService.js";
 import { computeAutoMergePairs, computeTransitiveCollapse, pickMergeWinner } from "../people.js";
 import {
   computeEnrichedMergeCandidates,
+  findCollapsedMergeCandidates,
   explainMergeCandidateVisibility,
   fetchMergeCandidatesData,
   selectTokensNeedingClassification,
@@ -243,6 +245,11 @@ export const ioHandlers = {
   // ── source-stats ───────────────────────────────────────────────────
   "io.dirtyStatsSourceIds": (db: Db) => listDirtyStatsSourceIds(db),
   "io.sourceStatsRow": (db: Db, sourceId: string) => computeSourceStatsRow(db, sourceId),
+  // ── sqlite catalog (read half of catalog.upsertSqliteTableStats) ────
+  "io.catalogTableNames": (db: Db) => listCatalogTableNames(db),
+  // ── merge candidates (read half of people.acceptCollapsedMergeCandidates) ─
+  "io.collapsedMergeCandidates": (db: Db) => findCollapsedMergeCandidates(db),
+  "io.sqliteTableStats": (db: Db, tableName: string) => computeSqliteTableStats(db, tableName),
 
   // ── links compute (read half of links.upsertLinkResolutions split) ─
   "io.linkResolutions": (
