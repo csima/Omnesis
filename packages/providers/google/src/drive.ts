@@ -45,10 +45,16 @@ export interface DriveSyncCursor extends SyncCursor {
   pageToken?: string;
   /**
    * The `files.list` query `pageToken` was issued for. Drive refuses a token
-   * presented with a different query, so a walk whose query has changed since
-   * (a new data cutoff) starts again from the first page instead of sending it.
+   * presented with any other query, and the cutoff in the current query moves
+   * with the clock, so a walk resumes with this one rather than the current.
    */
   listQuery?: string;
+  /**
+   * The latest `modifiedTime` the walk has listed. The listing runs in
+   * ascending `modifiedTime`, so when Drive refuses the saved token the walk
+   * starts again from here instead of from the first file.
+   */
+  listedThrough?: string;
   /** Start page token for changes.list during incremental sync */
   startPageToken?: string;
 }
@@ -62,12 +68,12 @@ export function isDriveSyncCursor(v: unknown): v is DriveSyncCursor {
 const validateDriveSyncCursor = makeCursorValidator(isDriveSyncCursor);
 
 /**
- * Whether Drive refused the `pageToken` a `files.list` call sent: a 400 whose
- * error detail names `pageToken` as the parameter at fault. Drive answers a
- * token it no longer honours, or one issued for another query, with
- * `{ reason: "invalid", message: "Invalid Value", location: "pageToken" }`;
- * the same 400 naming `q` or any other parameter is a different fault and is
- * not a reason to start the listing again.
+ * Whether Drive refused the `pageToken` a `files.list` or `changes.list` call
+ * sent: a 400 whose error detail is `{ reason: "invalid", location:
+ * "pageToken" }`, which is how Drive answers a token it no longer honours or
+ * one issued for another query. The same 400 naming `q` or any other
+ * parameter, and every 403 — a rate limit above all, which the sync retries
+ * with backoff — is a different fault and not a reason to drop the token.
  */
 export function isRejectedPageTokenError(err: unknown): boolean {
   if (googleApiStatus(err) !== 400) return false;
@@ -80,11 +86,25 @@ export function isRejectedPageTokenError(err: unknown): boolean {
   return details.some(
     (list) =>
       Array.isArray(list) &&
-      list.some(
-        (d) =>
-          !!d && typeof d === "object" && (d as { location?: unknown }).location === "pageToken",
-      ),
+      list.some((d) => {
+        const detail = (d ?? {}) as { reason?: unknown; location?: unknown };
+        return detail.reason === "invalid" && detail.location === "pageToken";
+      }),
   );
+}
+
+/** The latest of `previous` and the files' `modifiedTime`, as an ISO instant. */
+function latestModifiedTime(
+  previous: string | undefined,
+  files: readonly drive_v3.Schema$File[],
+): string | undefined {
+  let latest = previous ? Date.parse(previous) : Number.NaN;
+  for (const file of files) {
+    const modified = file.modifiedTime ? Date.parse(file.modifiedTime) : Number.NaN;
+    if (Number.isNaN(modified)) continue;
+    if (Number.isNaN(latest) || modified > latest) latest = modified;
+  }
+  return Number.isNaN(latest) ? undefined : new Date(latest).toISOString();
 }
 
 function isGoogleWorkspaceType(mimeType: string): boolean {
@@ -195,15 +215,6 @@ export class GoogleDriveSource {
   }
 
   private async bootstrapSync(state: DriveSyncCursor): Promise<SyncResult> {
-    const q = this.listQuery();
-    let pageToken = state.pageToken;
-    if (pageToken && state.listQuery !== undefined && state.listQuery !== q) {
-      log.info(
-        `Drive listing query changed for ${this.id} since its page token was saved; listing again from the first page`,
-      );
-      pageToken = undefined;
-    }
-
     // Capture the current changes token on first page so incremental sync
     // picks up from where bootstrap started. A walk that starts again keeps
     // the token it began with: changes since then are a superset of the ones
@@ -221,7 +232,7 @@ export class GoogleDriveSource {
       // bar with "X files indexed".
     }
 
-    const res = await this.listFilesPage(q, pageToken);
+    const { res, q } = await this.listFilesPage(state);
 
     const files = res.data.files ?? [];
     // RTT-bound: Workspace exports + binary downloads are one round-trip
@@ -245,6 +256,7 @@ export class GoogleDriveSource {
         phase: hasMore ? "bootstrap" : "incremental",
         pageToken: res.data.nextPageToken ?? undefined,
         listQuery: hasMore ? q : undefined,
+        listedThrough: hasMore ? latestModifiedTime(state.listedThrough, files) : undefined,
         startPageToken,
       } satisfies DriveSyncCursor,
       hasMore,
@@ -259,42 +271,62 @@ export class GoogleDriveSource {
    * Drive's `q=` for the bootstrap listing. The data cutoff is pushed into it
    * so files.list only walks files created after the cutoff, on `createdTime`
    * to match the client-side backstop (`sourceCreatedAt = createdTime`).
+   * `modifiedSince` starts a listing again where a refused walk had reached.
    * Drive's query language wants RFC 3339 with single-quoted dates.
    */
-  private listQuery(): string {
-    return this.dataCutoff
-      ? `trashed=false and createdTime >= '${this.dataCutoff.toISOString()}'`
-      : "trashed=false";
+  private listQuery(modifiedSince?: string): string {
+    const terms = ["trashed=false"];
+    if (this.dataCutoff) terms.push(`createdTime >= '${this.dataCutoff.toISOString()}'`);
+    if (modifiedSince) terms.push(`modifiedTime >= '${modifiedSince}'`);
+    return terms.join(" and ");
   }
 
   /**
-   * One page of the bootstrap listing. A saved page token can outlive what
-   * Drive will accept: tokens last hours while a walk can pause for longer,
-   * and a cursor saved before the query was recorded carries none. Drive's
-   * reference says a rejected token is to be discarded and the listing
-   * restarted from the first page, so that is what happens. Files listed
-   * again land on the documents they already made.
+   * One page of the bootstrap listing, and the query it was listed under.
+   *
+   * A walk in progress resumes with its saved token and the query that token
+   * was issued for. The current query would differ from it whenever the data
+   * cutoff is a rolling window, since the cutoff is computed from the clock
+   * each time the source is built, and Drive refuses a token sent with a
+   * different query; the live cutoff is still applied to every page by
+   * `applyDataCutoff` and at the gateway's ingest boundary.
+   *
+   * A token Drive refuses anyway — it expired, or it was saved before the
+   * query was recorded — is discarded, as the files.list reference
+   * prescribes, and the listing starts again under the current query. The
+   * listing is in ascending `modifiedTime`, so it starts from the latest one
+   * the walk had listed; every file before it was listed already, and a file
+   * modified since the walk began is also in the changes the incremental phase
+   * reads from the token captured when the walk began. Without that mark (a
+   * cursor from before it was recorded) it starts from the first file. Files
+   * listed again land on the documents they already made.
    */
-  private async listFilesPage(q: string, pageToken: string | undefined) {
-    const list = (token: string | undefined) =>
+  private async listFilesPage(state: DriveSyncCursor) {
+    const list = (q: string, pageToken: string | undefined) =>
       this.drive.files.list({
         q,
         pageSize: GOOGLE_PAGE_SIZE,
-        pageToken: token,
+        pageToken,
         fields: `nextPageToken,files(${DRIVE_FILE_FIELDS})`,
         spaces: "drive",
         orderBy: "modifiedTime",
         includeItemsFromAllDrives: true,
         supportsAllDrives: true,
       });
+    if (!state.pageToken) {
+      const q = this.listQuery();
+      return { res: await list(q, undefined), q };
+    }
+    const resumeQuery = state.listQuery ?? this.listQuery();
     try {
-      return await list(pageToken);
+      return { res: await list(resumeQuery, state.pageToken), q: resumeQuery };
     } catch (error: unknown) {
-      if (!pageToken || !isRejectedPageTokenError(error)) throw error;
+      if (!isRejectedPageTokenError(error)) throw error;
+      const q = this.listQuery(state.listedThrough);
       log.warn(
-        `Drive refused the saved page token for ${this.id}; listing again from the first page`,
+        `Drive refused the saved page token for ${this.id}; listing again from ${state.listedThrough ? `files modified since ${state.listedThrough}` : "the first file"}`,
       );
-      return await list(undefined);
+      return { res: await list(q, undefined), q };
     }
   }
 
