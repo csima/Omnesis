@@ -236,6 +236,9 @@ export class SourceConfigReconciler {
   /**
    * Replace each instance with one built from `replacements` and restart its
    * loop: a provider instance captures its effective config in `create()`.
+   * The loops start without waiting for their first sync, which can page for
+   * as long as a sync may take: this runs on the chain every later snapshot
+   * and config change waits behind.
    */
   private async replaceInstances(replacements: Record<string, SourceConfig>): Promise<void> {
     const { ctx } = this;
@@ -245,7 +248,11 @@ export class SourceConfigReconciler {
     }
     const refreshed = ctx.findSourcesForKeys(keys, replacements);
     if (refreshed.length > 0) {
-      await ctx.engine.startSourceSyncLoops(refreshed, ctx.getConfig());
+      ctx.engine.startSourceSyncLoops(refreshed, ctx.getConfig()).catch((err) => {
+        log.error(
+          `Failed to start sync loops for rebuilt ${keys.join(", ")}: ${toErrorMessage(err)}`,
+        );
+      });
     }
   }
 

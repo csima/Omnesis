@@ -2411,6 +2411,50 @@ describe("SourceManager", () => {
     expect(testSourceCutoffs.at(-1)).toBeUndefined();
   });
 
+  test("a rebuild does not hold later config changes and snapshots behind its first sync", async () => {
+    const manager = createManager({ dataRetention: { maxAge: "2y" } });
+    const record = {
+      id: "test-source:acct1",
+      type: "test-source",
+      accountId: "acct1",
+      enabled: true,
+    };
+    await manager.applySourcesSnapshot([record]);
+    const firstSyncNeverEnds = new Promise<void>(() => {});
+    engine.startSourceSyncLoops = () => firstSyncNeverEnds;
+    const settled = (work: Promise<void>) =>
+      Promise.race([
+        work.then(() => "settled"),
+        new Promise((resolve) => setTimeout(() => resolve("held"), 1_000)),
+      ]);
+
+    expect(await settled(manager.handleConfigChange({ dataRetention: { maxAge: "5y" } }))).toBe(
+      "settled",
+    );
+    expect(await settled(manager.handleConfigChange({}))).toBe("settled");
+    expect(
+      await settled(
+        manager.applySourcesSnapshot([{ ...record, config: { enabled: true, maxAge: "1y" } }], {
+          merge: true,
+        }),
+      ),
+    ).toBe("settled");
+    expect(testSourceCutoffs.at(-1)).toBeDefined();
+  });
+
+  test("a rebuilt source whose loops fail to start leaves the config change applied", async () => {
+    const manager = createManager({ dataRetention: { maxAge: "2y" } });
+    await manager.applySourcesSnapshot([
+      { id: "test-source:acct1", type: "test-source", accountId: "acct1", enabled: true },
+    ]);
+    engine.startSourceSyncLoops = () => Promise.reject(new Error("loop start refused"));
+
+    await expect(manager.handleConfigChange({})).resolves.toBeUndefined();
+
+    expect(testSourceCutoffs.at(-1)).toBeUndefined();
+    expect(manager.getConfig().dataRetention).toBeUndefined();
+  });
+
   test("an unchanged retention setting rebuilds nothing", async () => {
     const manager = createManager({ dataRetention: { maxAge: "2y" } });
     await manager.applySourcesSnapshot([
