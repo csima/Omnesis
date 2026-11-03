@@ -3,6 +3,14 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { LogLevel, setLogLevel } from "@omnesis/core";
 import { SyncError, SourceId, type DocumentInput, type ProviderId } from "@omnesis/types";
+import {
+  createCalendarSource,
+  createDriveSource,
+  createGmailSource,
+  createMockCalendar,
+  createMockDrive,
+  createMockGmail,
+} from "@omnesis/provider-google/src/testing/mock-google.js";
 import { SourceSyncRunner, isGatewayValidationError } from "./source-sync-runner.js";
 import { SourceRegistry } from "./source-registry.js";
 import { SyncScheduler } from "./sync-scheduler.js";
@@ -2381,6 +2389,88 @@ describe("SourceSyncRunner — rate-limit deferral", () => {
     expect(outcome).toBeUndefined();
     expect(registry.getStatus("rl:other")?.state).toBe("error");
     expect(registry.getStatus("rl:other")?.lastError).toBe("disk on fire");
+  });
+});
+
+describe("SourceSyncRunner — Google rate limits without Retry-After", () => {
+  /** A Google API rate-limit failure as the client library throws it: no Retry-After. */
+  function googleRateLimit(status: 429 | 403, reason: string): Error {
+    const message = "Too many requests";
+    return Object.assign(new Error(message), {
+      code: status,
+      status,
+      response: {
+        status,
+        headers: {},
+        data: { error: { code: status, message, errors: [{ reason, message }] } },
+      },
+    });
+  }
+
+  function register(id: string, sync: () => Promise<SyncResult>) {
+    const { registry } = makeRegistry();
+    const source = makeDocumentSource(id, sync);
+    registry.registerProvider(makeProvider(source));
+    const runner = new SourceSyncRunner(
+      new RecordingGateway() as unknown as GatewayClient,
+      registry,
+      60_000,
+    );
+    return { registry, source, runner };
+  }
+
+  test("a Gmail 429 parks the source as rate-limited and defers, doubling on the next", async () => {
+    const gmail = createMockGmail();
+    gmail.users.getProfile = vi.fn(() => Promise.reject(googleRateLimit(429, "rateLimitExceeded")));
+    const gmailSource = createGmailSource(gmail, { accountId: "maya.reeves@example.com" });
+    const { registry, source, runner } = register("gmail:maya.reeves@example.com", () =>
+      gmailSource.sync(null),
+    );
+
+    const first = await runner.runOne(source);
+    expect(first).toEqual({ retryAfterMs: 60_000 });
+    expect(registry.getStatus(source.id)?.state).toBe("rate-limited");
+
+    const second = await runner.runOne(source);
+    expect(second).toEqual({ retryAfterMs: 120_000 });
+  });
+
+  test("a Drive 403 userRateLimitExceeded defers instead of failing", async () => {
+    const drive = createMockDrive();
+    drive.files.list = vi.fn(() => Promise.reject(googleRateLimit(403, "userRateLimitExceeded")));
+    const driveSource = createDriveSource(drive);
+    const { registry, source, runner } = register("google-drive:test@example.com", () =>
+      driveSource.sync(null),
+    );
+
+    expect(await runner.runOne(source)).toEqual({ retryAfterMs: 60_000 });
+    expect(registry.getStatus(source.id)?.state).toBe("rate-limited");
+  });
+
+  test("a Calendar 429 defers instead of failing", async () => {
+    const calendar = createMockCalendar();
+    calendar.calendarList.list = vi.fn(() =>
+      Promise.reject(googleRateLimit(429, "rateLimitExceeded")),
+    );
+    const calendarSource = createCalendarSource(calendar);
+    const { registry, source, runner } = register("google-calendar:test@example.com", () =>
+      calendarSource.sync(null),
+    );
+
+    expect(await runner.runOne(source)).toEqual({ retryAfterMs: 60_000 });
+    expect(registry.getStatus(source.id)?.state).toBe("rate-limited");
+  });
+
+  test("a Google permission 403 still fails as an error", async () => {
+    const drive = createMockDrive();
+    drive.files.list = vi.fn(() => Promise.reject(googleRateLimit(403, "forbidden")));
+    const driveSource = createDriveSource(drive);
+    const { registry, source, runner } = register("google-drive:test@example.com", () =>
+      driveSource.sync(null),
+    );
+
+    expect(await runner.runOne(source)).toBeUndefined();
+    expect(registry.getStatus(source.id)?.state).toBe("error");
   });
 });
 

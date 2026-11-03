@@ -3,6 +3,7 @@
 
 import { SyncError, type SyncErrorKind, type FailureScope } from "@omnesis/types";
 import { toErrorMessage } from "@omnesis/core";
+import { GOOGLE_RATE_LIMIT_BASE_DELAY_MS, GOOGLE_RATE_LIMIT_MAX_DELAY_MS } from "./constants.js";
 
 /**
  * Subset of GaxiosError fields we look at — the googleapis SDK widens the
@@ -121,6 +122,26 @@ function getOAuthErrorBody(e: GaxiosLikeError): string {
 }
 
 /**
+ * How long to wait after the `consecutive`-th rate limit in a row that came
+ * with no `Retry-After`: the base delay, doubled for each one before it, and
+ * capped. Google's own 429s carry no `Retry-After`, and a rate limit without a
+ * delay would reach the host as a plain failure retried on the usual interval.
+ */
+export function googleRateLimitBackoffMs(consecutive = 1): number {
+  const doublings = Math.min(Math.max(0, Math.floor(consecutive) - 1), 30);
+  return Math.min(GOOGLE_RATE_LIMIT_BASE_DELAY_MS * 2 ** doublings, GOOGLE_RATE_LIMIT_MAX_DELAY_MS);
+}
+
+export interface GoogleApiErrorOptions {
+  /**
+   * How many rate-limited syncs in a row this one makes, counting itself. A
+   * rate limit without `Retry-After` waits {@link googleRateLimitBackoffMs} of
+   * it. Defaults to 1.
+   */
+  consecutiveRateLimits?: number;
+}
+
+/**
  * Normalise a `googleapis` SDK error into a typed `SyncError` so the
  * collector's classifier can route the source to the right state and pick
  * up any Retry-After hint without parsing free-form messages. Pass-through
@@ -131,7 +152,9 @@ function getOAuthErrorBody(e: GaxiosLikeError): string {
  * - OAuth refresh-token failures (`invalid_grant`, `Token has been expired
  *   or revoked`, etc.) → `auth` — these come back as HTTP 400 from the
  *   token endpoint, not 401
- * - 429, `rateLimitExceeded`, `userRateLimitExceeded` → `rate-limit`
+ * - 429, `rateLimitExceeded`, `userRateLimitExceeded` → `rate-limit`, with
+ *   the `Retry-After` delay when Google sent one and an exponential back-off
+ *   from {@link googleRateLimitBackoffMs} when it did not
  * - 403 → `permission` (or `rate-limit` when the reason explicitly says so)
  * - 5xx → `transient`
  * - ECONN..., ETIMEDOUT, ENOTFOUND, EAI_AGAIN, ENETUNREACH → `network`
@@ -152,7 +175,7 @@ function getOAuthErrorBody(e: GaxiosLikeError): string {
  * ambiguously as "per project, per client, or an interaction of both" and is
  * not guessed either. Only the source that hit a limit waits it out.
  */
-export function mapGoogleApiError(err: unknown): SyncError {
+export function mapGoogleApiError(err: unknown, opts: GoogleApiErrorOptions = {}): SyncError {
   if (err instanceof SyncError) return err;
 
   const e = (err ?? {}) as GaxiosLikeError;
@@ -201,6 +224,9 @@ export function mapGoogleApiError(err: unknown): SyncError {
 
   // Retry-After is only meaningful on rate-limit / transient classes.
   if (kind !== "rate-limit" && kind !== "transient") retryAfterMs = undefined;
+  if (kind === "rate-limit" && !(retryAfterMs !== undefined && retryAfterMs > 0)) {
+    retryAfterMs = googleRateLimitBackoffMs(opts.consecutiveRateLimits);
+  }
 
   const scope: FailureScope | undefined = kind === "auth" ? "connection" : undefined;
 

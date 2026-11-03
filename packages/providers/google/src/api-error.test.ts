@@ -3,7 +3,7 @@
 
 import { describe, test, expect } from "vitest";
 import { SyncError } from "@omnesis/types";
-import { mapGoogleApiError } from "./api-error.js";
+import { googleRateLimitBackoffMs, mapGoogleApiError } from "./api-error.js";
 
 describe("mapGoogleApiError", () => {
   test("passes SyncError through unchanged", () => {
@@ -141,6 +141,55 @@ describe("mapGoogleApiError", () => {
     });
     expect(e.kind).toBe("rate-limit");
     expect(e.retryAfterMs).toBe(30_000);
+  });
+
+  test("429 without Retry-After → rate-limit that defers a minute, not a plain failure", () => {
+    const e = mapGoogleApiError({
+      code: 429,
+      message: "Too many requests",
+      response: { headers: {} },
+    });
+    expect(e.kind).toBe("rate-limit");
+    expect(e.retryAfterMs).toBe(60_000);
+  });
+
+  test("403 userRateLimitExceeded without Retry-After → the same one-minute deferral", () => {
+    const e = mapGoogleApiError({
+      code: 403,
+      errors: [{ reason: "userRateLimitExceeded" }],
+      message: "quota",
+    });
+    expect(e.retryAfterMs).toBe(60_000);
+  });
+
+  test("a rate limit's default delay doubles with each one in a row, capped", () => {
+    const delays = [1, 2, 3, 6, 7, 40].map(
+      (n) =>
+        mapGoogleApiError({ code: 429, message: "x" }, { consecutiveRateLimits: n }).retryAfterMs,
+    );
+    expect(delays).toEqual([60_000, 120_000, 240_000, 1_800_000, 1_800_000, 1_800_000]);
+    expect(googleRateLimitBackoffMs(0)).toBe(60_000);
+  });
+
+  test("a Retry-After of zero gets the default delay, so the host still backs off", () => {
+    const e = mapGoogleApiError({
+      code: 429,
+      message: "x",
+      response: { headers: { "retry-after": "0" } },
+    });
+    expect(e.retryAfterMs).toBe(60_000);
+  });
+
+  test("the delay a Retry-After header names wins over the back-off", () => {
+    const e = mapGoogleApiError(
+      { code: 429, message: "x", response: { headers: { "retry-after": "30" } } },
+      { consecutiveRateLimits: 4 },
+    );
+    expect(e.retryAfterMs).toBe(30_000);
+  });
+
+  test("a 5xx without Retry-After gets no delay of its own", () => {
+    expect(mapGoogleApiError({ code: 503, message: "x" }).retryAfterMs).toBeUndefined();
   });
 
   test("429 with no reason → rate-limit, no quota bucket (can't tell app vs account)", () => {
