@@ -5907,7 +5907,8 @@
       "value": "Bad Request",
       "paths": [
         "packages/providers/google/src/api-error.test.ts",
-        "packages/providers/google/src/contacts.test.ts"
+        "packages/providers/google/src/contacts.test.ts",
+        "packages/providers/google/src/drive.test.ts"
       ],
       "reason": "reviewed existing fixture"
     },
@@ -7383,6 +7384,11 @@
       "value": "Intel Mac",
       "paths": ["packages/gateway/portal/js/components/extension-promo.test.ts"],
       "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Invalid Value",
+      "paths": ["packages/providers/google/src/drive.test.ts"],
+      "reason": "The message Google APIs return for a rejected request parameter, not a name."
     },
     {
       "value": "Google Contacts",
@@ -12255,8 +12261,16 @@
     },
     {
       "value": "Rate Limit Exceeded",
-      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "paths": [
+        "packages/providers/google/src/broker.test.ts",
+        "packages/providers/google/src/drive.test.ts"
+      ],
       "reason": "Google API error message text."
+    },
+    {
+      "value": "User Rate Limit",
+      "paths": ["packages/providers/google/src/drive.test.ts"],
+      "reason": "Google API error message text (\"User Rate Limit Exceeded\")."
     },
     {
       "value": "Neither Strava",
