@@ -180,32 +180,30 @@ describe("GoogleDriveSource", () => {
       expect(result.deletedExternalIds).toContain("trashed-file");
     });
 
-    test("falls back to bootstrap on expired page token (404)", async () => {
-      const error: any = new Error("Not Found");
-      error.code = 404;
-      drive.changes.list = vi.fn(() => Promise.reject(error));
+    test("falls back to bootstrap when Drive refuses the changes token", async () => {
+      drive.changes.list = vi.fn(() => Promise.reject(driveInvalidValue("pageToken")));
 
       drive.files.list = vi.fn(() => Promise.resolve({ data: { files: [] } }));
 
-      const cursor = { phase: "incremental", startPageToken: "expired" };
+      const cursor = { phase: "incremental", startPageToken: "unusable" };
       const result = await source.sync(cursor);
 
       expect(drive.files.list).toHaveBeenCalled();
       expect(result.hasMore).toBe(false);
     });
 
-    test("falls back to bootstrap on 403 error", async () => {
-      const error: any = new Error("Forbidden");
-      error.code = 403;
-      drive.changes.list = vi.fn(() => Promise.reject(error));
+    test("a bare 403 or 404 surfaces instead of re-listing every file", async () => {
+      for (const code of [403, 404]) {
+        const error: any = new Error(code === 403 ? "Forbidden" : "Not Found");
+        error.code = code;
+        drive.changes.list = vi.fn(() => Promise.reject(error));
+        drive.files.list = vi.fn(() => Promise.resolve({ data: { files: [] } }));
 
-      drive.files.list = vi.fn(() => Promise.resolve({ data: { files: [] } }));
-
-      const cursor = { phase: "incremental", startPageToken: "expired" };
-      const result = await source.sync(cursor);
-
-      expect(drive.files.list).toHaveBeenCalled();
-      expect(result.hasMore).toBe(false);
+        await expect(
+          source.sync({ phase: "incremental", startPageToken: "changes-7" }),
+        ).rejects.toBeInstanceOf(SyncError);
+        expect(drive.files.list).not.toHaveBeenCalled();
+      }
     });
 
     test("updates startPageToken after sync", async () => {
@@ -1263,6 +1261,56 @@ describe("GoogleDriveSource bootstrap page tokens", () => {
       createDriveSource(drive).sync({ phase: "bootstrap", pageToken: "drive-page-3" }),
     ).rejects.toBeInstanceOf(SyncError);
     expect(drive.files.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("GoogleDriveSource changes token errors", () => {
+  const cursor = { phase: "incremental", startPageToken: "changes-41" };
+
+  test.each(["userRateLimitExceeded", "rateLimitExceeded"] as const)(
+    "a %s 403 surfaces as a rate limit and keeps the changes token",
+    async (reason) => {
+      const drive = createMockDrive();
+      drive.changes.list = vi.fn(() => Promise.reject(driveRateLimit(reason)));
+
+      const error = await createDriveSource(drive)
+        .sync(cursor)
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(SyncError);
+      expect((error as SyncError).kind).toBe("rate-limit");
+      expect(drive.files.list).not.toHaveBeenCalled();
+      expect(drive.changes.getStartPageToken).not.toHaveBeenCalled();
+    },
+  );
+
+  test("a permission 403 surfaces without listing every file again", async () => {
+    const drive = createMockDrive();
+    drive.changes.list = vi.fn(() =>
+      Promise.reject(
+        driveError(403, {
+          domain: "global",
+          reason: "insufficientFilePermissions",
+          message: "The user does not have sufficient permissions for this file.",
+        }),
+      ),
+    );
+
+    await expect(createDriveSource(drive).sync(cursor)).rejects.toBeInstanceOf(SyncError);
+    expect(drive.files.list).not.toHaveBeenCalled();
+  });
+
+  test("a changes token Drive refuses lists every file again from a fresh token", async () => {
+    const drive = createMockDrive();
+    drive.changes.list = vi.fn(() => Promise.reject(driveInvalidValue("pageToken")));
+    mockDriveFilesList(drive, [makeDriveFile()]);
+
+    const result = await createDriveSource(drive).sync(cursor);
+
+    expect(drive.changes.getStartPageToken).toHaveBeenCalledTimes(1);
+    expect(drive.files.list).toHaveBeenCalledTimes(1);
+    expect(listCalls(drive)[0]!.pageToken).toBeUndefined();
+    expect(result.cursor).toMatchObject({ phase: "incremental", startPageToken: "start-token-1" });
   });
 });
 

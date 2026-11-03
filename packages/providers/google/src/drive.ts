@@ -381,10 +381,12 @@ export class GoogleDriveSource {
         hasMore,
       };
     } catch (error: unknown) {
-      const apiError = error as { code?: number };
-      // Page token expired — need to re-bootstrap
-      if (apiError.code === 404 || apiError.code === 403) {
-        log.warn("Drive changes token expired, triggering full re-sync");
+      // Drive's changes tokens do not expire, but one it cannot use is
+      // refused like a files.list token. Nothing then says what changed, so
+      // the files are listed again from a fresh token. Anything else — a 403
+      // rate limit above all — surfaces, keeps the token and is retried.
+      if (isRejectedPageTokenError(error)) {
+        log.warn(`Drive refused the changes token for ${this.id}; listing every file again`);
         return this.bootstrapSync({ phase: "bootstrap" });
       }
       throw mapGoogleApiError(error);
