@@ -1025,7 +1025,11 @@ function driveRateLimit(reason: "userRateLimitExceeded" | "rateLimitExceeded"): 
  * issued for — one presented with another query, or one it never issued, is
  * refused as `Invalid Value` on `pageToken`.
  */
-function createPagingDrive(files: ReturnType<typeof makeDriveFile>[], pageSize: number) {
+function createPagingDrive(
+  files: ReturnType<typeof makeDriveFile>[],
+  pageSize: number,
+  { honoursOrder = true }: { honoursOrder?: boolean } = {},
+) {
   const drive = createMockDrive();
   const issued = new Map<string, { q: string; offset: number }>();
   let tokens = 0;
@@ -1041,7 +1045,7 @@ function createPagingDrive(files: ReturnType<typeof makeDriveFile>[], pageSize: 
     const matching = files
       .filter((f) => !createdFloor || Date.parse(f.createdTime) >= Date.parse(createdFloor))
       .filter((f) => !modifiedFloor || Date.parse(f.modifiedTime) >= Date.parse(modifiedFloor))
-      .sort((a, b) => Date.parse(a.modifiedTime) - Date.parse(b.modifiedTime));
+      .sort((a, b) => (honoursOrder ? Date.parse(a.modifiedTime) - Date.parse(b.modifiedTime) : 0));
     const next = offset + pageSize < matching.length ? `drive-page-${++tokens}` : undefined;
     if (next) issued.set(next, { q, offset: offset + pageSize });
     return Promise.resolve({
@@ -1097,6 +1101,93 @@ describe("GoogleDriveSource bootstrap page tokens", () => {
     expect(done.cursor).toMatchObject({ phase: "incremental", startPageToken: "start-token-1" });
     expect((done.cursor as any).listQuery).toBeUndefined();
     expect((done.cursor as any).listedThrough).toBeUndefined();
+  });
+
+  test("ordered pages keep advancing the mark, floored to the whole second", async () => {
+    const drive = createPagingDrive(
+      [
+        file("brief-a", "2025-01-01T00:00:00Z", "2025-03-01T09:00:00.250Z"),
+        file("brief-b", "2025-01-01T00:00:00Z", "2025-03-01T09:00:00.750Z"),
+        file("brief-c", "2025-01-01T00:00:00Z", "2025-03-04T10:30:15.999Z"),
+        file("brief-d", "2025-01-01T00:00:00Z", "2025-03-09T11:00:00.000Z"),
+        file("brief-e", "2025-01-01T00:00:00Z", "2025-03-12T12:00:00.000Z"),
+      ],
+      1,
+    );
+    const source = createDriveSource(drive);
+    const marks: string[] = [];
+    let cursor: any = null;
+    for (let page = 0; page < 4; page += 1) {
+      cursor = (await source.sync(cursor)).cursor;
+      marks.push(cursor.listedThrough);
+      expect(cursor.unordered).toBeUndefined();
+    }
+    expect(marks).toEqual([
+      "2025-03-01T09:00:00.000Z",
+      "2025-03-01T09:00:00.000Z",
+      "2025-03-04T10:30:15.000Z",
+      "2025-03-09T11:00:00.000Z",
+    ]);
+
+    drive.files.list.mockClear();
+    const restarted = await source.sync({ ...cursor, pageToken: "drive-page-expired" });
+    expect(listCalls(drive)[1]!.q).toBe(
+      "trashed=false and modifiedTime >= '2025-03-09T11:00:00.000Z'",
+    );
+    expect(restarted.documents.map((d) => d.externalId)).toEqual(["brief-d"]);
+  });
+
+  test("a page out of modifiedTime order drops the mark for the rest of the walk", async () => {
+    const shuffled = [
+      file("ledger-a", "2025-01-01T00:00:00Z", "2025-05-01T00:00:00Z"),
+      file("ledger-b", "2025-01-01T00:00:00Z", "2025-02-01T00:00:00Z"),
+      file("ledger-c", "2025-01-01T00:00:00Z", "2025-06-01T00:00:00Z"),
+      file("ledger-d", "2025-01-01T00:00:00Z", "2025-07-01T00:00:00Z"),
+      file("ledger-e", "2025-01-01T00:00:00Z", "2025-08-01T00:00:00Z"),
+    ];
+    const drive = createPagingDrive(shuffled, 2, { honoursOrder: false });
+    const source = createDriveSource(drive);
+
+    const first = await source.sync(null);
+    expect(first.cursor).toMatchObject({ phase: "bootstrap", unordered: true });
+    expect((first.cursor as any).listedThrough).toBeUndefined();
+
+    const second = await source.sync(first.cursor);
+    expect(second.cursor).toMatchObject({ phase: "bootstrap", unordered: true });
+    expect((second.cursor as any).listedThrough).toBeUndefined();
+
+    drive.files.list.mockClear();
+    const restarted = await source.sync({
+      ...(second.cursor as any),
+      pageToken: "drive-page-expired",
+    });
+    expect(listCalls(drive)[1]!.q).toBe("trashed=false");
+    expect(restarted.documents.map((d) => d.externalId)).toEqual(["ledger-a", "ledger-b"]);
+    expect(restarted.cursor).toMatchObject({ unordered: true, startPageToken: "start-token-1" });
+
+    const { cursor } = await walk(source, restarted.cursor);
+    expect(cursor.unordered).toBeUndefined();
+    expect(cursor.phase).toBe("incremental");
+  });
+
+  test("a page that starts below the mark drops it", async () => {
+    const drive = createPagingDrive(
+      [
+        file("memo-a", "2025-01-01T00:00:00Z", "2025-04-01T00:00:00Z"),
+        file("memo-b", "2025-01-01T00:00:00Z", "2025-03-01T00:00:00Z"),
+        file("memo-c", "2025-01-01T00:00:00Z", "2025-09-01T00:00:00Z"),
+      ],
+      1,
+      { honoursOrder: false },
+    );
+    const source = createDriveSource(drive);
+    const first = await source.sync(null);
+    expect((first.cursor as any).listedThrough).toBe("2025-04-01T00:00:00.000Z");
+
+    const second = await source.sync(first.cursor);
+
+    expect(second.cursor).toMatchObject({ unordered: true });
+    expect((second.cursor as any).listedThrough).toBeUndefined();
   });
 
   test("a rolling maxAge resolved at two different times keeps the walk's page token", async () => {
@@ -1315,15 +1406,11 @@ describe("GoogleDriveSource changes token errors", () => {
 });
 
 describe("isRejectedPageTokenError", () => {
-  test("matches Drive's invalid-value 400 naming pageToken, on the error or its response", () => {
+  test("matches a 400 naming pageToken, on the error or its response, whatever its reason", () => {
     expect(isRejectedPageTokenError(driveInvalidValue("pageToken"))).toBe(true);
     const bodyOnly = driveInvalidValue("pageToken") as any;
     delete bodyOnly.errors;
     expect(isRejectedPageTokenError(bodyOnly)).toBe(true);
-  });
-
-  test("does not match a 400 about anything else, a rate limit, or a non-400", () => {
-    expect(isRejectedPageTokenError(driveInvalidValue("q"))).toBe(false);
     expect(
       isRejectedPageTokenError(
         driveError(400, {
@@ -1333,7 +1420,11 @@ describe("isRejectedPageTokenError", () => {
           location: "pageToken",
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  test("does not match a 400 naming another parameter, a rate limit, or a non-400", () => {
+    expect(isRejectedPageTokenError(driveInvalidValue("q"))).toBe(false);
     expect(isRejectedPageTokenError(Object.assign(new Error("Invalid Value"), { code: 400 }))).toBe(
       false,
     );

@@ -50,11 +50,18 @@ export interface DriveSyncCursor extends SyncCursor {
    */
   listQuery?: string;
   /**
-   * The latest `modifiedTime` the walk has listed. The listing runs in
-   * ascending `modifiedTime`, so when Drive refuses the saved token the walk
-   * starts again from here instead of from the first file.
+   * The latest `modifiedTime` the walk has listed, floored to the second. The
+   * listing asks for ascending `modifiedTime`, so when Drive refuses the saved
+   * token the walk starts again from here instead of from the first file.
    */
   listedThrough?: string;
+  /**
+   * Set once a page came back out of `modifiedTime` order. Drive ignores the
+   * requested order for accounts of about a million files, and a mark taken
+   * from an unordered listing would skip files, so this walk keeps none and a
+   * refused token lists again from the first file.
+   */
+  unordered?: true;
   /** Start page token for changes.list during incremental sync */
   startPageToken?: string;
 }
@@ -69,11 +76,12 @@ const validateDriveSyncCursor = makeCursorValidator(isDriveSyncCursor);
 
 /**
  * Whether Drive refused the `pageToken` a `files.list` or `changes.list` call
- * sent: a 400 whose error detail is `{ reason: "invalid", location:
- * "pageToken" }`, which is how Drive answers a token it no longer honours or
- * one issued for another query. The same 400 naming `q` or any other
- * parameter, and every 403 — a rate limit above all, which the sync retries
- * with backoff — is a different fault and not a reason to drop the token.
+ * sent: a 400 whose error detail names `pageToken` as the parameter at fault,
+ * which is how Drive answers a token it no longer honours or one issued for
+ * another query (`{ reason: "invalid", message: "Invalid Value", location:
+ * "pageToken" }`). The same 400 naming `q` or any other parameter, and every
+ * 403 — a rate limit above all, which the sync retries with backoff — is a
+ * different fault and not a reason to drop the token.
  */
 export function isRejectedPageTokenError(err: unknown): boolean {
   if (googleApiStatus(err) !== 400) return false;
@@ -87,24 +95,41 @@ export function isRejectedPageTokenError(err: unknown): boolean {
     (list) =>
       Array.isArray(list) &&
       list.some((d) => {
-        const detail = (d ?? {}) as { reason?: unknown; location?: unknown };
-        return detail.reason === "invalid" && detail.location === "pageToken";
+        const detail = (d ?? {}) as { location?: unknown };
+        return detail.location === "pageToken";
       }),
   );
 }
 
-/** The latest of `previous` and the files' `modifiedTime`, as an ISO instant. */
-function latestModifiedTime(
-  previous: string | undefined,
+/**
+ * An instant floored to the whole second, as ISO. Drive does not document the
+ * precision of a `modifiedTime >=` comparison; flooring can only list a few
+ * files of that second again.
+ */
+function wholeSecond(instant: number): string {
+  return new Date(Math.floor(instant / 1000) * 1000).toISOString();
+}
+
+/**
+ * Where the walk stands after a page: the mark advanced to the page's latest
+ * `modifiedTime`, or no mark at all once a page has come back out of order —
+ * a time below the one before it, or below the mark the page started from.
+ * That is sticky for the rest of the walk.
+ */
+function advanceMark(
+  state: Pick<DriveSyncCursor, "listedThrough" | "unordered">,
   files: readonly drive_v3.Schema$File[],
-): string | undefined {
-  let latest = previous ? Date.parse(previous) : Number.NaN;
+): Pick<DriveSyncCursor, "listedThrough" | "unordered"> {
+  if (state.unordered) return { unordered: true };
+  const mark = state.listedThrough ? Date.parse(state.listedThrough) : Number.NaN;
+  let previous = Number.isNaN(mark) ? Number.NEGATIVE_INFINITY : mark;
   for (const file of files) {
     const modified = file.modifiedTime ? Date.parse(file.modifiedTime) : Number.NaN;
     if (Number.isNaN(modified)) continue;
-    if (Number.isNaN(latest) || modified > latest) latest = modified;
+    if (modified < previous) return { unordered: true };
+    previous = modified;
   }
-  return Number.isNaN(latest) ? undefined : new Date(latest).toISOString();
+  return Number.isFinite(previous) ? { listedThrough: wholeSecond(previous) } : {};
 }
 
 function isGoogleWorkspaceType(mimeType: string): boolean {
@@ -248,6 +273,12 @@ export class GoogleDriveSource {
     const filteredDocuments = applyDataCutoff(documents, this.dataCutoff, log, "files");
 
     const hasMore = !!res.data.nextPageToken;
+    const mark = advanceMark(state, files);
+    if (mark.unordered && !state.unordered && hasMore) {
+      log.warn(
+        `Drive listed ${this.id}'s files out of modifiedTime order; this walk keeps no resume mark, so a refused page token lists again from the first file`,
+      );
+    }
 
     return {
       documents: filteredDocuments,
@@ -256,7 +287,7 @@ export class GoogleDriveSource {
         phase: hasMore ? "bootstrap" : "incremental",
         pageToken: res.data.nextPageToken ?? undefined,
         listQuery: hasMore ? q : undefined,
-        listedThrough: hasMore ? latestModifiedTime(state.listedThrough, files) : undefined,
+        ...(hasMore ? mark : {}),
         startPageToken,
       } satisfies DriveSyncCursor,
       hasMore,
@@ -277,7 +308,7 @@ export class GoogleDriveSource {
   private listQuery(modifiedSince?: string): string {
     const terms = ["trashed=false"];
     if (this.dataCutoff) terms.push(`createdTime >= '${this.dataCutoff.toISOString()}'`);
-    if (modifiedSince) terms.push(`modifiedTime >= '${modifiedSince}'`);
+    if (modifiedSince) terms.push(`modifiedTime >= '${wholeSecond(Date.parse(modifiedSince))}'`);
     return terms.join(" and ");
   }
 
