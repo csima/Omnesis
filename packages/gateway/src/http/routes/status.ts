@@ -10,6 +10,7 @@ import {
   devModeEnabled,
   experimentalVisible,
   experimentalEnabled,
+  getSourceCutoffDate,
   materializeConfigSecrets,
   CAPABILITY_ROLES,
   type AssignmentValue,
@@ -26,6 +27,7 @@ import {
   getWatermark,
   getIndexGenerationStatus,
 } from "../../indexer/db.js";
+import { indexableCountsBySource } from "../../indexer/indexable-documents.js";
 import { readScanProgressView } from "../../indexer/scan-progress.js";
 import { resolveSearchSettings } from "../../search/search-config.js";
 import { scope } from "../scope.js";
@@ -451,10 +453,20 @@ export function mountStatusRoutes(app: RouteApp, deps: StatusRoutesDeps): void {
       // existing index regressing. Computed in the gateway; clients render the
       // neutral payload with no inference.
       const indexVersions = seg("idx.versions", () => getIndexGenerationStatus(indexDb));
-      // The catch-up an operator watches: documents without an index row, and
-      // the scan in progress with its position, rate and pace.
+      // The catch-up an operator watches: documents the indexer is expected to
+      // index but has no row for, and the scan in progress with its position,
+      // rate and pace. Documents a source keeps from before its retention
+      // cutoff are skipped by the indexer, so they are not backlog.
       const scan = seg("idx.scan", () => readScanProgressView(indexDb));
-      const backlog = Math.max(0, total - totalIndexed);
+      const liveConfig = configStore?.get() ?? config ?? {};
+      const indexable = seg("idx.indexable", () =>
+        Object.values(
+          indexableCountsBySource(db, bySource, (sourceId) =>
+            getSourceCutoffDate(liveConfig, sourceId),
+          ),
+        ).reduce((a, b) => a + b, 0),
+      );
+      const backlog = Math.max(0, indexable - totalIndexed);
       index = { enabled: true, totalIndexed, totalChunks, watermark, indexVersions, backlog, scan };
     }
 

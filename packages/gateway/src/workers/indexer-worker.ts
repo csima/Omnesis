@@ -27,6 +27,7 @@ import { LlamaCppEmbedder } from "../indexer/embedder.js";
 import { Indexer } from "../indexer/indexer.js";
 import { DocumentChunker } from "../indexer/chunker.js";
 import { DirectDocumentSource } from "../indexer/direct-document-source.js";
+import { countIndexableDocuments } from "../indexer/indexable-documents.js";
 import {
   openIndexDb,
   hasLexicalWrites,
@@ -850,12 +851,7 @@ async function handleInit(init: IndexerInit): Promise<void> {
         );
       } else if (existingWatermark && !watermarkVerified) {
         const indexedCount = getIndexedDocumentCount(indexDb);
-        const gatewayCount =
-          (
-            gatewayDb.prepare<[], { c: number }>("SELECT COUNT(*) as c FROM documents").get() as {
-              c: number;
-            }
-          )?.c ?? 0;
+        const gatewayCount = countIndexableDocuments(gatewayDb, resolveCutoff);
         if (gatewayCount > 0 && indexedCount / gatewayCount < 0.9) {
           indexDb.prepare("DELETE FROM watermark WHERE key = ?").run("last_updated_at");
           log(
@@ -1008,11 +1004,7 @@ async function handleInit(init: IndexerInit): Promise<void> {
       if (!init.reindexMissingAtBoot) {
         try {
           const indexedCount = getIndexedDocumentCount(indexDb);
-          const gatewayCount =
-            (
-              gatewayDb.prepare<[], { c: number }>("SELECT COUNT(*) as c FROM documents").get() as
-                { c: number } | undefined
-            )?.c ?? 0;
+          const gatewayCount = countIndexableDocuments(gatewayDb, resolveCutoff);
           if (gatewayCount > 0 && indexedCount / gatewayCount < 0.99 && diskOkForCycle()) {
             log(
               "info",
