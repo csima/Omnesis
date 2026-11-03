@@ -21,7 +21,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { parseDuration } from "@omnesis/core";
 import { SCOPE_READ } from "@omnesis/types";
 import { createDatabase, upsertDocuments } from "../db.js";
 import { createServer } from "../server.js";
@@ -37,7 +36,7 @@ import {
   getIndexedDocumentCount,
 } from "./db.js";
 import { DirectDocumentSource } from "./direct-document-source.js";
-import { countIndexableDocuments } from "./indexable-documents.js";
+import { configMaxAgeResolver, cutoffFromMaxAge, indexCoverage } from "./indexable-documents.js";
 import { Indexer } from "./indexer.js";
 import { computeIndexStats } from "./stats.js";
 import type { OmnesisConfig } from "@omnesis/config";
@@ -55,7 +54,10 @@ let reader: Database.Database;
 let indexDb: Database.Database;
 let source: DirectDocumentSource;
 let fetched: string[];
-let config: { sources: Record<string, { maxAge?: string }> };
+let config: {
+  sources: Record<string, { maxAge?: string }>;
+  dataRetention?: { maxAge?: string };
+};
 
 class FixedEmbedder implements Embedder {
   async embed(texts: string[]): Promise<Float32Array[]> {
@@ -127,9 +129,12 @@ function doc(
 }
 
 /** The indexer worker's resolution: its cutoff map, re-read as a hot reload would. */
+function workerMaxAge(sourceId: string, from: typeof config = config): string | null {
+  return resolveIndexerCutoffMaxAge(buildIndexerCutoffMap(from), sourceId);
+}
+
 function workerCutoff(doc: IndexableDocument): string | null {
-  const maxAge = resolveIndexerCutoffMaxAge(buildIndexerCutoffMap(config), doc.sourceId);
-  return maxAge ? new Date(Date.now() - parseDuration(maxAge)).toISOString() : null;
+  return cutoffFromMaxAge(workerMaxAge(doc.sourceId));
 }
 
 function newIndexer(): Indexer {
@@ -175,11 +180,9 @@ function statsRemaining(): number {
 
 /** The gap `reindexMissing` would act on, measured independently of it. */
 function missingCount(): number {
-  const indexed = getAllIndexedDocumentIds(indexDb);
-  return (
-    countIndexableDocuments(reader, (sourceId) => workerCutoff({ sourceId } as IndexableDocument)) -
-    [...indexed].length
-  );
+  return indexCoverage(reader, indexDb, (sourceId) =>
+    workerCutoff({ sourceId } as IndexableDocument),
+  ).missing;
 }
 
 describe("documents older than the retention cutoff", () => {
@@ -239,5 +242,87 @@ describe("documents older than the retention cutoff", () => {
     expect(getAllIndexedDocumentIds(indexDb).has(idsOf("file-old-2")[0]!)).toBe(false);
     expect(await statusBacklog()).toBe(0);
     expect(missingCount()).toBe(0);
+  });
+});
+
+describe("a cutoff that changes or cannot be applied", () => {
+  test("a cutoff that narrows during a pass keeps the newly excluded documents out", async () => {
+    config.sources[MAIL] = { maxAge: "unlimited" };
+    config.sources[FILES] = { maxAge: "unlimited" };
+    const list = source.listIndexableIds.bind(source);
+    source.listIndexableIds = async (cutoffFor) => {
+      const ids = await list(cutoffFor);
+      config.sources[MAIL] = { maxAge: "2y" };
+      config.sources[FILES] = { maxAge: "2y" };
+      return ids;
+    };
+
+    const pass = await newIndexer().reindexMissing();
+    expect([...fetched].sort()).toEqual(idsOf(...IN_SCOPE, ...OLD));
+    expect(pass).toEqual({ indexed: IN_SCOPE.length, errors: 0 });
+    expect([...getAllIndexedDocumentIds(indexDb)].sort()).toEqual(idsOf(...IN_SCOPE));
+  });
+
+  test("a maxAge beyond what a duration can express applies no cutoff on every surface", async () => {
+    config.sources[MAIL] = { maxAge: "150y" };
+    const mailOld = ["mail-old-1", "mail-old-2"];
+    expect(workerCutoff({ sourceId: MAIL } as IndexableDocument)).toBeNull();
+    expect(await statusBacklog()).toBe(IN_SCOPE.length + mailOld.length);
+    expect(statsRemaining()).toBe(IN_SCOPE.length + mailOld.length);
+
+    const pass = await newIndexer().reindexMissing();
+    expect(pass).toEqual({ indexed: IN_SCOPE.length + mailOld.length, errors: 0 });
+    expect(await statusBacklog()).toBe(0);
+    expect(missingCount()).toBe(0);
+  });
+});
+
+describe("the worker and the HTTP surfaces resolve the same cutoff", () => {
+  const cases: Array<[string, typeof config]> = [
+    ["instance key", { sources: { [MAIL]: { maxAge: "2y" } } }],
+    ["type key", { sources: { mail: { maxAge: "3y" } } }],
+    [
+      "instance key overriding type key with unlimited",
+      { sources: { mail: { maxAge: "3y" }, [MAIL]: { maxAge: "unlimited" } } },
+    ],
+    [
+      "type key overriding sources.default",
+      { sources: { default: { maxAge: "1y" }, mail: { maxAge: "5y" } } },
+    ],
+    ["sources.default", { sources: { default: { maxAge: "1y" } } }],
+    ["dataRetention.maxAge", { sources: {}, dataRetention: { maxAge: "4y" } }],
+    [
+      "sources.default over dataRetention.maxAge",
+      { sources: { default: { maxAge: "6y" } }, dataRetention: { maxAge: "1y" } },
+    ],
+    [
+      "unlimited at the default level",
+      { sources: { default: { maxAge: "unlimited" } }, dataRetention: { maxAge: "1y" } },
+    ],
+    ["unlimited dataRetention", { sources: {}, dataRetention: { maxAge: "unlimited" } }],
+    ["nothing configured", { sources: {} }],
+    ["out of range", { sources: { default: { maxAge: "150y" } } }],
+  ];
+
+  test.each(cases)("%s", (_name, c) => {
+    const now = Date.now();
+    const http = configMaxAgeResolver(c as unknown as OmnesisConfig);
+    for (const sourceId of [MAIL, FILES, "mail"]) {
+      expect(cutoffFromMaxAge(workerMaxAge(sourceId, c), now), sourceId).toBe(
+        cutoffFromMaxAge(http(sourceId), now),
+      );
+    }
+  });
+
+  test("the matrix is not trivially null", () => {
+    const now = Date.now();
+    const cutoffOf = (c: typeof config, sourceId: string) =>
+      cutoffFromMaxAge(workerMaxAge(sourceId, c), now);
+    const year = (n: number) => cutoffFromMaxAge(`${n}y`, now);
+    expect(cutoffOf(cases[1]![1], MAIL)).toBe(year(3));
+    expect(cutoffOf(cases[2]![1], MAIL)).toBeNull();
+    expect(cutoffOf(cases[3]![1], FILES)).toBe(year(1));
+    expect(cutoffOf(cases[5]![1], FILES)).toBe(year(4));
+    expect(cutoffOf(cases[7]![1], FILES)).toBeNull();
   });
 });

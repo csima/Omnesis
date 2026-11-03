@@ -842,8 +842,9 @@ export class Indexer {
       const docsProcessed = batchStart + batchIds.length;
       batchStart = docsProcessed;
 
-      // Phase 1: chunk all docs in this batch. Cutoff-skipped docs never
-      // reach here: `listIndexableIds` left them out of the missing set.
+      // Phase 1: chunk all docs in this batch. `listIndexableIds` already
+      // left cutoff-skipped docs out of the missing set; the re-check costs
+      // nothing and holds if the cutoff narrowed since the list was read.
       type Prepared = {
         doc: IndexableDocument;
         chunks: ReturnType<Chunker["chunk"]>;
@@ -852,6 +853,14 @@ export class Indexer {
 
       for (const doc of docs) {
         if (this.stopping) break;
+        if (
+          isBeforeCutoff(
+            this.cutoffForSource(doc.sourceId),
+            doc.metadata.sourceCreatedAt,
+            doc.metadata.documentType,
+          )
+        )
+          continue;
 
         doc.content = normalizeContent(doc.content);
         const chunks = this.chunker.chunk(doc);

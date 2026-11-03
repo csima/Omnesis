@@ -17,7 +17,6 @@
  * figures. Callers branch on `state`.
  */
 
-import { getSourceCutoffDate } from "@omnesis/core";
 import { computeEtaSeconds } from "../workers/indexer-rate.js";
 import {
   getIndexStatsBySource,
@@ -29,7 +28,7 @@ import {
   getWatermark,
   getIndexGenerationStatus,
 } from "./db.js";
-import { indexableCountsBySource } from "./indexable-documents.js";
+import { configMaxAgeResolver, indexableCountsBySource } from "./indexable-documents.js";
 import { computeIndexingProgress } from "./indexing-progress.js";
 import { readScanProgressView, type ScanProgressView } from "./scan-progress.js";
 import type { OmnesisConfig } from "@omnesis/config";
@@ -100,8 +99,8 @@ export interface IndexStatsPayload {
 
 /**
  * Read the current index figures. Synchronous and DB-bound: it issues
- * several reads against the index database plus one counting query against
- * the main database per source that has a data cutoff.
+ * several reads against the index database plus, at most once a minute, one
+ * counting query against the main database per source that has a data cutoff.
  */
 export function computeIndexStats(deps: IndexStatsDeps): IndexStatsPayload {
   const { db, indexDb, configStore, config, indexerModel, indexerReadiness, getIndexRate } = deps;
@@ -175,9 +174,12 @@ export function computeIndexStats(deps: IndexStatsDeps): IndexStatsPayload {
   }
   // Only documents the retention cutoff leaves in scope are work the indexer
   // is expected to do — the same population `reindexMissing` compares against
-  // the index, contacts exempt as at the ingest boundary.
-  const gatewaySourceCounts = indexableCountsBySource(db, fullCounts, (sourceId) =>
-    getSourceCutoffDate(liveStatsConfig, sourceId),
+  // the index, contacts exempt as at the ingest boundary. The excluded part
+  // is the cached figure `/status` also reads.
+  const gatewaySourceCounts = indexableCountsBySource(
+    db,
+    fullCounts,
+    configMaxAgeResolver(liveStatsConfig),
   );
 
   const totalGatewayDocs = Object.values(gatewaySourceCounts).reduce((a, b) => a + b, 0);

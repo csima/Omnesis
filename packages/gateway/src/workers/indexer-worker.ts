@@ -22,12 +22,11 @@ import Database from "better-sqlite3";
 type Db = Database.Database;
 import { existsSync } from "node:fs";
 import { parentPort } from "node:worker_threads";
-import { parseDuration } from "@omnesis/core";
 import { LlamaCppEmbedder } from "../indexer/embedder.js";
 import { Indexer } from "../indexer/indexer.js";
 import { DocumentChunker } from "../indexer/chunker.js";
 import { DirectDocumentSource } from "../indexer/direct-document-source.js";
-import { countIndexableDocuments } from "../indexer/indexable-documents.js";
+import { coverageBelow, cutoffFromMaxAge, indexCoverage } from "../indexer/indexable-documents.js";
 import {
   openIndexDb,
   hasLexicalWrites,
@@ -141,13 +140,7 @@ let currentCutoffs: IndexerCutoffMap = { default: null, perSource: {} };
 
 /** Compute the ISO cutoff for a given sourceId at the time of the call. */
 function resolveCutoff(sourceId: string): string | null {
-  const maxAge = resolveIndexerCutoffMaxAge(currentCutoffs, sourceId);
-  if (!maxAge) return null;
-  try {
-    return new Date(Date.now() - parseDuration(maxAge)).toISOString();
-  } catch {
-    return null;
-  }
+  return cutoffFromMaxAge(resolveIndexerCutoffMaxAge(currentCutoffs, sourceId));
 }
 
 /**
@@ -850,14 +843,14 @@ async function handleInit(init: IndexerInit): Promise<void> {
           `resuming indexing scan begun ${scanInProgress.startedAt}: ${scanInProgress.scanned} scanned, ${scanInProgress.indexed} indexed, ${scanInProgress.resumes} earlier resume(s)`,
         );
       } else if (existingWatermark && !watermarkVerified) {
-        const indexedCount = getIndexedDocumentCount(indexDb);
-        const gatewayCount = countIndexableDocuments(gatewayDb, resolveCutoff);
-        if (gatewayCount > 0 && indexedCount / gatewayCount < 0.9) {
+        const coverage = indexCoverage(gatewayDb, indexDb, resolveCutoff);
+        if (coverageBelow(coverage, 0.9)) {
+          const covered = coverage.indexable - coverage.missing;
           indexDb.prepare("DELETE FROM watermark WHERE key = ?").run("last_updated_at");
           log(
             "info",
             "indexer-worker",
-            `watermark reset: ${indexedCount}/${gatewayCount} indexed (${Math.round((indexedCount / gatewayCount) * 100)}%) — rescan from start`,
+            `watermark reset: ${covered}/${coverage.indexable} indexed (${Math.round((covered / coverage.indexable) * 100)}%) — rescan from start`,
           );
         }
       }
@@ -1003,13 +996,12 @@ async function handleInit(init: IndexerInit): Promise<void> {
       // (Observed after a rebuild left ~52k docs unindexed.)
       if (!init.reindexMissingAtBoot) {
         try {
-          const indexedCount = getIndexedDocumentCount(indexDb);
-          const gatewayCount = countIndexableDocuments(gatewayDb, resolveCutoff);
-          if (gatewayCount > 0 && indexedCount / gatewayCount < 0.99 && diskOkForCycle()) {
+          const coverage = indexCoverage(gatewayDb, indexDb, resolveCutoff);
+          if (coverageBelow(coverage, 0.99) && diskOkForCycle()) {
             log(
               "info",
               "indexer-worker",
-              `initial pass left ${indexedCount}/${gatewayCount} indexed — running catch-up reindex-missing`,
+              `initial pass left ${coverage.indexable - coverage.missing}/${coverage.indexable} indexed — running catch-up reindex-missing`,
             );
             const prePhasePurgeError = drainPendingSourcePurges();
             if (prePhasePurgeError) {
