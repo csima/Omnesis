@@ -188,6 +188,36 @@ describe("mapGoogleApiError", () => {
     expect(e.retryAfterMs).toBe(30_000);
   });
 
+  test("the time Gmail's 429 message names to retry after is the delay", () => {
+    const at = new Date(Date.now() + 90_000).toISOString();
+    const message = `User-rate limit exceeded.  Retry after ${at}`;
+    for (const err of [
+      { code: 429, message },
+      { code: 429, message: "x", response: { status: 429, data: { error: { message } } } },
+      { code: 403, errors: [{ reason: "userRateLimitExceeded", message }], message: "quota" },
+    ]) {
+      const e = mapGoogleApiError(err, { consecutiveRateLimits: 5 });
+      expect(e.retryAfterMs).toBeGreaterThan(85_000);
+      expect(e.retryAfterMs).toBeLessThanOrEqual(90_000);
+    }
+  });
+
+  test("a retry time already past gets the back-off instead", () => {
+    const at = new Date(Date.now() - 5_000).toISOString();
+    const e = mapGoogleApiError({ code: 429, message: `Retry after ${at}` });
+    expect(e.retryAfterMs).toBe(60_000);
+  });
+
+  test("a Retry-After header wins over the time in the message", () => {
+    const at = new Date(Date.now() + 90_000).toISOString();
+    const e = mapGoogleApiError({
+      code: 429,
+      message: `Retry after ${at}`,
+      response: { headers: { "retry-after": "30" } },
+    });
+    expect(e.retryAfterMs).toBe(30_000);
+  });
+
   test("a 5xx without Retry-After gets no delay of its own", () => {
     expect(mapGoogleApiError({ code: 503, message: "x" }).retryAfterMs).toBeUndefined();
   });

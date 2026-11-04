@@ -78,6 +78,30 @@ function getRetryAfter(e: GaxiosLikeError): number | undefined {
   return undefined;
 }
 
+const RETRY_AFTER_IN_TEXT =
+  /\bretry after (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))/i;
+
+/**
+ * The wait a rate-limit message names in its text. Gmail answers a per-user
+ * limit with no `Retry-After` header but says "Retry after <timestamp>" in
+ * the error message.
+ */
+function getRetryAfterFromText(e: GaxiosLikeError, message: string): number | undefined {
+  const nested = e.response?.data?.error;
+  const texts = [
+    message,
+    typeof nested === "object" ? nested?.message : undefined,
+    ...(e.errors ?? []).map((sub) => sub.message),
+    ...(typeof nested === "object" ? (nested?.errors ?? []).map((sub) => sub.message) : []),
+  ];
+  for (const text of texts) {
+    const match = typeof text === "string" ? RETRY_AFTER_IN_TEXT.exec(text) : null;
+    const at = match ? Date.parse(match[1]!) : Number.NaN;
+    if (!Number.isNaN(at)) return Math.max(0, at - Date.now());
+  }
+  return undefined;
+}
+
 // Matched against the error's whole cause chain, not just its top message:
 // `fetch()` rejects with a bare `TypeError: fetch failed` and names the
 // actual failure only in `cause`. `UND_ERR_` covers undici's own codes
@@ -153,8 +177,9 @@ export interface GoogleApiErrorOptions {
  *   or revoked`, etc.) → `auth` — these come back as HTTP 400 from the
  *   token endpoint, not 401
  * - 429, `rateLimitExceeded`, `userRateLimitExceeded` → `rate-limit`, with
- *   the `Retry-After` delay when Google sent one and an exponential back-off
- *   from {@link googleRateLimitBackoffMs} when it did not
+ *   the `Retry-After` delay when Google sent one, else the "Retry after
+ *   <timestamp>" its message names, else an exponential back-off from
+ *   {@link googleRateLimitBackoffMs}
  * - 403 → `permission` (or `rate-limit` when the reason explicitly says so)
  * - 5xx → `transient`
  * - ECONN..., ETIMEDOUT, ENOTFOUND, EAI_AGAIN, ENETUNREACH → `network`
@@ -224,6 +249,9 @@ export function mapGoogleApiError(err: unknown, opts: GoogleApiErrorOptions = {}
 
   // Retry-After is only meaningful on rate-limit / transient classes.
   if (kind !== "rate-limit" && kind !== "transient") retryAfterMs = undefined;
+  if (kind === "rate-limit" && !(retryAfterMs !== undefined && retryAfterMs > 0)) {
+    retryAfterMs = getRetryAfterFromText(e, message);
+  }
   if (kind === "rate-limit" && !(retryAfterMs !== undefined && retryAfterMs > 0)) {
     retryAfterMs = googleRateLimitBackoffMs(opts.consecutiveRateLimits);
   }

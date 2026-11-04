@@ -205,7 +205,9 @@ describe("Gmail rate limit mid-page", () => {
     gmail.users.messages.get = vi.fn((params: { id: string }) => {
       if (params.id === "m-030" && !refused) {
         refused = true;
-        return Promise.reject(rateLimited());
+        // Refused once the page's other fetches have finished, so the test
+        // is about what they leave behind rather than about what was in flight.
+        return new Promise((_, reject) => setTimeout(() => reject(rateLimited()), 10));
       }
       return Promise.resolve({ data: makeGmailMessage(params.id) });
     });
@@ -253,6 +255,108 @@ describe("Gmail rate limit mid-page", () => {
       .attachments;
     expect(attachments).toEqual([expect.objectContaining({ extracted: true })]);
     expect(result.documents).toHaveLength(2);
+  });
+});
+
+describe("What a rate-limited attempt carries", () => {
+  test("an incremental page is fetched afresh on retry, so a label change since is not lost", async () => {
+    const gmail = createMockGmail();
+    let read = false;
+    let refuse = true;
+    gmail.users.history.list = vi.fn(() =>
+      Promise.resolve({
+        data: {
+          history: [
+            { messagesAdded: [{ message: { id: "a" } }, { message: { id: "b" } }] },
+            ...(read ? [{ labelsRemoved: [{ message: { id: "a" }, labelIds: ["UNREAD"] }] }] : []),
+          ],
+          historyId: read ? "h-3" : "h-2",
+        },
+      }),
+    );
+    gmail.users.messages.get = vi.fn((params: { id: string }) => {
+      if (params.id === "b" && refuse) {
+        refuse = false;
+        return Promise.reject(rateLimited());
+      }
+      const labelIds = params.id === "a" && !read ? ["INBOX", "UNREAD"] : ["INBOX"];
+      return Promise.resolve({ data: makeGmailMessage(params.id, { labelIds }) });
+    });
+    const source = createGmailSource(gmail);
+    const cursor: GmailSyncCursor = { phase: "incremental", historyId: "h-1" };
+
+    const error = await source.sync(cursor).catch((e: unknown) => e);
+    expect((error as SyncError).kind).toBe("rate-limit");
+
+    read = true;
+    const retried = await source.sync(cursor);
+    const a = retried.documents.find((d) => d.externalId === "a")!;
+
+    expect((retried.cursor as GmailSyncCursor).historyId).toBe("h-3");
+    expect(a.metadata.tags).not.toContain("UNREAD");
+    const fetchesOfA = gmail.users.messages.get.mock.calls.filter(
+      ([p]: [{ id: string }]) => p.id === "a",
+    ).length;
+    expect(fetchesOfA).toBe(2);
+  });
+
+  test("a message whose label lookup the halt cut short is fetched again with named labels", async () => {
+    const gmail = createMockGmail();
+    gmail.users.labels.list = vi.fn(() =>
+      Promise.resolve({
+        data: {
+          labels: [
+            { id: "INBOX", name: "INBOX" },
+            { id: "Label_7", name: "Projects" },
+          ],
+        },
+      }),
+    );
+    gmail.users.messages.list = vi.fn(() =>
+      Promise.resolve({ data: { messages: [{ id: "slow" }, { id: "boom" }] } }),
+    );
+    let refuse = true;
+    gmail.users.messages.get = vi.fn((params: { id: string }) => {
+      if (params.id === "boom" && refuse) {
+        refuse = false;
+        return Promise.reject(rateLimited());
+      }
+      const msg = { data: makeGmailMessage(params.id, { labelIds: ["INBOX", "Label_7"] }) };
+      return params.id === "slow"
+        ? new Promise((resolve) => setTimeout(() => resolve(msg), 20))
+        : Promise.resolve(msg);
+    });
+    const source = createGmailSource(gmail);
+
+    const error = await source.sync(null).catch((e: unknown) => e);
+    expect((error as SyncError).kind).toBe("rate-limit");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const retried = await source.sync(null);
+
+    for (const id of ["slow", "boom"]) {
+      const tags = retried.documents.find((d) => d.externalId === id)!.metadata.tags;
+      expect(tags, id).toContain("Projects");
+      expect(tags, id).not.toContain("Label_7");
+    }
+  });
+
+  test("a rate limit on the label listing fails the page instead of tagging raw label ids", async () => {
+    const gmail = createMockGmail();
+    gmail.users.messages.list = pagedMailbox(["m-001"]);
+    gmail.users.messages.get = vi.fn((params: { id: string }) =>
+      Promise.resolve({ data: makeGmailMessage(params.id, { labelIds: ["Label_7"] }) }),
+    );
+    gmail.users.labels.list = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimited())
+      .mockResolvedValue({ data: { labels: [{ id: "Label_7", name: "Projects" }] } });
+    const source = createGmailSource(gmail);
+
+    const error = await source.sync(null).catch((e: unknown) => e);
+    expect((error as SyncError).kind).toBe("rate-limit");
+
+    const retried = await source.sync(null);
+    expect(retried.documents[0]!.metadata.tags).toEqual(["Projects"]);
   });
 });
 
@@ -315,6 +419,25 @@ describe("Gmail rate-limit back-off", () => {
       expect(error.retryAfterMs).toBe(60_000);
     },
   );
+
+  test("the time Gmail's message names to retry after is honoured", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-02T09:00:00Z"));
+    try {
+      const gmail = createMockGmail();
+      const message = "User-rate limit exceeded.  Retry after 2026-03-02T09:00:45.000Z";
+      gmail.users.getProfile = vi.fn(() =>
+        Promise.reject(Object.assign(rateLimited(), { message })),
+      );
+      const source = createGmailSource(gmail);
+
+      const error = (await source.sync(null).catch((e: unknown) => e)) as SyncError;
+
+      expect(error.retryAfterMs).toBe(45_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   test("the delay a Retry-After header names is honoured", async () => {
     const gmail = createMockGmail();

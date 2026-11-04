@@ -345,10 +345,15 @@ export class GmailSource {
   /** Syncs in a row that ended on a rate limit; the back-off grows with it. */
   private consecutiveRateLimits = 0;
   /**
-   * Messages fetched for a page that did not land. A rate limit part-way
-   * through a page fails the page, and the next sync lists the same page
-   * again; what was already fetched is taken from here instead of being
+   * Messages fetched for a bootstrap page that did not land. A rate limit
+   * part-way through a page fails the page, and the next sync lists the same
+   * page again; what was already fetched is taken from here instead of being
    * fetched twice. Holds one page at most and is emptied when a page lands.
+   *
+   * Only the bootstrap walk carries: its pages list message ids alone, and
+   * changes made after a message was fetched replay from the history the
+   * walk pinned. An incremental page lists the changes themselves, and a
+   * retry of it can name a change the carried copy predates.
    */
   private readonly carried = new Map<string, Fetched>();
   constructor(
@@ -402,6 +407,9 @@ export class GmailSource {
       this.labelMapFetchedAt = Date.now();
       return map;
     } catch (err) {
+      // A rate limit fails the page: the fallback below would tag messages
+      // with raw label ids, and the page would land with them.
+      if (isRateLimit(err)) throw err;
       log.warn(`Failed to fetch Gmail labels: ${err instanceof Error ? err.message : String(err)}`);
       return this.labelMap ?? new Map();
     }
@@ -489,21 +497,25 @@ export class GmailSource {
 
   /**
    * Fetch every listed message, concurrently, each request paced by the
-   * quota. A message fetched by an earlier attempt at the same page is taken
-   * from what that attempt carried rather than fetched again.
+   * quota. With `carry`, a message fetched by an earlier attempt at the same
+   * page is taken from what that attempt carried rather than fetched again,
+   * and only a fetch that finished before this attempt hit a rate limit is
+   * carried: one finishing after it may have been cut short by the halt.
    */
   private async fetchAll(
     ids: readonly string[],
+    carry: boolean,
   ): Promise<{ documents: DocumentInput[]; gone: string[]; oldestReceivedAt?: number }> {
+    const attempt = this.attempt;
     const listed = new Set(ids);
-    for (const id of this.carried.keys()) if (!listed.has(id)) this.carried.delete(id);
+    for (const id of this.carried.keys()) if (!carry || !listed.has(id)) this.carried.delete(id);
     const fetched = await pMap(
       ids,
       async (id) => {
         const carried = this.carried.get(id);
         if (carried) return carried;
         const result = await this.fetchAndNormalize(id);
-        this.carried.set(id, result);
+        if (carry && attempt.rateLimitedBy === undefined) this.carried.set(id, result);
         return result;
       },
       { concurrency: GOOGLE_FETCH_CONCURRENCY },
@@ -570,7 +582,7 @@ export class GmailSource {
     const messageIds = (res.data.messages ?? [])
       .map((m) => m.id)
       .filter((id): id is string => typeof id === "string");
-    const { documents, oldestReceivedAt } = await this.fetchAll(messageIds);
+    const { documents, oldestReceivedAt } = await this.fetchAll(messageIds, true);
     const oldestListedAt = earlierIso(state.oldestListedAt, oldestReceivedAt);
 
     // Apply data cutoff as a safety net: Gmail's `after:YYYY/MM/DD` pushdown
@@ -788,7 +800,7 @@ export class GmailSource {
       addedIds.delete(id);
     }
 
-    const fetched = await this.fetchAll([...addedIds]);
+    const fetched = await this.fetchAll([...addedIds], false);
     // A message Gmail no longer has was deleted after its history event.
     deletedExternalIds.push(...fetched.gone);
     const documents = fetched.documents;
