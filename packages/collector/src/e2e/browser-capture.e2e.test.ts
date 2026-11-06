@@ -773,6 +773,7 @@ describe("Browser-capture push path (spawned gateway)", () => {
       }
     ).items.find((d) => d.id === browserProfile.deviceId);
     expect(sibling?.version ?? null).not.toBe(nextVersion);
+  });
 
   test("(9) own sites come from the gateway's config; built-in sites and credential paths need no entry", async () => {
     const policy = await new CapturePolicyClient(gatewayUrl, webToken, nodeFetch).read();

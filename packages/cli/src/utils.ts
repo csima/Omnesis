@@ -3,7 +3,12 @@
 
 import { createInterface } from "node:readline";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { dirname, basename as pathBasename, join as pathJoin } from "node:path";
+import {
+  dirname,
+  basename as pathBasename,
+  join as pathJoin,
+  resolve as pathResolve,
+} from "node:path";
 import {
   c as cShared,
   disabledColors,

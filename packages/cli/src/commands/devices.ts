@@ -619,10 +619,6 @@ const devicesPairCommand = defineCommand({
       description:
         "How long the code stays valid, from 1m to 2h (default: the gateway's, normally 10m)",
     },
-    json: {
-      type: "boolean",
-      description: "Print {code, expiresAt, kind} as JSON instead of instructions",
-    },
     "repair-device": {
       type: "string",
       description: "Exact existing agent device ID to repair in place",
@@ -732,7 +728,6 @@ const devicesPairCommand = defineCommand({
     const scopes =
       typeof ctx.args.scopes === "string" ? parsePairingScopes(ctx.args.scopes) : undefined;
     const ttlMs = typeof ctx.args.ttl === "string" ? parsePairingTtl(ctx.args.ttl) : undefined;
-    const json = ctx.args.json === true;
 
     // Optional self annotation (legacy): staged on the pairing code and applied
     // to the device at redeem when `--self-email` / `--self-phone` is supplied.
@@ -1374,6 +1369,9 @@ export function recordRedeemedCollector(
     unauthorizedAt: null,
     repairCommand: null,
   });
+}
+
+/**
  * The pairing code from `--code-file`: a file only its owner can read, or `-`
  * for stdin. A code on the command line is visible to every process on the
  * host for as long as the redeem runs; read from here it never is.
