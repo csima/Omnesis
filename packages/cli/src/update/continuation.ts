@@ -531,6 +531,10 @@ export const CONTAINER_OWN_ENV: ReadonlySet<string> = new Set([
   "OMNESIS_HOST_HOME",
   "OMNESIS_HOST_CWD",
   "OMNESIS_DOCKER_SHARE_REQUEST",
+  // The Cloudflare Access service token is the collector container's own,
+  // from its compose environment; a host copy would name a host path.
+  "OMNESIS_ACCESS_CLIENT_SECRET",
+  "OMNESIS_ACCESS_CLIENT_SECRET_FILE",
   UPDATE_LOCK_ENV,
 ]);
 

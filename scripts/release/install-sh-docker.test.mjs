@@ -121,6 +121,11 @@ for ARG in "$@"; do
 done
 
 if [ "$SEEN" = 1 ]; then
+  # pair --help answers before anything is logged, as the real CLI's does.
+  if [ "\${CLI_ARGS# }" = "pair --help" ]; then
+    echo "  --code-file  Read the code from a file"
+    exit 0
+  fi
   printf '%s\\n' "\${CLI_ARGS# }" >> "$OMNESIS_TEST_CALLS"
   # shellcheck disable=SC2086
   set -- $CLI_ARGS

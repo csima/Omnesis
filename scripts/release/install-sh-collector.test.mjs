@@ -57,6 +57,11 @@ shift 2>/dev/null || true
 # test can drop --name to stand in for a release from before it.
 if [ "$1" = pair ] && [ "$2" = --help ]; then
   [ -n "$OMNESIS_TEST_PAIR_NO_NAME" ] || echo "  --name  Name this device"
+  [ -n "$OMNESIS_TEST_PAIR_NO_NAME" ] || echo "  --code-file  Read the code from a file"
+  exit 0
+fi
+if [ "$1" = gateway ] && [ "$2" = --help ]; then
+  echo "  access-token  Cloudflare Access service tokens"
   exit 0
 fi
 printf '%s\\n' "$*" >> "$OMNESIS_TEST_CALLS"
@@ -500,7 +505,7 @@ describe("install.sh --collector: the pairing code from a file", () => {
     expect(run.status, run.output).toBe(0);
     expect(callStartingWith(run.calls, "pair ")).toBe(
       `pair --code-file <file> --gateway-url ${GATEWAY_URL} ` +
-        `--save ${join(run.configDir, "collector-token")}`,
+        `--save ${join(run.configDir, "collector-token")} --name ${PAIR_NAME}`,
     );
     expectCodeOnNoCommandLine(run);
   });
@@ -670,7 +675,7 @@ describe("install.sh --collector: a gateway behind Cloudflare Access", () => {
     );
     expect(callStartingWith(run.calls, "pair ")).toBe(
       `pair --code-file <file> --gateway-url ${ACCESS_URL} ` +
-        `--save ${join(run.configDir, "collector-token")}`,
+        `--save ${join(run.configDir, "collector-token")} --name ${PAIR_NAME}`,
     );
     // The secret is read from its file by the CLI; it never reaches an argument.
     expect(run.calls.join("\n")).not.toContain("fictional-access-secret");

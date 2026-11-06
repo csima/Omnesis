@@ -5172,6 +5172,8 @@ validate_access_flags() {
 # there is one.
 collector_save_access_token() {
   [ -n "$ACCESS_CLIENT_ID" ] || return 0
+  "$OMNESIS_BIN" gateway --help 2>/dev/null | grep -q -- 'access-token' || \
+    fail "This Omnesis release cannot save a Cloudflare Access service token (it has no \`omnesis gateway access-token\`); install a newer one."
   info "Saving the Cloudflare Access service token $ACCESS_CLIENT_ID..."
   "$OMNESIS_BIN" gateway access-token set --gateway-url "$PAIR_GATEWAY_URL" \
     --id "$ACCESS_CLIENT_ID" --secret-file "$ACCESS_CLIENT_SECRET_FILE" </dev/null || \
@@ -5185,8 +5187,14 @@ collector_pair() {
   # wait for the daemon below on its first poll; the redeem writes a fresh one
   # (naming the device and its gateway) and the daemon completes it.
   rm -f "$CONFIG_DIR/collector-pairing-state.json"
-  write_pairing_code_tmp "$CONFIG_DIR"
-  set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
+  # The CLI this installed may be a release from before `pair --code-file`;
+  # that one takes the code as its argument.
+  if "$OMNESIS_BIN" pair --help 2>/dev/null | grep -q -- '--code-file'; then
+    write_pairing_code_tmp "$CONFIG_DIR"
+    set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
+  else
+    set -- pair "$PAIR_CODE" --gateway-url "$PAIR_GATEWAY_URL"
+  fi
   if [ -n "$PAIR_FINGERPRINT" ]; then
     set -- "$@" --trust-fingerprint "$PAIR_FINGERPRINT"
   fi
@@ -8371,9 +8379,15 @@ docker_up() {
 docker_collector_pair() {
   # The container reads the private copy as the daemon's user, which is not
   # this one under root; the copy is then handed to that user alone.
-  write_pairing_code_tmp "$CONFIG_DIR/collector"
-  docker_own_path "$PAIR_CODE_TMP"
-  set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
+  # The collector image may be a release from before `pair --code-file`; that
+  # one takes the code as its argument.
+  if "$OMNESIS_BIN" pair --help 2>/dev/null | grep -q -- '--code-file'; then
+    write_pairing_code_tmp "$CONFIG_DIR/collector"
+    docker_own_path "$PAIR_CODE_TMP"
+    set -- pair --code-file "$PAIR_CODE_TMP" --gateway-url "$PAIR_GATEWAY_URL"
+  else
+    set -- pair "$PAIR_CODE" --gateway-url "$PAIR_GATEWAY_URL"
+  fi
   if [ -n "$PAIR_FINGERPRINT" ]; then
     set -- "$@" --trust-fingerprint "$PAIR_FINGERPRINT"
   fi

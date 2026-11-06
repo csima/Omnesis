@@ -65,6 +65,8 @@ const FORBIDDEN_TABLES = new Set([
   "access_audit_events",
   "access_grant_capabilities",
   "access_grants",
+  "access_host_agent_grants",
+  "access_host_identity_bindings",
   "access_level_capabilities",
   "access_levels",
   "access_principals",

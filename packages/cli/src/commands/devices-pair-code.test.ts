@@ -82,7 +82,7 @@ describe("devices pair --ttl", () => {
 });
 
 describe("devices pair --json", () => {
-  it("prints {code, expiresAt, kind} and nothing else", async () => {
+  it("prints the gateway's pairing record, which the agent host's runner reads", async () => {
     const expiresAt = Date.UTC(2026, 10, 1, 15, 30, 0);
     vi.stubGlobal(
       "fetch",
@@ -96,9 +96,9 @@ describe("devices pair --json", () => {
     const pair = await sub("pair");
     await pair.run({ args: { kind: "collector", json: true }, rawArgs: [], cmd: pair.cmd });
     expect(JSON.parse(lines.join("\n"))).toEqual({
-      code: CODE,
-      expiresAt: "2026-11-01T15:30:00.000Z",
-      kind: "collector",
+      pairingCode: CODE,
+      scopes: ["read"],
+      expiresAt,
     });
   });
 });
