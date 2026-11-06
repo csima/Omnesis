@@ -110,7 +110,7 @@ describe("redaction of addresses and metadata", () => {
       extra: { browserProfileLabel: `Work ${TOKEN}`, browserDeviceId: "d-1" },
       description: `Summary with ${TOKEN}`,
       people: [{ name: `Maker ${TOKEN}` }],
-    } as DocumentInput["metadata"];
+    } as unknown as DocumentInput["metadata"];
     const [out] = redactWebDocuments([page]);
     const metadata = out!.metadata as unknown as Record<string, unknown>;
     expect(metadata.sourceUrl).toBe("https://app.example.com/#/cb?tab=2");
