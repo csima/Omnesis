@@ -37,6 +37,7 @@
     "@omnesis/provider-pi": "*",
     "@omnesis/provider-plaid": "*",
     "@omnesis/provider-screen-time": "*",
+    "@omnesis/provider-slack": "*",
     "@omnesis/provider-strava": "*",
     "@omnesis/provider-telegram": "*",
     "@omnesis/provider-things": "*",
@@ -53,9 +54,7 @@
     "turndown": "^7.2.2",
     "unpdf": "^2.0.1",
     "word-extractor": "^1.0.4",
-    "zod": "^4.6.7",
-    "@omnesis/provider-slack": "*",
-    "@omnesis/provider-slack-synth": "*"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",
@@ -91,6 +90,7 @@
     "@omnesis/provider-pi-synth": "*",
     "@omnesis/provider-plaid-synth": "*",
     "@omnesis/provider-screen-time-synth": "*",
+    "@omnesis/provider-slack-synth": "*",
     "@omnesis/provider-strava-synth": "*",
     "@omnesis/provider-telegram-synth": "*",
     "@omnesis/provider-things-synth": "*",
