@@ -7,6 +7,7 @@ type Db = Database.Database;
 import { installTemporalDocumentEpochs } from "./brain/knowledge/temporal-document-epochs.js";
 import { runSchemaSetup } from "./data/schema.js";
 import { runDowngradeCompatCheck, runMigrations } from "./data/migrations.js";
+import { rewindForkLineage } from "./data/fork-lineage.js";
 import { openEncryptedSqlite } from "./sqlite-encryption.js";
 
 // Re-export shared types so existing consumers keep working unchanged.
@@ -243,6 +244,7 @@ export function createDatabase(path: string, opts: GatewayDatabaseOptions = {}):
   // mode NONE online requires a full, exclusive VACUUM and can need roughly
   // twice the database's size in free space.
   runSchemaSetup(db);
+  rewindForkLineage(db);
   runDowngradeCompatCheck(db); // Per-source cursor reset on downgrade
   runMigrations(db);
   // Cross-table triggers must follow historical table rebuilds, whose renames
