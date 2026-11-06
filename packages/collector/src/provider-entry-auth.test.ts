@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 import { defineProvider, syncPage } from "@omnesis/source-sdk";
+import { AccountId } from "@omnesis/types";
 import { extractDescriptors } from "./source-descriptors.js";
 
 describe("provider entry connection overrides", () => {
@@ -58,8 +59,8 @@ describe("provider entry connection overrides", () => {
     expect(official.credentials?.fields).toHaveLength(1);
     expect(local.credentials?.fields).toHaveLength(0);
     // The callbacks close over their own entry; no source-name dispatch is involved.
-    await official.cleanupCredentials!("one");
-    await local.cleanupCredentials!("two");
+    await official.cleanupCredentials!(AccountId("one"));
+    await local.cleanupCredentials!(AccountId("two"));
     expect(removed).toEqual(["parent:one", "child:two"]);
   });
 });
