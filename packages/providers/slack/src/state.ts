@@ -20,11 +20,9 @@ const cursorSchema = z.object({
   pending: z
     .object({
       cut: z.number().int(),
-      incrementalDone: z.boolean().optional(),
       deep: z.boolean(),
       queue: z.array(conversationSchema),
       day: z.string().datetime().optional(),
-      from: z.number().int().optional(),
     })
     .optional(),
 });

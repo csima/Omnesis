@@ -8,7 +8,7 @@ import type { Credential } from "./types.js";
 
 const READ_METHODS: ReadonlySet<string> = new Set([
   "auth.test",
-  "conversations.list",
+  "users.conversations",
   "conversations.info",
   "conversations.history",
   "conversations.replies",
@@ -16,6 +16,13 @@ const READ_METHODS: ReadonlySet<string> = new Set([
   "usergroups.list",
   "client.counts",
 ]);
+const TIER_2: ReadonlySet<string> = new Set([
+  "users.list",
+  "users.conversations",
+  "usergroups.list",
+]);
+const TIER_2_GAP_MS = 3000;
+const TIER_3_GAP_MS = 1200;
 const envelope = z
   .object({
     ok: z.boolean(),
@@ -32,7 +39,8 @@ export const AUTH_REMEDIATION = {
 };
 
 export class SlackClient {
-  private nextAt = 0;
+  private readonly nextAt = new Map<string, number>();
+  private readonly replay = new Map<string, Record<string, unknown>>();
   constructor(
     private readonly credential: Credential,
     private readonly options: {
@@ -43,6 +51,11 @@ export class SlackClient {
     } = {},
   ) {
     workspaceUrl(credential.identity.url);
+  }
+
+  /** Forget the responses kept for a retry once the page that read them has committed. */
+  settle(): void {
+    this.replay.clear();
   }
 
   async call(
@@ -56,11 +69,17 @@ export class SlackClient {
     for (const key of ["oldest", "latest"])
       if (params[key] !== undefined) tsSchema.parse(params[key]);
     signal?.throwIfAborted();
+    const key = `${method}?${new URLSearchParams(params).toString()}`;
+    const kept = this.replay.get(key);
+    if (kept) return kept;
     const now = this.options.now ?? Date.now;
-    const wait = Math.max(0, this.nextAt - now());
+    const wait = Math.max(0, (this.nextAt.get(method) ?? 0) - now());
     if (wait) await (this.options.pause ?? pause)(wait, signal);
-    // Tier 3 calls are spaced at >= 1.2 seconds; 429s leave retry to the scheduler.
-    this.nextAt = now() + (this.options.paceMs ?? 1200);
+    // Slack budgets each method separately: Tier 2 ~20/min, Tier 3 ~50/min. 429s leave retry to the scheduler.
+    this.nextAt.set(
+      method,
+      now() + (this.options.paceMs ?? (TIER_2.has(method) ? TIER_2_GAP_MS : TIER_3_GAP_MS)),
+    );
     const host = this.credential.cookie
       ? workspaceUrl(this.credential.identity.url)
       : "https://slack.com/";
@@ -88,6 +107,7 @@ export class SlackClient {
       const seconds = Number(response.headers.get("Retry-After"));
       throw new SyncError("rate-limit", "Slack rate limit; waiting before the next attempt", {
         retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 60_000,
+        quota: { kind: "account" },
       });
     }
     if (response.status === 401)
@@ -123,6 +143,7 @@ export class SlackClient {
         );
       throw new SyncError("transient", "Slack could not complete this read");
     }
+    this.replay.set(key, data);
     return data;
   }
 
@@ -131,6 +152,7 @@ export class SlackClient {
     field: string,
     params: Record<string, string> = {},
     signal?: AbortSignal,
+    enough?: (page: unknown[]) => boolean,
   ): Promise<unknown[]> {
     const out: unknown[] = [];
     const seen = new Set<string>();
@@ -138,12 +160,13 @@ export class SlackClient {
     for (let page = 0; page < 10_000; page++) {
       const data = await this.call(
         method,
-        { ...params, limit: "100", ...(cursor ? { cursor } : {}) },
+        { ...params, limit: "200", ...(cursor ? { cursor } : {}) },
         signal,
       );
       if (!Array.isArray(data[field]))
         throw new SyncError("transient", "Slack returned an incomplete listing");
       out.push(...data[field]);
+      if (enough?.(data[field])) return out;
       const meta = data.response_metadata as { next_cursor?: string } | undefined;
       const next = meta?.next_cursor?.trim() ?? "";
       if (!next) {

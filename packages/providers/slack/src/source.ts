@@ -12,7 +12,6 @@ import {
   accountKey,
   conversationSchema,
   DAY,
-  dayOf,
   messageSchema,
   permalink,
   slackTs,
@@ -25,13 +24,22 @@ import type {
   StructuredSyncResult,
   TableWrite,
 } from "@omnesis/source-sdk";
-import type { SourceId, ProviderId } from "@omnesis/types";
+import type { SourceId, ProviderId, SyncErrorKind } from "@omnesis/types";
 import type { SlackCursor } from "./state.js";
-import type { Credential, Identity, Message, SlackUser, Conversation } from "./types.js";
+import type { Credential, Identity, Message, SlackUser } from "./types.js";
 
 const log = createLogger("source:slack");
 const sql = (s: string): string => `'${s.replaceAll("'", "''")}'`;
 const midnight = (ms: number): number => Math.floor(ms / DAY) * DAY;
+const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+const isRoot = (m: Message): boolean => !m.thread_ts || m.thread_ts === m.ts;
+const byTs = (a: Message, b: Message): number => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
+const storedMessage = (row: Record<string, unknown>): Message =>
+  messageSchema.parse(typeof row.raw === "string" ? JSON.parse(row.raw) : row.raw);
+/** A conversation failing the same way this many attempts in a row is skipped for the cycle. */
+const STRIKES = 3;
+const STRIKE_KINDS: ReadonlySet<SyncErrorKind> = new Set(["transient", "network", "unknown"]);
+type Pending = NonNullable<SlackCursor["pending"]>;
 export interface SlackSourceOptions {
   accountId: string;
   sourceId: SourceId;
@@ -47,7 +55,8 @@ export class SlackSource {
   get analyticsSchemas() {
     return schemasFor(this.options.session);
   }
-  private runtime?: { client: SlackClient; identity: Identity; users: SlackUser[] };
+  private runtime?: { client: SlackClient; identity: Identity; users?: SlackUser[] };
+  private strike?: { key: string; count: number };
   constructor(private readonly options: SlackSourceOptions) {}
   dispose(): void {
     this.runtime = undefined;
@@ -67,6 +76,8 @@ export class SlackSource {
   ): Promise<StructuredSyncResult<SlackCursor>> {
     try {
       const result = await this.run(prior, opts?.signal);
+      this.strike = undefined;
+      this.runtime?.client.settle();
       if (this.options.session && result.analytics) {
         const writes = Array.isArray(result.analytics)
           ? result.analytics
@@ -79,38 +90,39 @@ export class SlackSource {
       if (!result.hasMore) this.dispose();
       return result;
     } catch (err) {
-      this.dispose();
-      if (
-        err instanceof SyncError &&
-        err.kind === "permission" &&
-        err.scope === "partition" &&
-        prior?.pending
-      ) {
-        const cursor = structuredClone(prior);
-        const pending = cursor.pending!;
-        const skipped = pending.queue.shift();
-        delete pending.day;
-        delete pending.incrementalDone;
-        if (!pending.queue.length) delete cursor.pending;
-        log.warn(`Conversation ${skipped?.id ?? "unknown"} unavailable; preserving its history`);
-        return {
-          cursor,
-          hasMore: !!cursor.pending,
-          documents: [],
-          issues: [
-            {
-              scope: "partition",
-              kind: "permission",
-              count: 1,
-              subject: skipped?.id,
-              message: "Conversation unreadable; its prior history was preserved",
-            },
-          ],
-        };
-      }
-      if (err instanceof SyncError) throw err;
+      // A rate limit keeps the client, so the retry replays this page's completed reads.
+      if (!(err instanceof SyncError && err.kind === "rate-limit")) this.dispose();
       opts?.signal?.throwIfAborted();
-      throw new SyncError("transient", "Slack sync could not complete; checkpoint preserved");
+      const failure =
+        err instanceof SyncError
+          ? err
+          : new SyncError("transient", "Slack sync could not complete; checkpoint preserved");
+      const head = prior?.pending?.queue[0];
+      if (!prior?.pending || !head) throw failure;
+      if (failure.kind === "permission" && failure.scope === "partition")
+        return skipHead(
+          prior,
+          "permission",
+          "Conversation unreadable; its prior history was preserved",
+        );
+      if (!STRIKE_KINDS.has(failure.kind)) throw failure;
+      const key = JSON.stringify([
+        head.id,
+        prior.pending.day ?? null,
+        failure.kind,
+        failure.message,
+      ]);
+      const count = this.strike?.key === key ? this.strike.count + 1 : 1;
+      if (count < STRIKES) {
+        this.strike = { key, count };
+        throw failure;
+      }
+      this.strike = undefined;
+      return skipHead(
+        prior,
+        failure.kind,
+        `Conversation failed ${STRIKES} times in a row; skipped this cycle and its prior history was preserved`,
+      );
     }
   }
   private async query(query: string): Promise<Record<string, unknown>[]> {
@@ -130,6 +142,45 @@ export class SlackSource {
     return result.rows;
   }
 
+  /** One history read proves a conversation unchanged across the per-cycle reconciliation window. */
+  private async quiet(
+    client: SlackClient,
+    conversation: string,
+    newest: string,
+    from: number,
+    cut: number,
+    floor: number,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const inWindow = (m: Message): boolean =>
+      isRoot(m) && tsMs(m.ts) >= Math.max(from, floor) && tsMs(m.ts) < cut;
+    // History arrives newest first, so a new root ends the read on its first page.
+    const fresh = parseMessages(
+      await client.list(
+        "conversations.history",
+        "messages",
+        { channel: conversation, oldest: slackTs(from), latest: slackTs(cut), inclusive: "true" },
+        signal,
+        (page) =>
+          page.some((v) => {
+            const m = messageSchema.safeParse(v);
+            return m.success && inWindow(m.data) && m.data.ts > newest;
+          }),
+      ),
+    )
+      .filter(inWindow)
+      .sort(byTs);
+    const kept = (
+      await this.query(
+        `SELECT raw FROM slack_messages WHERE source_account_id=${sql(this.options.accountId)} AND conversation_id=${sql(conversation)} AND day>=${sql(utcDay(from))} ORDER BY ts`,
+      )
+    )
+      .map(storedMessage)
+      .filter(inWindow)
+      .sort(byTs);
+    return JSON.stringify(fresh) === JSON.stringify(kept);
+  }
+
   private async run(
     prior: SlackCursor | null,
     signal?: AbortSignal,
@@ -140,8 +191,8 @@ export class SlackSource {
     const cur: SlackCursor = prior
       ? structuredClone(prior)
       : { v: 1, startedAt: now, channels: {} };
-    // Refresh once each cycle (and after a collector restart or a failed page). Nothing durable holds it.
-    if (!this.runtime || !cur.pending) {
+    // Acquired once each cycle (and after a collector restart or a failed page). Nothing durable holds it.
+    if (!this.runtime) {
       const credential = await o.acquire(signal);
       const client = new SlackClient(credential, o.clientOptions);
       const auth = await client.call("auth.test", {}, signal);
@@ -153,31 +204,25 @@ export class SlackSource {
         throw new SyncError("auth", "Slack account identity changed", {
           remediation: AUTH_REMEDIATION,
         });
-      let users: SlackUser[];
-      try {
-        users = (await client.list("users.list", "members", {}, signal)).map((v) =>
-          userSchema.parse(v),
-        );
-      } catch (err) {
-        if (err instanceof SyncError) throw err;
-        throw new SyncError("transient", "Slack people listing was incomplete");
-      }
-      this.runtime = { client, identity: credential.identity, users };
+      this.runtime = { client, identity: credential.identity };
     }
-    const { client, identity, users } = this.runtime;
+    const runtime = this.runtime;
+    const { client, identity } = runtime;
+    if (!cur.pending || !runtime.users) runtime.users = await listUsers(client, signal);
+    const users = runtime.users;
     const owner = o.accountId;
     const ownerWhere = `source_account_id=${sql(owner)}`;
     if (!cur.pending) {
       const conversations = (
         await client.list(
-          "conversations.list",
+          "users.conversations",
           "channels",
           { types: "public_channel,private_channel,im,mpim", exclude_archived: "true" },
           signal,
         )
       )
         .map((v) => conversationSchema.parse(v))
-        .filter((c) => !c.is_archived && (c.is_im || c.is_mpim || c.is_member === true));
+        .filter((c) => !c.is_archived);
       const active = new Set(
         Object.entries(cur.channels)
           .filter(([, s]) => s.newest && tsMs(s.newest) >= now - 30 * DAY)
@@ -216,9 +261,9 @@ export class SlackSource {
         queue: conversations,
       };
       const analytics: TableWrite[] = [
-        { tableName: "slack_read_positions", records: markers },
+        ...(markers.length ? [{ tableName: "slack_read_positions", records: markers }] : []),
         { tableName: "slack_usergroups", deletedKeys: [{ source_account_id: owner }] },
-        { tableName: "slack_usergroups", records: memberships },
+        ...(memberships.length ? [{ tableName: "slack_usergroups", records: memberships }] : []),
       ];
       log.info(`Cycle started for ${o.accountId}: ${conversations.length} conversations`);
       if (!conversations.length) {
@@ -243,57 +288,73 @@ export class SlackSource {
       delete cur.pending;
       return { cursor: cur, hasMore: false, documents: [] };
     }
-    const initialFloor = Math.max(
-      cur.startedAt - o.historyDays * DAY,
-      o.dataCutoff ? Date.parse(o.dataCutoff) : 0,
-    );
     const previous = cur.channels[c.id];
-    // First import is bounded once. It never becomes a retention deadline.
+    const cutoffMs = o.dataCutoff ? Date.parse(o.dataCutoff) : NaN;
+    const cutoff = Number.isFinite(cutoffMs) ? midnight(cutoffMs) : 0;
+    // A first import is bounded once, from the cycle that first sees the conversation, in whole UTC days.
+    // It never becomes a retention deadline; the data cutoff applies at day granularity throughout.
+    const floor = previous?.complete
+      ? cutoff
+      : Math.max(cutoff, midnight(p.cut - o.historyDays * DAY));
+    const through = previous?.through ? Date.parse(previous.through) : 0;
     const reconciliationStart = midnight(p.cut - (p.deep ? 30 : 14) * DAY);
-    const start = previous?.complete
-      ? midnight(Math.min(Date.parse(previous.through!), reconciliationStart))
-      : midnight(initialFloor);
-    let dayStart = p.day ? Date.parse(p.day) : start;
-    dayStart = Math.max(dayStart, midnight(initialFloor));
-    const day = new Date(dayStart).toISOString().slice(0, 10);
+    if (
+      !p.day &&
+      previous?.complete &&
+      !p.deep &&
+      through >= reconciliationStart &&
+      (await this.quiet(
+        client,
+        c.id,
+        previous.newest ?? "",
+        reconciliationStart,
+        p.cut,
+        floor,
+        signal,
+      ))
+    ) {
+      cur.channels[c.id] = {
+        ...previous,
+        through: new Date(Math.max(through, p.cut)).toISOString(),
+      };
+      finish(cur, p);
+      return {
+        documents: [],
+        cursor: cur,
+        hasMore: !!cur.pending,
+        progress: {
+          phase: "incremental",
+          processed: Object.keys(cur.channels).length,
+          detail: c.id,
+        },
+      };
+    }
+    const start = previous?.complete ? midnight(Math.min(through, reconciliationStart)) : floor;
+    const dayStart = Math.max(p.day ? Date.parse(p.day) : start, floor);
+    const day = utcDay(dayStart);
     const end = Math.min(dayStart + DAY, p.cut);
     const scope = `${ownerWhere} AND conversation_id=${sql(c.id)} AND day=${sql(day)}`;
+    const stored = (
+      await this.query(`SELECT raw FROM slack_messages WHERE ${scope} ORDER BY ts`)
+    ).map(storedMessage);
+    // Stored rows stand in for a day only when an earlier cycle fetched that whole day.
+    const threadOnly =
+      previous?.complete &&
+      !p.deep &&
+      dayStart + DAY <= midnight(p.cut - 7 * DAY) &&
+      dayStart + DAY <= through;
     // Fetch a full day so a trailing-window boundary never replaces a partial daily rollup.
-    if (previous?.newest && !p.incrementalDone) {
-      // Incremental fetch is independent from the bounded reconciliation read.
-      // The complete day reads below merge it into stable UTC rollups; failures
-      // cannot promote either watermark ahead of the documents they describe.
-      await client.list(
-        "conversations.history",
-        "messages",
-        { channel: c.id, oldest: previous.newest, latest: slackTs(p.cut), inclusive: "false" },
-        signal,
-      );
-      p.incrementalDone = true;
-    }
-    const oldest = slackTs(Math.max(dayStart, initialFloor));
-    const latest = slackTs(end);
-    const existing = await this.query(`SELECT raw FROM slack_messages WHERE ${scope}`);
-    if (existing.length >= 100_000)
-      throw new SyncError("transient", "Slack day exceeded the safe read bound");
-    const stored = existing.map((r) =>
-      messageSchema.parse(typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw),
-    );
-    const threadOnly = previous?.complete && !p.deep && dayStart + DAY <= midnight(p.cut - 7 * DAY);
     const raw = threadOnly
       ? stored
       : await client.list(
           "conversations.history",
           "messages",
-          { channel: c.id, oldest, latest, inclusive: "true" },
+          { channel: c.id, oldest: slackTs(dayStart), latest: slackTs(end), inclusive: "true" },
           signal,
         );
-    const roots = parseMessages(raw).filter(
-      (m) =>
-        tsMs(m.ts) < end &&
-        tsMs(m.ts) >= Math.max(dayStart, initialFloor) &&
-        (!m.thread_ts || m.thread_ts === m.ts),
-    );
+    const roots = parseMessages(raw)
+      .filter((m) => tsMs(m.ts) < end && tsMs(m.ts) >= dayStart && isRoot(m))
+      .sort(byTs);
     const messages: Message[] = [];
     for (const root of roots) {
       messages.push(root);
@@ -315,7 +376,7 @@ export class SlackSource {
               {
                 channel: c.id,
                 ts: root.ts,
-                oldest: slackTs(initialFloor),
+                oldest: slackTs(floor),
                 latest: slackTs(p.cut),
                 inclusive: "true",
               },
@@ -324,7 +385,7 @@ export class SlackSource {
           );
           messages.push(
             ...replies
-              .filter((m) => m.ts !== root.ts && tsMs(m.ts) >= initialFloor && tsMs(m.ts) <= p.cut)
+              .filter((m) => m.ts !== root.ts && tsMs(m.ts) >= floor && tsMs(m.ts) <= p.cut)
               .map((m) => ({ ...m, thread_ts: root.ts })),
           );
         } else messages.push(...stored.filter((m) => m.thread_ts === root.ts && m.ts !== root.ts));
@@ -332,7 +393,11 @@ export class SlackSource {
     }
     // Roots aged 7–14 days also need reply checks between daily deep reads.
     // They are scheduled below as complete day reads, avoiding partial rollups.
-    const document = normalizeDay(c, day, messages, users, identity, o);
+    const document = normalizeDay(c, day, messages, users, identity, {
+      providerId: o.providerId,
+      sourceId: o.sourceId,
+      session: o.session,
+    });
     const hashes = await this.query(`SELECT hash FROM slack_days WHERE ${scope}`);
     // Include complete message rows: edits beyond a bounded preview still update analytics.
     const hash = document
@@ -341,12 +406,12 @@ export class SlackSource {
     const changed = hashes[0]?.hash !== hash;
     const analytics: TableWrite[] = [];
     if (changed) {
-      analytics.push(
-        {
-          tableName: "slack_messages",
-          deletedKeys: [{ source_account_id: owner, conversation_id: c.id, day }],
-        },
-        {
+      analytics.push({
+        tableName: "slack_messages",
+        deletedKeys: [{ source_account_id: owner, conversation_id: c.id, day }],
+      });
+      if (messages.length)
+        analytics.push({
           tableName: "slack_messages",
           records: messages.map((m) => ({
             source_account_id: owner,
@@ -358,32 +423,25 @@ export class SlackSource {
             text: m.text,
             raw: JSON.stringify(m),
             posted_at: new Date(tsMs(m.ts)).toISOString(),
-            source_url: permalink(identity, c.id, m.ts),
+            source_url: permalink(identity, c.id, m.ts, m.thread_ts),
             self_id: identity.user_id,
           })),
-        },
-        {
-          tableName: "slack_days",
-          records: [{ source_account_id: owner, conversation_id: c.id, day, hash }],
-        },
-      );
+        });
+      analytics.push({
+        tableName: "slack_days",
+        records: [{ source_account_id: owner, conversation_id: c.id, day, hash }],
+      });
     }
     const newest = roots.reduce((max, m) => (m.ts > max ? m.ts : max), previous?.newest ?? "");
     cur.channels[c.id] = {
       ...previous,
       ...(newest ? { newest } : {}),
-      through: new Date(end).toISOString(),
+      through: new Date(Math.max(through, end)).toISOString(),
     };
     if (dayStart + DAY < p.cut) p.day = new Date(dayStart + DAY).toISOString();
     else {
       cur.channels[c.id].complete = true;
-      p.queue.shift();
-      delete p.day;
-      delete p.incrementalDone;
-    }
-    if (!p.queue.length) {
-      if (p.deep) cur.lastDeepAt = p.cut;
-      delete cur.pending;
+      finish(cur, p);
     }
     return {
       documents: changed && document ? [document] : [],
@@ -398,6 +456,39 @@ export class SlackSource {
       },
     };
   }
+}
+async function listUsers(client: SlackClient, signal?: AbortSignal): Promise<SlackUser[]> {
+  try {
+    return (await client.list("users.list", "members", {}, signal)).map((v) => userSchema.parse(v));
+  } catch (err) {
+    if (err instanceof SyncError) throw err;
+    throw new SyncError("transient", "Slack people listing was incomplete");
+  }
+}
+function finish(cur: SlackCursor, p: Pending): void {
+  p.queue.shift();
+  delete p.day;
+  if (p.queue.length) return;
+  if (p.deep) cur.lastDeepAt = p.cut;
+  delete cur.pending;
+}
+function skipHead(
+  prior: SlackCursor,
+  kind: SyncErrorKind,
+  message: string,
+): StructuredSyncResult<SlackCursor> {
+  const cursor = structuredClone(prior);
+  const pending = cursor.pending!;
+  const skipped = pending.queue.shift();
+  delete pending.day;
+  if (!pending.queue.length) delete cursor.pending;
+  log.warn(`Conversation ${skipped?.id ?? "unknown"} skipped this cycle; preserving its history`);
+  return {
+    cursor,
+    hasMore: !!cursor.pending,
+    documents: [],
+    issues: [{ scope: "partition", kind, count: 1, subject: skipped?.id, message }],
+  };
 }
 function parseMessages(raw: unknown[]): Message[] {
   const out: Message[] = [];

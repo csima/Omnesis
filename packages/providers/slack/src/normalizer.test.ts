@@ -73,6 +73,19 @@ describe("daily Slack normalizer", () => {
     expect(doc.content).toContain("preview truncated");
     expect(doc.metadata.extra).toMatchObject({ messageCount: 1 });
   });
+  it("carries only the source identity, not the connection mode, as document fields", () => {
+    const doc = normalizeDay(
+      CHANNEL,
+      "2026-05-19",
+      [{ ts: "1779184800.000000", user: "UOTHER0", text: "Session example" }],
+      [],
+      IDENTITY,
+      { ...ids, session: true },
+    )!;
+    expect(doc).not.toHaveProperty("session");
+    expect(doc).toMatchObject({ providerId: ids.providerId, sourceId: ids.sourceId });
+    expect(doc.metadata.extra).toMatchObject({ connectionMode: "session" });
+  });
   it("returns no document for an empty confirmed day", () => {
     expect(normalizeDay(CHANNEL, "2026-05-19", [], [], IDENTITY, ids)).toBeNull();
   });

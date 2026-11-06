@@ -36,14 +36,24 @@ describe("local memory-only handoff", () => {
   it.each([
     "https://evil.example/",
     "https://example.slack.com.evil.example/",
+    "https://example.slack-gov.com/",
     "http://example.slack.com/",
     "https://example.slack.com:8443/",
-  ])("rejects credential exfiltration host %s", (url) => {
+  ])("reports unsupported workspace host %s as a failure and keeps the others", (url) => {
     const s = source("slack:Slack");
     s.workspaces[0].url = url;
-    expect(() => credentialsFromBundle({ sessions: [s], failedSources: [] })).toThrow(
-      "invalid workspace host",
-    );
+    const other = source("chrome:Default", "UOTHER0");
+    const result = credentialsFromBundle({ sessions: [s, other], failedSources: [] });
+    expect(result.credentials.map((c) => accountKey(c.identity))).toEqual(["TEXAMPLE-UOTHER0"]);
+    expect(result.failures).toEqual(["TEXAMPLE-USELF00"]);
+    expect(JSON.stringify(result.credentials)).not.toContain(url);
+  });
+  it("accepts an enterprise.slack.com organization host", () => {
+    const s = source("slack:Slack");
+    s.workspaces[0].url = "https://example-org.enterprise.slack.com/";
+    const result = credentialsFromBundle({ sessions: [s], failedSources: [] });
+    expect(result.credentials[0].identity.url).toBe("https://example-org.enterprise.slack.com/");
+    expect(result.failures).toEqual([]);
   });
   it("invalid output never includes input values in the error", () => {
     expect(() => credentialsFromBundle({ sessions: [{ cookie: "fictional-secret" }] })).toThrow(

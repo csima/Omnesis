@@ -35,11 +35,11 @@ export default defineProvider<Record<string, never>>({
   credentials: undefined,
   authenticate: undefined,
   cleanupCredentials: undefined,
-  discover: async () => preDiscoveredAccounts("slack", universeAccounts("slack")),
+  discover: () => Promise.resolve(preDiscoveredAccounts("slack", universeAccounts("slack"))),
   authFlow: async () => fakeLocalFlow("slack", universeAccounts("slack")[0] ?? "synthetic"),
-  createContext: async () => ({}),
+  createContext: () => Promise.resolve({}),
   disposeContext: undefined,
-  credentialState: async () => ({ status: "connected" }),
+  credentialState: () => Promise.resolve({ status: "connected" as const }),
   sources: rest.sources.map((entry) => ({
     ...entry,
     contract: undefined,
@@ -51,33 +51,41 @@ export default defineProvider<Record<string, never>>({
     credentials: undefined,
     authenticate: undefined,
     cleanupCredentials: undefined,
-    discover: async () => preDiscoveredAccounts("slack", universeAccounts(entry.id)),
-    async create({ sourceId, providerId }) {
-      return {
-        async sync() {
-          const data = fixtureSchema.parse(
-            loadSourceFixtureJson(loadActiveUniverse(), "slack", "messages.json"),
-          );
-          const groups = new Map<string, typeof data.messages>();
-          for (const m of data.messages) {
-            const key = m.conversation + ":" + m.day;
-            const group = groups.get(key) ?? [];
-            group.push(m);
-            groups.set(key, group);
-          }
-          const documents = [...groups.values()].flatMap((messages) => {
-            const first = messages[0];
-            const conversation = data.conversations.find((c) => c.id === first.conversation)!;
-            const doc = normalizeDay(conversation, first.day, messages, data.users, data.identity, {
-              sourceId,
-              providerId,
-              session: entry.id === "slack-session",
+    discover: () => Promise.resolve(preDiscoveredAccounts("slack", universeAccounts(entry.id))),
+    create({ sourceId, providerId }) {
+      return Promise.resolve({
+        sync: () =>
+          Promise.resolve().then(() => {
+            const data = fixtureSchema.parse(
+              loadSourceFixtureJson(loadActiveUniverse(), "slack", "messages.json"),
+            );
+            const groups = new Map<string, typeof data.messages>();
+            for (const m of data.messages) {
+              const key = m.conversation + ":" + m.day;
+              const group = groups.get(key) ?? [];
+              group.push(m);
+              groups.set(key, group);
+            }
+            const documents = [...groups.values()].flatMap((messages) => {
+              const first = messages[0];
+              const conversation = data.conversations.find((c) => c.id === first.conversation)!;
+              const doc = normalizeDay(
+                conversation,
+                first.day,
+                messages,
+                data.users,
+                data.identity,
+                {
+                  sourceId,
+                  providerId,
+                  session: entry.id === "slack-session",
+                },
+              );
+              return doc ? [doc] : [];
             });
-            return doc ? [doc] : [];
-          });
-          return syncPage(documents, { offset: documents.length });
-        },
-      };
+            return syncPage(documents, { offset: documents.length });
+          }),
+      });
     },
   })),
 });

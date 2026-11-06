@@ -65,9 +65,6 @@ export function slackTs(ms: number): string {
 export function tsMs(ts: string): number {
   return Number(tsSchema.parse(ts)) * 1000;
 }
-export function dayOf(ts: string): string {
-  return new Date(tsMs(ts)).toISOString().slice(0, 10);
-}
 export function accountKey(identity: Pick<Identity, "team_id" | "user_id">): string {
   return `${idSchema.parse(identity.team_id)}-${idSchema.parse(identity.user_id)}`;
 }
@@ -78,7 +75,7 @@ export function workspaceUrl(value: string): string {
   const u = new URL(value);
   if (
     u.protocol !== "https:" ||
-    !/^[a-z0-9-]+\.slack\.com$/.test(u.hostname) ||
+    !/^[a-z0-9-]+(\.enterprise)?\.slack\.com$/.test(u.hostname) ||
     u.port ||
     u.username ||
     u.password ||
@@ -89,6 +86,15 @@ export function workspaceUrl(value: string): string {
     throw new Error("Invalid Slack workspace URL");
   return u.origin + "/";
 }
-export function permalink(identity: Identity, channel: string, ts: string): string {
-  return `${workspaceUrl(identity.url)}archives/${idSchema.parse(channel)}/p${tsSchema.parse(ts).replace(".", "")}`;
+export function permalink(
+  identity: Identity,
+  channel: string,
+  ts: string,
+  threadTs?: string,
+): string {
+  const id = idSchema.parse(channel);
+  const base = `${workspaceUrl(identity.url)}archives/${id}/p${tsSchema.parse(ts).replace(".", "")}`;
+  return threadTs && threadTs !== ts
+    ? `${base}?thread_ts=${tsSchema.parse(threadTs)}&cid=${id}`
+    : base;
 }

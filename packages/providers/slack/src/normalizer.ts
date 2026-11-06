@@ -63,7 +63,8 @@ export function normalizeDay(
       ? fullContent.slice(0, MAX_CONTENT_CHARS - notice.length) + notice
       : fullContent;
   return {
-    ...ids,
+    providerId: ids.providerId,
+    sourceId: ids.sourceId,
     externalId: `${conversation.id}:${day}`,
     title,
     content,

@@ -85,8 +85,8 @@ function entry(
     // A daily document is addressed by its first message, but inbound message URLs
     // need the UTC root day. No regex can infer that day from Slack's decimal epoch.
     // Deliberately no misleading urlPattern that resolves to a different externalId.
-    async create(options, ctx) {
-      if (!options.host) throw new Error("Slack requires a source-scoped host");
+    create(options, ctx) {
+      if (!options.host) return Promise.reject(new Error("Slack requires a source-scoped host"));
       const days = Number(options.config?.historyDays ?? 180);
       const source = new SlackSource({
         accountId: ctx.accountId,
@@ -120,18 +120,19 @@ function entry(
           return credential;
         },
       });
-      return {
+      return Promise.resolve({
         icon: slackIcon,
         analyticsSchemas: schemasFor(session),
         sync: (cursor, opts) => source.sync(slackStateSpec.decode(cursor), opts),
         syncStructured: (cursor, opts) =>
           source.syncStructured(slackStateSpec.decode(cursor), opts),
-        dispose: async () => source.dispose(),
-        credentialState: async () => ({
-          status: "unknown",
-          because: "Credentials are checked at sync, not with a network admission probe",
-        }),
-      };
+        dispose: () => Promise.resolve(source.dispose()),
+        credentialState: () =>
+          Promise.resolve({
+            status: "unknown" as const,
+            because: "Credentials are checked at sync, not with a network admission probe",
+          }),
+      });
     },
   };
 }
@@ -141,9 +142,9 @@ export default defineProvider<Context>({
   async discover(ctx) {
     return [...new Set([...(await discoverOfficial(ctx)), ...(await discoverSession(ctx))])];
   },
-  async createContext({ accountId, host }) {
-    if (!host) throw new Error("Slack requires an account-scoped host");
-    return { accountId: String(accountId), configDir: host.configDir };
+  createContext({ accountId, host }) {
+    if (!host) return Promise.reject(new Error("Slack requires an account-scoped host"));
+    return Promise.resolve({ accountId: String(accountId), configDir: host.configDir });
   },
   sources: [entry(false), entry(true)],
 });

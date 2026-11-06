@@ -12,10 +12,10 @@ import {
   clearProviderAccountCredentials,
 } from "@omnesis/core";
 import { AuthFailure, credentialsChallenge } from "@omnesis/source-sdk";
+import { SyncError } from "@omnesis/types";
 import { SlackClient } from "./client.js";
 import { slackCredentialsSpec } from "./credentials-spec.js";
 import { bridge, credentialsFromBundle } from "./session.js";
-import { SyncError } from "@omnesis/types";
 import { accountKey, workspaceUrl, idSchema } from "./types.js";
 import type { AuthResult, AuthSession, SourceLifecycleContext } from "@omnesis/source-sdk";
 import type { Credential, Identity } from "./types.js";
@@ -38,14 +38,28 @@ export async function verifyOfficial(token: string, signal?: AbortSignal): Promi
     token,
     identity: { team_id: "T00", user_id: "U00", team: "Slack", url: "https://example.slack.com/" },
   };
-  const auth = await new SlackClient(provisional).call("auth.test", {}, signal);
+  let auth: Record<string, unknown>;
+  try {
+    auth = await new SlackClient(provisional).call("auth.test", {}, signal);
+  } catch (err) {
+    throw authFailure(err);
+  }
   const r = identitySchema.safeParse(auth);
   if (!r.success)
     throw new AuthFailure(
       "credential-rejected",
       "Slack did not return a workspace and user identity",
     );
-  return { token, identity: { ...r.data, url: workspaceUrl(r.data.url) } };
+  let url: string;
+  try {
+    url = workspaceUrl(r.data.url);
+  } catch {
+    throw new AuthFailure(
+      "unsupported",
+      "This Slack workspace host is not supported; use a workspace on slack.com or enterprise.slack.com",
+    );
+  }
+  return { token, identity: { ...r.data, url } };
 }
 export async function authenticateOfficial(session: AuthSession): Promise<AuthResult> {
   const answer = session.supplied.token
@@ -160,7 +174,7 @@ export async function authenticateSession(session: AuthSession): Promise<AuthRes
     },
   };
   const listing = z.object({ sources: z.array(z.string()) }).parse(await bridge(initial, "list"));
-  await session.show({
+  session.show({
     kind: "wait",
     title: "Slack sign-in sources found",
     instructions: listing.sources.join("\n") || "No supported sign-in sources found.",

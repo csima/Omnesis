@@ -2,12 +2,12 @@
 // Copyright (c) 2026 Caleb Sima
 
 import { describe, it, expect } from "vitest";
-import provider from "./index.js";
-import { normalizeDay } from "./normalizer.js";
-import { CHANNEL, IDENTITY } from "./fake-slack.js";
 import { SourceId, ProviderId } from "@omnesis/types";
 import { resolveSourceState } from "@omnesis/source-sdk";
+import { CHANNEL, IDENTITY } from "./fake-slack.js";
+import { normalizeDay } from "./normalizer.js";
 import { slackStateSpec } from "./state.js";
+import provider from "./index.js";
 describe("Slack descriptor contract", () => {
   it("loads two isolated connection modes with only session mode experimental", () => {
     expect(provider.sources.map((s) => [s.id, s.authType, s.experimental])).toEqual([

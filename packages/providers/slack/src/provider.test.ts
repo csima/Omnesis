@@ -15,6 +15,7 @@ import {
   discoverSession,
   loadSessionManifest,
   authFailure,
+  verifyOfficial,
 } from "./provider.js";
 import { bridge } from "./session.js";
 import type { AuthSession } from "@omnesis/source-sdk";
@@ -91,6 +92,24 @@ describe("Slack connection boundaries", () => {
     Object.assign(s, { supplied: { token: "xoxp-fictional-fixture" } });
     vi.spyOn(SlackClient.prototype, "call").mockResolvedValue(identity);
     await expect(authenticateOfficial(s)).rejects.toMatchObject({ code: "identity-mismatch" });
+  });
+  it("accepts an enterprise.slack.com token and refuses an unsupported host as an auth failure", async () => {
+    const spy = vi
+      .spyOn(SlackClient.prototype, "call")
+      .mockResolvedValue({ ...identity, url: "https://example-org.enterprise.slack.com/" });
+    expect((await verifyOfficial("xoxp-fictional-fixture")).identity.url).toBe(
+      "https://example-org.enterprise.slack.com/",
+    );
+    spy.mockResolvedValue({ ...identity, url: "https://example.slack-gov.com/" });
+    await expect(verifyOfficial("xoxp-fictional-fixture")).rejects.toMatchObject({
+      name: "AuthFailure",
+      code: "unsupported",
+    });
+    spy.mockRejectedValue(new SyncError("auth", "Slack sign-in expired"));
+    await expect(verifyOfficial("xoxp-fictional-fixture")).rejects.toMatchObject({
+      name: "AuthFailure",
+      code: "credential-rejected",
+    });
   });
   it("distinguishes temporary platform failure from rejected credentials", () => {
     expect(authFailure(new SyncError("network", "Safe network failure"))).toMatchObject({

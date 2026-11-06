@@ -101,6 +101,14 @@ export async function bridge(
     );
   return runBridge(config, operation, signal);
 }
+const HELPER_ENV = /^(HOME|PATH|LANG|LC_[A-Z_]+|TMPDIR)$/;
+/** The helper sees only locale, home and search paths, never the collector's secrets. */
+function helperEnv(parent: NodeJS.ProcessEnv): Record<string, string> {
+  const env: Record<string, string> = { PYTHONDONTWRITEBYTECODE: "1" };
+  for (const [name, value] of Object.entries(parent))
+    if (value !== undefined && HELPER_ENV.test(name)) env[name] = value;
+  return env;
+}
 /** Separate transport seam lets tests prove pipe bounds and secret-free failures on any OS. */
 export async function runBridge(
   config: SessionConfig,
@@ -109,10 +117,10 @@ export async function runBridge(
 ): Promise<unknown> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(config.python, ["-B", "-c", BRIDGE_PROGRAM], {
+    const child = spawn(config.python, ["-I", "-B", "-c", BRIDGE_PROGRAM], {
       stdio: ["pipe", "pipe", "ignore"],
       signal,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+      env: helperEnv(process.env),
     });
     let chunks: Buffer[] = [];
     let size = 0;
@@ -123,10 +131,12 @@ export async function runBridge(
       chunks = [];
       child.kill();
       reject(
-        new SyncError(
-          "transient",
-          "Local Slack handoff unavailable; sign in again, check helper dependencies and the exact source User-Agent",
-        ),
+        signal?.aborted
+          ? signal.reason
+          : new SyncError(
+              "transient",
+              "Local Slack handoff unavailable; sign in again, check helper dependencies and the exact source User-Agent",
+            ),
       );
     };
     const timer = setTimeout(fail, 120_000);
@@ -173,6 +183,7 @@ export function credentialsFromBundle(value: unknown): {
       "Local Slack helper returned an invalid handoff; no session retained",
     );
   const selected = new Map<string, Credential>();
+  const failures = [...parsed.data.failedSources];
   // Reviewed helper enumerates desktop first. Sorting maintains it when a synthetic caller doesn't.
   for (const source of [...parsed.data.sessions].sort(
     (a, b) => Number(a.source.startsWith("chrome")) - Number(b.source.startsWith("chrome")),
@@ -184,7 +195,8 @@ export function credentialsFromBundle(value: unknown): {
       try {
         url = workspaceUrl(team.url);
       } catch {
-        throw new SyncError("auth", "Local Slack helper returned an invalid workspace host");
+        failures.push(key);
+        continue;
       }
       selected.set(key, {
         token: team.token,
@@ -193,5 +205,8 @@ export function credentialsFromBundle(value: unknown): {
         identity: { team_id: team.team_id, user_id: team.user_id, team: team.name, url },
       });
     }
-  return { credentials: [...selected.values()], failures: parsed.data.failedSources };
+  return {
+    credentials: [...selected.values()],
+    failures: [...new Set(failures)].filter((key) => !selected.has(key)),
+  };
 }

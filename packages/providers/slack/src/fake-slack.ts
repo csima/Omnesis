@@ -22,28 +22,42 @@ export class FakeSlack {
     url: string;
   }> = [];
   forbidden = new Set<string>();
+  failing = new Set<string>();
   authError = false;
   rateLimit = false;
+  rateLimitWhen?: (method: string, params: URLSearchParams) => boolean;
   outage = false;
   malformed = false;
   markers: Record<string, unknown>[] = [];
-  fetch: typeof fetch = async (input, init) => {
-    const url = String(input),
-      method = url.split("/").at(-1)!;
+  fetch: typeof fetch = (input, init) => Promise.resolve(this.respond(String(input), init));
+  private respond(url: string, init: RequestInit | undefined): Response {
+    const method = url.split("/").at(-1)!;
     const params = new URLSearchParams(String(init?.body));
     this.calls.push({ method, params, redirect: init?.redirect, url });
+    if (this.rateLimitWhen?.(method, params)) {
+      this.rateLimitWhen = undefined;
+      return new Response("", { status: 429, headers: { "Retry-After": "3" } });
+    }
     if (this.rateLimit) {
       this.rateLimit = false;
       return new Response("", { status: 429, headers: { "Retry-After": "3" } });
     }
     if (this.outage) return new Response("", { status: 503 });
     const data: Record<string, unknown> = { ok: true };
-    if (this.forbidden.has(params.get("channel") ?? "") && method.startsWith("conversations."))
+    const channel = params.get("channel") ?? "";
+    if (this.forbidden.has(channel) && method.startsWith("conversations."))
       return Response.json({ ok: false, error: "not_in_channel" });
+    if (this.failing.has(channel) && /^conversations\.(history|replies)$/.test(method))
+      return Response.json({ ok: false, error: "internal_error" });
+    const page = (rows: unknown[]): unknown[] => {
+      const offset = Number(params.get("cursor") || 0);
+      data.response_metadata = { next_cursor: offset + 2 < rows.length ? String(offset + 2) : "" };
+      return rows.slice(offset, offset + 2);
+    };
     if (method === "auth.test")
       Object.assign(data, this.authError ? { ok: false, error: "invalid_auth" } : IDENTITY);
     if (method === "users.list")
-      data.members = [
+      data.members = page([
         {
           id: "USELF00",
           name: "self",
@@ -54,12 +68,12 @@ export class FakeSlack {
           name: "river",
           profile: { display_name: "River Example", email: "river@example.com" },
         },
-      ];
+      ]);
     if (method === "usergroups.list") data.usergroups = [{ id: "SEXAMPLE", users: ["USELF00"] }];
-    if (method === "conversations.list") data.channels = this.conversations;
+    if (method === "users.conversations") data.channels = page(this.conversations);
     if (method === "conversations.info")
       data.channel = {
-        ...this.conversations.find((c) => c.id === params.get("channel")),
+        ...this.conversations.find((c) => c.id === channel),
         last_read: "0000000000.000000",
       };
     if (method === "client.counts") data.channels = this.markers;
@@ -74,25 +88,28 @@ export class FakeSlack {
             ? (m.thread_ts ?? m.ts) === params.get("ts")
             : !m.thread_ts || m.thread_ts === m.ts),
       );
-      const offset = Number(params.get("cursor") || 0);
-      const page = rows.slice(offset, offset + 2);
-      data.messages = this.malformed ? [{ text: "invalid" }] : page;
-      data.response_metadata = { next_cursor: offset + 2 < rows.length ? String(offset + 2) : "" };
+      if (method === "conversations.history") rows.sort((a, b) => Number(b.ts) - Number(a.ts));
+      data.messages = this.malformed ? [{ text: "invalid" }] : page(rows);
     }
     return Response.json(data);
-  };
+  }
 }
 export class MemoryAnalytics implements SourceAnalyticsAccess {
   tables = new Map<string, Record<string, unknown>[]>();
-  async query(sql: string) {
+  query(sql: string) {
     const table = sql.match(/FROM (\w+)/)?.[1] ?? "";
     const clauses = [
-      ...sql.matchAll(/(source_account_id|conversation_id|day)='((?:[^']|'')*)'/g),
-    ].map((m) => [m[1], m[2].replaceAll("''", "'")]);
+      ...sql.matchAll(/(source_account_id|conversation_id|day)(>?=)'((?:[^']|'')*)'/g),
+    ].map((m) => ({ key: m[1], atLeast: m[2] === ">=", value: m[3].replaceAll("''", "'") }));
     const rows = (this.tables.get(table) ?? []).filter((r) =>
-      clauses.every(([k, v]) => r[k] === v),
+      clauses.every(({ key, atLeast, value }) =>
+        atLeast ? String(r[key]) >= value : r[key] === value,
+      ),
     );
-    return { columns: [], rows: structuredClone(rows) };
+    // SQL promises no order without ORDER BY; reversing insertion order makes a missing one visible.
+    if (/ORDER BY ts$/.test(sql)) rows.sort((a, b) => Number(a.ts) - Number(b.ts));
+    else rows.reverse();
+    return Promise.resolve({ columns: [], rows: structuredClone(rows) });
   }
   commit(writes: TableWrite | readonly TableWrite[] | undefined): void {
     for (const w of writes ? (Array.isArray(writes) ? writes : [writes as TableWrite]) : []) {
