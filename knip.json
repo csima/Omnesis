@@ -93,6 +93,8 @@
         "@omnesis/provider-codex",
         "@omnesis/provider-coinbase",
         "@omnesis/provider-discord",
+        "@omnesis/provider-slack",
+        "@omnesis/provider-slack-synth",
         "@omnesis/provider-coinbase-synth",
         "@omnesis/provider-core-location-visits-synth",
         "@omnesis/provider-enable-banking",

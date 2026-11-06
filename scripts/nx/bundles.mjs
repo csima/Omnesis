@@ -88,6 +88,7 @@ export const bundles = {
       "outlook-calendar.e2e.test.ts",
       "plaid.e2e.test.ts",
       "telegram-*.e2e.test.ts",
+      "slack-*.e2e.test.ts",
       "whatsapp-*.e2e.test.ts",
       "attachments.e2e.test.ts",
       "ocr.e2e.test.ts",

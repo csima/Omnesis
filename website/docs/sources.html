@@ -321,6 +321,29 @@
               </tr>
               <tr>
                 <td>
+                  Slack<br /><span class="pill">any collector</span>
+                  <span class="pill">User OAuth token</span>
+                </td>
+                <td>
+                  Channels, private channels, DMs and group DMs you belong to, one conversation per
+                  UTC day with threads, edits and deletions. People and read positions are indexed.
+                  See <a href="#slack">Slack</a>.
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  Slack session<br /><span class="pill">macOS collector</span>
+                  <span class="pill">Experimental</span>
+                </td>
+                <td>
+                  Your signed-in desktop and Chrome workspaces through the reviewed local helper.
+                  Offered only with <code>OMNESIS_EXPERIMENTAL=1</code> on the gateway. Session
+                  credentials stay in memory on the Mac. See
+                  <a href="#slack-session">Slack session</a>.
+                </td>
+              </tr>
+              <tr>
+                <td>
                   Discord<br /><span class="pill">any collector</span>
                   <span class="pill">Bot token</span> <span class="pill">Experimental</span>
                 </td>
@@ -334,6 +357,89 @@
             </tbody>
           </table>
         </div>
+
+        <h3 id="slack">Slack</h3>
+        <p>
+          Create an internal Slack app at
+          <a href="https://api.slack.com/apps">Slack API Apps</a> and open OAuth &amp; Permissions.
+          Add read-only <strong>user</strong> scopes: <code>channels:read</code>,
+          <code>channels:history</code>, <code>groups:read</code>, <code>groups:history</code>,
+          <code>im:read</code>, <code>im:history</code>, <code>mpim:read</code>,
+          <code>mpim:history</code>, <code>users:read</code>, <code>users:read.email</code>, and
+          <code>usergroups:read</code>. Install it in your workspace, run
+          <code>omnesis sources add slack</code>, and enter its User OAuth Token. Workspace
+          installation policies still apply. No write scopes are needed. Official tokens use Omnesis
+          standard wrapped credential storage on the collector; they never enter source config,
+          cursors, indexed content or logs.
+        </p>
+        <p>
+          Each workspace and user is a separate account. Sync runs every 15 minutes, importing 180
+          days initially (configurable in <code>historyDays</code>), then new messages and recent
+          changes. Indexed history does not expire. Each cycle reconciles seven days of history and
+          recently active threads; once a day it reconciles 30 days. Older edits and deletions are
+          outside that horizon. File names and links are indexed, not file contents. Archived
+          conversations are skipped. Rate limits may delay a cycle; internal customer-built apps
+          retain Tier 3 limits, while commercially distributed non-Marketplace apps can have much
+          lower history limits.
+        </p>
+        <p>
+          Unread messages are stored messages newer than the conversation read marker, excluding
+          your own. A supplied thread marker wins for its replies. A missing marker means unknown
+          coverage. Markers refresh each cycle; nothing marks messages read for you. For example:
+        </p>
+        <div class="term">
+          <pre>
+WITH unread AS (
+  SELECT m.*, p.kind, p.observed_at
+  FROM slack_messages m JOIN slack_read_positions p
+    USING (source_account_id, conversation_id)
+  WHERE m.user_id &lt;&gt; m.self_id
+    AND CAST(m.ts AS DECIMAL(20,6)) &gt; CAST(
+      CASE WHEN m.ts &lt;&gt; m.thread_ts
+        THEN COALESCE(json_extract_string(p.thread_reads, '/' || m.thread_ts), p.last_read)
+        ELSE p.last_read END
+      AS DECIMAL(20,6))
+)
+SELECT source_account_id, conversation_id, count(*) AS unread
+FROM unread GROUP BY ALL;</pre>
+        </div>
+        <p>For mentions, use the same <code>unread</code> CTE and filter the message text:</p>
+        <div class="term">
+          <pre>
+SELECT * FROM unread m
+WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
+   OR contains(m.text, '&lt;!here&gt;') OR contains(m.text, '&lt;!channel&gt;')
+   OR contains(m.text, '@here') OR contains(m.text, '@channel')
+   OR EXISTS (
+     SELECT 1 FROM slack_usergroups g
+     WHERE g.source_account_id = m.source_account_id
+       AND (contains(m.text, '&lt;!subteam^' || g.group_id || '&gt;')
+         OR contains(m.text, '&lt;!subteam^' || g.group_id || '|'))
+   );</pre>
+        </div>
+        <h3 id="slack-session">Slack session (experimental)</h3>
+        <p>
+          Requires <code>OMNESIS_EXPERIMENTAL=1</code> on the gateway and the reviewed
+          <code>slack-grab</code> helper installed on the collector Mac. Run
+          <code>omnesis sources add slack-session</code> there, select the helper and its Python
+          interpreter, then choose from the discovered desktop installs and Chrome profiles; all are
+          selected by default. Only you answer macOS Keychain prompts. Supply a source's exact
+          User-Agent if it is not stored unambiguously. A locked or unsupported source is reported;
+          its data is never treated as deleted.
+        </p>
+        <p>
+          Session tokens and cookies stay in the collector process's memory and private helper pipe,
+          never Omnesis storage or the gateway. The helper recollects at the next cycle; a failed
+          sign-in marks only that account needs-auth. Sign back in using Slack or Chrome to resume
+          automatically. Signing out keeps indexed history. For the SQL examples, replace every
+          <code>slack_</code> table prefix with <code>slack_session_</code>.
+        </p>
+        <p>
+          This uses your own login and an unpublished read-position API. Workspace policies still
+          apply, and some admins prohibit session automation. This is not an official Slack
+          integration. Unread counts and badges are as fresh as the most recent completed cycle,
+          subject to read-marker coverage and Slack's retention limits.
+        </p>
 
         <h3 id="discord">Discord</h3>
         <p>

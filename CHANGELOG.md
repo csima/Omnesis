@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add Slack official-token and experimental Mac session sources with daily conversations, threads, bounded edit/deletion reconciliation and read-position analytics.
+
+## Unreleased
+
 ## 0.7.0
 
 ### Mixed-version compatibility with 0.6.0

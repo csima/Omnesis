@@ -108,3 +108,5 @@ You are free to use, modify, run, and redistribute the code under the AGPL. When
 ## Reporting concerns
 
 If you are a brand owner and have concerns about how Omnesis displays your mark, please open an issue and we will adjust promptly.
+
+Slack is a trademark of Slack Technologies, LLC / Salesforce. The Slack provider uses the name descriptively and a provider-owned generic chat glyph, not the Slack logo; no endorsement is implied.

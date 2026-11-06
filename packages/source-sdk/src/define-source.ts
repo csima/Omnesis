@@ -938,6 +938,11 @@ export interface ProviderSourceEntry<
   id: string;
   name: string;
   description: string;
+  /** Per-entry connection flow for sibling sources with different credential kinds. */
+  authType?: AuthType;
+  credentials?: ProviderCredentialsSpec;
+  authenticate?(session: AuthSession): Promise<AuthResult>;
+  cleanupCredentials?(accountId: string, ctx?: SourceLifecycleContext): Promise<void>;
   /**
    * See `SourceDefinition.experimental`. Set per-source within a provider to
    * mark one source experimental without hiding its siblings — when omitted the
