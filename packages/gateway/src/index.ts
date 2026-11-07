@@ -153,6 +153,7 @@ import { reconcileConfig } from "./config-reconcile.js";
 import {
   createIndexDatabase,
   purgeUsearchSidecars,
+  getUsearchEncoding,
   getUsearchSavedSeq,
   getUsearchSavedChangeSeq,
   getUsearchBackfillCursor,
@@ -3918,6 +3919,7 @@ const doShutdown = async (): Promise<void> => {
           vectorWriteSeq: savedSeq,
           embedModel: model.name,
           embedDim: model.dim,
+          encoding: getUsearchEncoding(indexDb),
           ...(savedChangeSeq !== null ? { changeSeq: savedChangeSeq } : {}),
           backfillCursor: getUsearchBackfillCursor(indexDb),
         });
