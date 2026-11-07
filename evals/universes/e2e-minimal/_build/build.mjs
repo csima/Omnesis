@@ -282,3 +282,6 @@ if (!existsSync(join(DST_UNIVERSE, "universe.json"))) {
     "Reminder: write universe.json next to cast.json — name, cast, the devices roster, and sources with their device.",
   );
 }
+
+// Slack has one invented daily conversation, already below the minimal cap.
+writeJson(dstPath("slack", "messages.json"), readJson(srcPath("slack", "messages.json")));

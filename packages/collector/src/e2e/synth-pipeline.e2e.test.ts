@@ -131,6 +131,9 @@ describe("Synthetic providers — full pipeline", () => {
       "screen-time",
       "browser-history",
       "notion-databases",
+      // Slack groups API-shaped fixture arrays into one daily conversation.
+      "slack",
+      "slack-session",
       "strava-activities",
       // Finance structured sources emit documents only for transactions;
       // their accounts/balances/holdings fixture files feed DuckDB rows.

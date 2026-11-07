@@ -1,0 +1,42 @@
+{
+  "identity": {
+    "team_id": "TEXAMPLE",
+    "user_id": "USELF00",
+    "team": "Example Workshop",
+    "url": "https://example-workshop.slack.com/"
+  },
+  "conversations": [
+    {
+      "id": "CEXAMPLE",
+      "name": "workshop",
+      "is_member": true
+    }
+  ],
+  "users": [
+    {
+      "id": "USELF00",
+      "name": "john",
+      "profile": {
+        "display_name": "John Smith",
+        "email": "john.smith@example.com"
+      }
+    },
+    {
+      "id": "UOTHER0",
+      "name": "river",
+      "profile": {
+        "display_name": "River Example",
+        "email": "river@example.com"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "conversation": "CEXAMPLE",
+      "day": "2026-05-19",
+      "ts": "1779184800.000000",
+      "user": "UOTHER0",
+      "text": "The fictional workshop checklist is ready. <@USELF00>"
+    }
+  ]
+}

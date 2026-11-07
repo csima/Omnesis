@@ -12519,6 +12519,33 @@
       "value": "Main Camera",
       "paths": ["packages/providers/immich/src/normalizer.test.ts"],
       "reason": "Invented Immich fixture name (person, album, place or camera), not corpus data."
+    },
+    {
+      "value": "Example Workshop",
+      "paths": [
+        "evals/universes/default/sources/slack/messages.json",
+        "evals/universes/e2e-minimal/sources/slack/messages.json",
+        "packages/providers/slack/src/bridge.test.ts",
+        "packages/providers/slack/src/provider.test.ts",
+        "packages/providers/slack/src/session.test.ts"
+      ],
+      "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
+    },
+    {
+      "value": "John Smith",
+      "paths": [
+        "evals/universes/default/sources/slack/messages.json",
+        "evals/universes/e2e-minimal/sources/slack/messages.json"
+      ],
+      "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
+    },
+    {
+      "value": "River Example",
+      "paths": [
+        "evals/universes/default/sources/slack/messages.json",
+        "evals/universes/e2e-minimal/sources/slack/messages.json"
+      ],
+      "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
     }
   ],
   "secretFixtures": [
@@ -12542,6 +12569,11 @@
       "kind": "private-key",
       "reason": "Documentation string names a PEM header shape without containing a real key.",
       "paths": []
+    },
+    {
+      "path": "packages/providers/slack/src/provider.test.ts",
+      "kind": "slack-token",
+      "reason": "Invented Slack user token used to verify official-token credential handling; never a live credential."
     }
   ]
 }
