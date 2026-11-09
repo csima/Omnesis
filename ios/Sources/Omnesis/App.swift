@@ -162,11 +162,13 @@ public struct OmnesisApp: App {
 
     /// Resolves the `DEMO_AGENT_PREVIEW` launch environment to a seeded
     /// transcript, or `nil` for the normal app root. `tall` is a uniform
-    /// long conversation (bottom-fade visual check); `scroll-stress` mixes
+    /// long conversation (bottom-fade visual check); `timeline` adds Timeline
+    /// content to the rich transcript; `scroll-stress` mixes
     /// short and very tall turns to drive the scroll-to-bottom UI test.
     static var agentPreviewSeed: AppStore.AgentPreviewSeed? {
         switch ProcessInfo.processInfo.environment["DEMO_AGENT_PREVIEW"] {
         case "store": PreviewMocks.agentStoreTranscript
+        case "timeline": PreviewMocks.agentTimelineTranscript
         case "conversation-controls": PreviewMocks.agentConversationControls
         case "tall": PreviewMocks.agentTallTranscript
         case "scroll-stress", "scroll-stress-delayed": PreviewMocks.agentScrollStressTranscript

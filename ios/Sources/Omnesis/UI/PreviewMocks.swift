@@ -4967,6 +4967,14 @@ enum PreviewMocks {
         return seed
     }()
 
+    /// The connected rich transcript with Timeline content, so the closed
+    /// panel and its sticky tabs are live (`DEMO_AGENT_PREVIEW=timeline`).
+    static let agentTimelineTranscript: AppStore.AgentPreviewSeed = {
+        var seed = agentStoreTranscript
+        seed.trailAnnotations = trailVoucherAnnotations
+        return seed
+    }()
+
     /// Existing pinned chat used to verify the top-right actions beside the
     /// new-chat button. The transcript content stays shared with the rich seed.
     static let agentPinnedTranscript: AppStore.AgentPreviewSeed = {
