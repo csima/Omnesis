@@ -5065,7 +5065,7 @@ final class PreviewSnapshotTests: XCTestCase {
         ("ax3", .accessibility3),
     ]
 
-    private func renderMatrix<V: View>(_ surface: String, _ build: (CGSize) -> V) {
+    private func renderMatrix(_ surface: String, _ build: (CGSize) -> some View) {
         for device in Self.matrixDevices {
             for text in Self.matrixTextSizes {
                 renderSized(
