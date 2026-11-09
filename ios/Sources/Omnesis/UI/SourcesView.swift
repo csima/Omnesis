@@ -238,8 +238,12 @@ private struct OverviewCard: View {
 
             if let model = store.indexStats?.model?.name, !model.isEmpty {
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { embeddingModelLabel; embeddingModelName(model).fixedSize() }
-                    VStack(alignment: .leading, spacing: 2) { embeddingModelLabel; embeddingModelName(model) }
+                    HStack(spacing: 8) { embeddingModelLabel
+                        embeddingModelName(model).fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 2) { embeddingModelLabel
+                        embeddingModelName(model)
+                    }
                 }
             }
         }

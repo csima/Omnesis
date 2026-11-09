@@ -1368,7 +1368,8 @@ struct AgentEphemeralUrlLookupCard: View {
         case .noMatch:
             HStack(spacing: 6) {
                 Text("No match in your corpus")
-                    .scaledFont(size: 11).italic()
+                    .scaledFont(size: 11)
+                    .italic()
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1759,7 +1760,8 @@ struct AgentEphemeralLoopFetchCard: View {
                     loopDetail(loop)
                 } else {
                     Text("No such loop")
-                        .scaledFont(size: 11).italic()
+                        .scaledFont(size: 11)
+                        .italic()
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                 }
