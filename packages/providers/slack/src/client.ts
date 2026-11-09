@@ -141,7 +141,13 @@ export class SlackClient {
           "Slack cannot read this conversation with the current grant",
           { scope: method.startsWith("conversations.") ? "partition" : "source" },
         );
-      throw new SyncError("transient", "Slack could not complete this read");
+      const code = /^[a-z0-9_]{1,64}$/.test(data.error ?? "")
+        ? data.error
+        : "an unrecognized error";
+      throw new SyncError(
+        "transient",
+        `Slack could not complete this read: ${method} returned ${code}`,
+      );
     }
     this.replay.set(key, data);
     return data;

@@ -100,6 +100,21 @@ describe("Slack read client", () => {
       cause: undefined,
     });
   });
+  it("names the method and Slack's error code, and only a plain code", async () => {
+    const answer = (error: string) =>
+      new SlackClient(CREDENTIAL, {
+        fetchImpl: () => Promise.resolve(Response.json({ ok: false, error })),
+        paceMs: 0,
+      });
+    await expect(answer("team_access_not_granted").call("usergroups.list")).rejects.toMatchObject({
+      kind: "transient",
+      message:
+        "Slack could not complete this read: usergroups.list returned team_access_not_granted",
+    });
+    await expect(answer("xoxc-secret value").call("users.list")).rejects.toMatchObject({
+      message: "Slack could not complete this read: users.list returned an unrecognized error",
+    });
+  });
   it("honors cancellation", async () => {
     const server = new FakeSlack();
     const ac = new AbortController();
