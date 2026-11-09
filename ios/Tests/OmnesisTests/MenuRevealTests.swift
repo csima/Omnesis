@@ -281,4 +281,33 @@ final class MenuRevealTests: XCTestCase {
         XCTAssertEqual(MenuReveal.shadowRadius(isLight: false), 24, accuracy: 0.001)
         XCTAssertEqual(MenuReveal.shadowRadius(isLight: true), 6, accuracy: 0.001)
     }
+
+    // MARK: - Docked sidebar
+
+    /// Phones, a folded foldable and narrow iPad panes keep the drawer; the
+    /// unfolded inner display, iPads and wide windows dock it.
+    func testMenuDocksOnlyOnAWideContainer() {
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 0))
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 393))
+        // A foldable's outer display, folded.
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 466))
+        // The largest phone, upright.
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 440))
+        // Its inner display, upright and on its side.
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 669))
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 951))
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 1366))
+    }
+
+    /// Beside the sidebar the section always keeps at least a phone's width.
+    func testDockedSectionKeepsAPhonesWidth() {
+        let width = MenuReveal.dockMinimumWidth
+        XCTAssertGreaterThanOrEqual(width - MenuReveal.sidebarWidth(forContainerWidth: width), 390)
+    }
+
+    func testSidebarWidthIsClamped() {
+        XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 669), MenuReveal.sidebarMinimumWidth)
+        XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1000), 300, accuracy: 0.001)
+        XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1366), 340)
+    }
 }
