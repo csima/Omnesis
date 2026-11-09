@@ -96,7 +96,10 @@ export class FakeSlack {
 }
 export class MemoryAnalytics implements SourceAnalyticsAccess {
   tables = new Map<string, Record<string, unknown>[]>();
-  query(sql: string) {
+  query(sql: string, opts?: { limit?: number }) {
+    const limit = opts?.limit ?? 10_000;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10_000)
+      return Promise.reject(new Error("limit must be between 1 and 10000"));
     const table = sql.match(/FROM (\w+)/)?.[1] ?? "";
     const clauses = [
       ...sql.matchAll(/(source_account_id|conversation_id|day)(>?=)'((?:[^']|'')*)'/g),
@@ -109,7 +112,7 @@ export class MemoryAnalytics implements SourceAnalyticsAccess {
     // SQL promises no order without ORDER BY; reversing insertion order makes a missing one visible.
     if (/ORDER BY ts$/.test(sql)) rows.sort((a, b) => Number(a.ts) - Number(b.ts));
     else rows.reverse();
-    return Promise.resolve({ columns: [], rows: structuredClone(rows) });
+    return Promise.resolve({ columns: [], rows: structuredClone(rows.slice(0, limit)) });
   }
   commit(writes: TableWrite | readonly TableWrite[] | undefined): void {
     for (const w of writes ? (Array.isArray(writes) ? writes : [writes as TableWrite]) : []) {
