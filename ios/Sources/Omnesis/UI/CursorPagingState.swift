@@ -419,7 +419,7 @@ struct ListPagingFooter: View {
                         GatewayErrorView.classify(error).title,
                         systemImage: "exclamationmark.triangle"
                     )
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.warning)
                 }
                 if error != nil {
@@ -435,7 +435,7 @@ struct ListPagingFooter: View {
                         Text(loadingLabel)
                     }
                     .frame(maxWidth: .infinity)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textMuted)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(loadingLabel)
@@ -445,7 +445,7 @@ struct ListPagingFooter: View {
                         systemImage: "exclamationmark.triangle"
                     )
                     .frame(maxWidth: .infinity)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .accessibilityElement(children: .combine)
                 }

@@ -209,7 +209,7 @@ private struct TimelinePane: View {
             ProgressView()
                 .tint(Theme.accent)
             Text("Building timeline…")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -222,10 +222,10 @@ private struct TimelinePane: View {
                 .font(.system(size: 28))
                 .foregroundStyle(Theme.textMuted)
             Text("No timeline yet")
-                .font(.system(size: 13, weight: .medium))
+                .scaledFont(size: 13, weight: .medium)
                 .foregroundStyle(Theme.textPrimary)
             Text("This document isn't linked to any others, so there's nothing to thread together.")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Theme.Spacing.lg)
@@ -291,7 +291,7 @@ private struct MetadataPane: View {
             FlowLayout(spacing: 6) {
                 ForEach(tags, id: \.self) { tag in
                     Text("#\(tag)")
-                        .font(Theme.monospace(size: 11))
+                        .scaledFont(size: 11, design: .monospaced)
                         .foregroundStyle(Theme.accent)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
@@ -342,7 +342,7 @@ private struct MetadataPane: View {
     private func kv(_ key: String, value: String, mono: Bool = false) -> some View {
         HStack(alignment: .top) {
             Text(key)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 12)
             Text(value)
@@ -495,7 +495,7 @@ private struct GraphPane: View {
             Image(systemName: "circle.dotted")
                 .foregroundStyle(Theme.textMuted)
             Text("No graph neighbors yet. People, attachments, and references will appear here as they're indexed.")
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
         }
         .padding(.vertical, Theme.Spacing.md)
@@ -504,11 +504,11 @@ private struct GraphPane: View {
     private func summaryHeader(total: Int, hasPartialEdges: Bool) -> some View {
         HStack {
             Text("Vertices & edges connected to this document")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
             Spacer()
             Text(hasPartialEdges ? "\(total) loaded" : "\(total) edge\(total == 1 ? "" : "s")")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -630,11 +630,11 @@ private struct SectionCard<Content: View>: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(spacing: 8) {
                 Text(label.uppercased())
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .tracking(0.5)
                     .foregroundStyle(Theme.textSecondary)
                 Text(countIsPartial ? "\(count) loaded" : "\(count)")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(Theme.textMuted)
                     .monospacedDigit()
                 Rectangle()
@@ -643,7 +643,7 @@ private struct SectionCard<Content: View>: View {
                     .frame(maxWidth: .infinity)
                 if let hint {
                     Text(hint)
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }
             }
@@ -666,17 +666,17 @@ private struct PersonGraphRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         Text(person.displayName)
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(size: 13, weight: .semibold)
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
                         if person.isSelf {
                             Text("(you)")
-                                .font(.system(size: 10))
+                                .scaledFont(size: 10)
                                 .foregroundStyle(Theme.accent)
                         }
                     }
                     Text(person.role.uppercased())
-                        .font(.system(size: 9, weight: .semibold))
+                        .scaledFont(size: 9, weight: .semibold)
                         .tracking(0.5)
                         .foregroundStyle(Theme.textMuted)
                 }
@@ -711,7 +711,7 @@ private struct AttachmentGraphRow: View {
                 HStack(spacing: 8) {
                     FileTypeIcon(mimeType: att.mimeType, filename: att.title, size: 14)
                     Text(att.title.isEmpty ? att.attachmentId : att.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -723,7 +723,7 @@ private struct AttachmentGraphRow: View {
                 let parts = metaParts
                 if !parts.isEmpty {
                     Text(parts.joined(separator: " · "))
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                         .padding(.leading, 22)
                 }
@@ -770,7 +770,7 @@ private struct OutboundDocGraphRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text((ref.targetTitle?.isEmpty == false ? ref.targetTitle! : "(untitled)"))
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -782,7 +782,7 @@ private struct OutboundDocGraphRow: View {
                 let parts = subParts
                 if !parts.isEmpty {
                     Text(parts.joined(separator: " · "))
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }
             }
@@ -827,12 +827,12 @@ private struct InboundDocGraphRow: View {
                 SourceIconView(sourceId: ref.sourceSourceId, store: store, size: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ref.sourceTitle.isEmpty ? "(untitled)" : ref.sourceTitle)
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(humanName(for: sourceTypeFromId(ref.sourceSourceId)))
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
@@ -866,17 +866,17 @@ private struct NearDupGraphRow: View {
                 SourceIconView(sourceId: edge.otherSourceId, store: store, size: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(edge.otherTitle.isEmpty ? "(untitled)" : edge.otherTitle)
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(humanName(for: sourceTypeFromId(edge.otherSourceId)))
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
                 Text("\(Int((edge.jaccard * 100).rounded()))%")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
@@ -908,7 +908,7 @@ private struct BoundRowGraphRow: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.accent)
                 Text(vertex.tableLabel)
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -942,10 +942,10 @@ private struct BoundRowFieldChip: View {
     var body: some View {
         HStack(spacing: 0) {
             Text("\(key): ")
-                .font(.system(size: 10))
+                .scaledFont(size: 10)
                 .foregroundStyle(Theme.textMuted)
             Text(value)
-                .font(.system(size: 10, weight: .medium))
+                .scaledFont(size: 10, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
         }
         .lineLimit(1)
@@ -974,7 +974,7 @@ private struct ExternalLinkGraphRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Text(ref.rawTarget)
-                    .font(.system(size: 12, weight: .medium))
+                    .scaledFont(size: 12, weight: .medium)
                     .foregroundStyle(isHttp ? Theme.accent : Theme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -987,7 +987,7 @@ private struct ExternalLinkGraphRow: View {
             }
             if ref.linkType != "url" {
                 Text("\(ref.linkType) · not yet indexed")
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
             }
         }

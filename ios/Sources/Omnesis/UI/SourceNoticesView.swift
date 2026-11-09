@@ -138,7 +138,7 @@ private struct NoticeGlyphButton: View {
                     .foregroundStyle(severity.color)
                 if count > 1 {
                     Text("\(count)")
-                        .font(.system(size: 10, weight: .semibold))
+                        .scaledFont(size: 10, weight: .semibold)
                         .foregroundStyle(severity.color)
                         .monospacedDigit()
                 }
@@ -246,7 +246,7 @@ struct SourceNoticesSheet: View {
                         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                             if sections.count > 1, let name = section.deviceName {
                                 Text(name.uppercased())
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .scaledFont(size: 12, weight: .semibold)
                                     .tracking(0.5)
                                     .foregroundStyle(Theme.textSecondary)
                             }

@@ -5044,6 +5044,110 @@ final class PreviewSnapshotTests: XCTestCase {
         renderSized(duoCapture(size: size), name: "400g-duo-capture-stacked", size: size)
     }
 
+    // MARK: - Device and text-size matrix
+
+    /// Current iPhones and iPads, in points, upright unless named otherwise.
+    private static let matrixDevices: [(name: String, size: CGSize)] = [
+        ("se", CGSize(width: 375, height: 667)),
+        ("iphone", CGSize(width: 402, height: 874)),
+        ("air", CGSize(width: 420, height: 912)),
+        ("pro-max", CGSize(width: 440, height: 956)),
+        ("duo-outer", CGSize(width: 466, height: 678)),
+        ("duo-inner-side", CGSize(width: 951, height: 669)),
+        ("ipad-mini", CGSize(width: 744, height: 1133)),
+        ("ipad-pro-side", CGSize(width: 1376, height: 1032)),
+    ]
+
+    /// The default text size and the largest the app allows on every device;
+    /// the largest standard size on the smallest phone.
+    private static let matrixTextSizes: [(name: String, size: DynamicTypeSize)] = [
+        ("default", .large),
+        ("ax3", .accessibility3),
+    ]
+
+    private func renderMatrix<V: View>(_ surface: String, _ build: (CGSize) -> V) {
+        for device in Self.matrixDevices {
+            for text in Self.matrixTextSizes {
+                renderSized(
+                    build(device.size).dynamicTypeSize(text.size),
+                    name: "500-\(surface)-\(device.name)-\(text.name)",
+                    size: device.size
+                )
+            }
+        }
+        renderSized(
+            build(Self.matrixDevices[0].size).dynamicTypeSize(.xxxLarge),
+            name: "500-\(surface)-se-xxxl",
+            size: Self.matrixDevices[0].size
+        )
+    }
+
+    func testMatrixHome() {
+        // At the default text size every design size is exactly as designed.
+        for size: CGFloat in [9, 11, 13, 15, 17, 20, 22, 28, 34] {
+            XCTAssertEqual(ScaledType.size(size, at: .large), size, accuracy: 0.01)
+        }
+        XCTAssertGreaterThan(ScaledType.size(17, at: .accessibility3), 17)
+        renderMatrix("home") { _ in
+            MenuRevealContainer(isOpen: .constant(false)) {
+                MainMenuDrawer(isOpen: .constant(false), selection: .constant(.agent), onOpenSettings: {})
+            } content: {
+                AgentView(menuOpen: .constant(false))
+            }
+            .environment(AppStore.preview(agentPreview: PreviewMocks.agentConversationsRich))
+        }
+    }
+
+    func testMatrixHomeMenuOpen() {
+        renderMatrix("menu") { _ in
+            MenuRevealContainer(isOpen: .constant(true)) {
+                MainMenuDrawer(isOpen: .constant(true), selection: .constant(.agent), onOpenSettings: {})
+            } content: {
+                AgentView(menuOpen: .constant(true))
+            }
+            .environment(AppStore.preview(agentPreview: PreviewMocks.agentConversationsRich))
+        }
+    }
+
+    func testMatrixAgentTranscript() {
+        renderMatrix("agent") { _ in
+            AgentView(menuOpen: .constant(false))
+                .environment(AppStore.preview(agentPreview: PreviewMocks.agentRichTranscript))
+        }
+    }
+
+    func testMatrixCapture() {
+        renderMatrix("capture") { size in
+            CaptureView(speech: .preview(state: .listening), previewText: PreviewMocks.voiceEntryText)
+                .environment(AppStore.preview())
+                .environment(\.foldHinge, AdaptiveLayout.hinge(windowSize: size))
+        }
+    }
+
+    func testMatrixSources() {
+        renderMatrix("sources") { _ in
+            SourcesView(menuOpen: .constant(false)).environment(AppStore.preview(
+                sources: PreviewMocks.sources,
+                statusesBySource: PreviewMocks.syncStatuses,
+                deviceNames: PreviewMocks.deviceNames,
+                statusSnapshot: PreviewMocks.statusSnapshot,
+                indexStats: PreviewMocks.indexStats
+            ))
+        }
+    }
+
+    func testMatrixPeople() {
+        renderMatrix("people") { _ in
+            PeoplePreviewWrapper().environment(AppStore.preview())
+        }
+    }
+
+    func testMatrixSettings() {
+        renderMatrix("settings") { _ in
+            SettingsView(initialDestination: .root, previewData: true).environment(AppStore.preview())
+        }
+    }
+
     // MARK: - iPhone Duo — accessibility
 
     /// At an accessibility text size the docked sidebar widens so its rows

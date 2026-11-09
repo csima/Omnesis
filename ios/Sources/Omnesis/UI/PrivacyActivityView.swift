@@ -58,7 +58,7 @@ struct PrivacyReviewCard: View {
             PrivacyActorLine(kind: .external, label: "\(review.agentName) asked")
             Spacer(minLength: Theme.Spacing.sm)
             Text(privacyRelativeDate(review.createdAt))
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
         }
     }
@@ -66,7 +66,7 @@ struct PrivacyReviewCard: View {
     private var heldAnswer: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text("Answer held inside Omnesis")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             if review.candidateAvailable, let answer = review.candidateAnswer {
                 PrivacyAnswerBlock(answer: answer, role: "held answer", tinted: true)
@@ -77,10 +77,10 @@ struct PrivacyReviewCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("The exact answer is unavailable.")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                     Text("It cannot be shared from here. You can still choose not to share it.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -95,7 +95,7 @@ struct PrivacyReviewCard: View {
     private var reason: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(review.pause.title)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             // The pause reads either as Omnesis explaining itself or as the
             // reviewer's own sentence, and only the second is a quotation.
@@ -103,7 +103,7 @@ struct PrivacyReviewCard: View {
                 PrivacyQuote(text: review.pause.message, role: "privacy check summary", size: 13)
             } else {
                 Text(review.pause.message)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -167,7 +167,7 @@ struct PrivacyFeedOutcomeStatus: View {
                     mark(display.tone)
                 }
                 Text(display.label)
-                    .font(.system(size: 12, weight: .medium))
+                    .scaledFont(size: 12, weight: .medium)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -205,7 +205,7 @@ private struct PrivacyFeedFilterBar: View {
                         selection = filter
                     } label: {
                         Text("\(filter.label) \(count(for: filter))")
-                            .font(.system(size: 12, weight: .semibold))
+                            .scaledFont(size: 12, weight: .semibold)
                             .foregroundStyle(
                                 selection == filter ? Theme.bgPrimary : Theme.textSecondary
                             )
@@ -249,12 +249,12 @@ struct PrivacyFeedRow: View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text("\(externalAgentNarrativeName(exchange.externalAgent)) asked")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text("“\(exchange.question)”")
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -262,7 +262,7 @@ struct PrivacyFeedRow: View {
             }
             Spacer(minLength: 0)
             Text(time)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .monospacedDigit()
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(1)
@@ -432,7 +432,7 @@ struct PrivacyActivityPane: View {
                         ? "One answer is waiting for you"
                         : "\(items.count) answers are waiting for you"
                 )
-                .font(.system(size: 17, weight: .semibold))
+                .scaledFont(size: 17, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .padding(.top, Theme.Spacing.sm)
                 ForEach(items, id: \.approvalId) { item in
@@ -471,7 +471,7 @@ struct PrivacyActivityPane: View {
         let rows = filteredFeed
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("Recent activity")
-                .font(.system(size: 17, weight: .semibold))
+                .scaledFont(size: 17, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .accessibilityAddTraits(.isHeader)
             PrivacyFeedFilterBar(selection: $filter, exchanges: listed)
@@ -493,7 +493,7 @@ struct PrivacyActivityPane: View {
                 ForEach(privacyFeedDays(rows)) { day in
                     VStack(alignment: .leading, spacing: 0) {
                         Text(day.heading.localizedUppercase)
-                            .font(.system(size: 11, weight: .semibold))
+                            .scaledFont(size: 11, weight: .semibold)
                             .tracking(0.9)
                             .foregroundStyle(Theme.textMuted)
                             .padding(.horizontal, Theme.Spacing.xs)

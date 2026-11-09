@@ -170,7 +170,7 @@ private struct AgentPlanRow: View {
             statusGlyph
                 .frame(width: 14, alignment: .center)
             Text(item.label)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(labelColor)
                 .strikethrough(item.status == .done, color: Theme.textMuted)
                 .lineLimit(1)

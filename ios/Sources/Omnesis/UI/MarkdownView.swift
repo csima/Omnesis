@@ -19,7 +19,10 @@ import SwiftUI
 @available(iOS 17.0, *)
 struct MarkdownView: View {
     let text: String
-    var bodyFont: Font = .system(size: 14)
+    /// Design size of body text; it follows the reader's text size.
+    var bodySize: CGFloat = 14
+    /// A face of the caller's own in place of the system body font.
+    var bodyFont: Font?
     /// The face headings are set in. Headings size themselves off their level
     /// rather than off `bodyFont`, so a caller setting the body in a
     /// non-default face passes the face here too and the block reads as one.
@@ -32,6 +35,15 @@ struct MarkdownView: View {
     var allowsTextSelection = true
 
     @State private var cache = MarkdownCache()
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var resolvedBodyFont: Font {
+        bodyFont ?? .system(size: ScaledType.size(bodySize, at: dynamicTypeSize))
+    }
+
+    private var scaledCopyFont: UIFont {
+        copyFont.withSize(ScaledType.size(copyFont.pointSize, at: dynamicTypeSize))
+    }
 
     var body: some View {
         let blocks = cache.blocks(for: text)
@@ -52,7 +64,7 @@ struct MarkdownView: View {
                 .foregroundStyle(Theme.textPrimary)
         case .paragraph(let raw):
             inlineText(raw)
-                .font(bodyFont)
+                .font(resolvedBodyFont)
                 .foregroundStyle(Theme.textPrimary)
                 .modifier(MarkdownTextSelection(enabled: allowsTextSelection))
                 .fixedSize(horizontal: false, vertical: true)
@@ -60,13 +72,13 @@ struct MarkdownView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     inlineText(item)
-                        .font(bodyFont)
+                        .font(resolvedBodyFont)
                         .foregroundStyle(Theme.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.leading, 18)
                         .overlay(alignment: .topLeading) {
-                            Text("•").font(bodyFont).foregroundStyle(Theme.textMuted)
+                            Text("•").font(resolvedBodyFont).foregroundStyle(Theme.textMuted)
                         }
                 }
             }
@@ -74,14 +86,14 @@ struct MarkdownView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     inlineText(item)
-                        .font(bodyFont)
+                        .font(resolvedBodyFont)
                         .foregroundStyle(Theme.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.leading, 26)
                         .overlay(alignment: .topLeading) {
                             Text("\(idx + 1).")
-                                .font(bodyFont)
+                                .font(resolvedBodyFont)
                                 .foregroundStyle(Theme.textMuted)
                                 .monospacedDigit()
                         }
@@ -89,7 +101,7 @@ struct MarkdownView: View {
             }
         case .quote(let raw):
             inlineText(raw, font: italicCopyFont, color: Theme.textSecondary)
-                .font(bodyFont)
+                .font(resolvedBodyFont)
                 .italic()
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.leading, 12)
@@ -105,7 +117,7 @@ struct MarkdownView: View {
                     MarkdownCopyText(raw: display, wholeValue: raw, font: copyFont)
                 } else {
                     Text(display)
-                        .font(bodyFont)
+                        .font(resolvedBodyFont)
                         .foregroundStyle(Theme.textPrimary)
                         .modifier(MarkdownTextSelection(enabled: allowsTextSelection))
                 }
@@ -113,7 +125,7 @@ struct MarkdownView: View {
                 codeBlock(raw, closed: closed)
             }
         case .table(let headers, let rows):
-            MarkdownTable(headers: headers, rows: rows, bodyFont: bodyFont, cache: cache, copyValues: copyValues, copyFont: copyFont)
+            MarkdownTable(headers: headers, rows: rows, bodyFont: resolvedBodyFont, cache: cache, copyValues: copyValues, copyFont: scaledCopyFont)
         }
     }
 
@@ -126,7 +138,7 @@ struct MarkdownView: View {
                 }
             }
             Text(raw.hasSuffix("\n") ? String(raw.dropLast()) : raw)
-                .font(Theme.monospace(size: 13))
+                .scaledFont(size: 13, design: .monospaced)
         }
         .foregroundStyle(Theme.textPrimary)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -139,19 +151,20 @@ struct MarkdownView: View {
     @ViewBuilder
     private func inlineText(_ raw: String, font: UIFont? = nil, color: Color = Theme.textPrimary) -> some View {
         if copyValues, !MarkdownCopyContent.values(in: raw).isEmpty {
-            MarkdownCopyText(raw: raw, font: font ?? copyFont, color: color)
+            MarkdownCopyText(raw: raw, font: font ?? scaledCopyFont, color: color)
         } else {
             Text(cache.inline(raw))
         }
     }
 
     private var italicCopyFont: UIFont {
-        let descriptor = copyFont.fontDescriptor.withSymbolicTraits(.traitItalic) ?? copyFont.fontDescriptor
-        return UIFont(descriptor: descriptor, size: copyFont.pointSize)
+        let base = scaledCopyFont
+        let descriptor = base.fontDescriptor.withSymbolicTraits(.traitItalic) ?? base.fontDescriptor
+        return UIFont(descriptor: descriptor, size: base.pointSize)
     }
 
     private func headingUIFont(_ level: Int) -> UIFont {
-        let size: CGFloat = level == 1 ? 22 : level == 2 ? 19 : level == 3 ? 17 : 15
+        let size = ScaledType.size(Self.headingSize(level), at: dynamicTypeSize)
         let base = UIFont.systemFont(ofSize: size, weight: level <= 2 ? .bold : .semibold)
         let design: UIFontDescriptor.SystemDesign = switch headingDesign {
         case .serif: .serif
@@ -162,13 +175,21 @@ struct MarkdownView: View {
         return UIFont(descriptor: base.fontDescriptor.withDesign(design) ?? base.fontDescriptor, size: size)
     }
 
-    private func headingFont(_ level: Int) -> Font {
+    private static func headingSize(_ level: Int) -> CGFloat {
         switch level {
-        case 1: .system(size: 22, weight: .bold, design: headingDesign)
-        case 2: .system(size: 19, weight: .bold, design: headingDesign)
-        case 3: .system(size: 17, weight: .semibold, design: headingDesign)
-        default: .system(size: 15, weight: .semibold, design: headingDesign)
+        case 1: 22
+        case 2: 19
+        case 3: 17
+        default: 15
         }
+    }
+
+    private func headingFont(_ level: Int) -> Font {
+        .system(
+            size: ScaledType.size(Self.headingSize(level), at: dynamicTypeSize),
+            weight: level <= 2 ? .bold : .semibold,
+            design: headingDesign
+        )
     }
 }
 
@@ -722,7 +743,7 @@ enum MarkdownStreaming {
     return ScrollView {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(prefixes.enumerated()), id: \.offset) { _, prefix in
-                MarkdownView(text: prefix, bodyFont: .system(size: 15))
+                MarkdownView(text: prefix, bodySize: 15)
                 Divider().overlay(Theme.borderLight)
             }
         }

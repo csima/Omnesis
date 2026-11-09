@@ -453,7 +453,7 @@ struct BackendsContent: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.system(size: 16))
                 Text("Add backend")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Theme.accent)
@@ -691,7 +691,7 @@ struct BackendsContent: View {
 
     private func noticeBanner(_ notice: Notice) -> some View {
         Text(notice.text)
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(notice.ok ? Theme.success : Theme.danger)
             .padding(Theme.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -706,10 +706,10 @@ struct BackendsContent: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No HTTP backends configured.")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
             Text("Add one to point Omnesis at any OpenAI-compatible server (a local vLLM/Ollama, or a cloud provider).")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
         }
         .padding(Theme.Spacing.md)
@@ -723,7 +723,7 @@ struct BackendsContent: View {
             "Backends and provider keys are shared across every capability. "
                 + "After adding a backend, logging in to Codex, or setting a key, assign its models from the Models tab."
         )
-        .font(.system(size: 11))
+        .scaledFont(size: 11)
         .foregroundStyle(Theme.textMuted)
         .padding(.top, Theme.Spacing.sm)
     }

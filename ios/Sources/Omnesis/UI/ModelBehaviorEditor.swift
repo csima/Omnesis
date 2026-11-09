@@ -85,7 +85,7 @@ struct ModelBehaviorEditor: View {
             if !metadata.controls.isEmpty,
                let staleMessage = ModelManagement.staleBehaviorMessage(metadata: metadata, values: autosave.acknowledgedValues) {
                 Text(staleMessage)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -100,30 +100,30 @@ struct ModelBehaviorEditor: View {
 
             if metadata.controls.contains(where: { !($0.exclusiveWith ?? []).isEmpty }) {
                 Text("Some settings are alternatives for this model. Choosing one clears the other.")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
 
             if let error = previewError ?? autosave.error {
                 Text(error)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
                 if !autosave.hasConflict, !metadata.controls.isEmpty,
                    !ModelManagement.requiresExplicitReset(metadata: metadata, values: autosave.acknowledgedValues) {
                     Button("Retry") { autosave.submit(candidate()) }
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                 }
             } else if autosave.isSaving {
                 HStack(spacing: 6) {
                     ProgressView()
                     Text("Saving…")
                 }
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
             } else if let notice = autosave.notice {
                 Text(notice)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.success)
             }
 
@@ -197,7 +197,7 @@ struct ModelBehaviorEditor: View {
     private func booleanField(_ control: ModelControl) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(control.label)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
             Picker(control.label, selection: Binding(
                 get: { reasoningChoice },
@@ -240,7 +240,7 @@ struct ModelBehaviorEditor: View {
             }
             if compact {
                 Text(control.label)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
                 picker.pickerStyle(.segmented)
                     .tint(Theme.accent)
@@ -248,12 +248,12 @@ struct ModelBehaviorEditor: View {
             } else {
                 HStack(spacing: 8) {
                     Text(control.label)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                     Spacer(minLength: 0)
                     picker.pickerStyle(.menu)
                         .tint(Theme.accent)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .controlSize(.small)
                         .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 6)
@@ -268,7 +268,7 @@ struct ModelBehaviorEditor: View {
             if let saved = autosave.acknowledgedValues.reasoningEffort,
                !(control.values ?? []).contains(saved) {
                 Text("Saved effort \(saved) is no longer listed; choose an offered value or default.")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.warning)
             }
         }
@@ -277,7 +277,7 @@ struct ModelBehaviorEditor: View {
     private func budgetField(_ control: ModelControl) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(control.label)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
             if control.min == -1 {
                 Toggle("No reasoning budget enforcement", isOn: Binding(
@@ -288,7 +288,7 @@ struct ModelBehaviorEditor: View {
                         autosave.submit(candidate())
                     }
                 ))
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .tint(Theme.accent)
                 .disabled(reasoningChoice == "off")
             }
@@ -312,7 +312,7 @@ struct ModelBehaviorEditor: View {
                 let minimum = (control.min == -1 ? 0 : control.min).map(String.init) ?? "any"
                 let maximum = control.max.map(String.init) ?? "any"
                 Text("Allowed tokens: \(minimum)–\(maximum)")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -367,14 +367,14 @@ struct AssignedModelBehaviorCard: View {
                     .frame(width: 24, height: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Assigned model")
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                     Text(display?.modelName ?? behavior.assignment)
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                     Text(display?.providerLabel ?? behavior.assignment)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer(minLength: 0)
@@ -383,7 +383,7 @@ struct AssignedModelBehaviorCard: View {
             }
             if let unavailableReason, !unavailableReason.isEmpty {
                 Text(unavailableReason)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.warning)
             }
             if !behavior.metadata.controls.isEmpty || behavior.values != ModelBehaviorValues() {

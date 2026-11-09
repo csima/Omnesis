@@ -25,7 +25,7 @@ struct BackendRowCard: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text(row.key)
-                                .font(.system(size: 15, weight: .semibold))
+                                .scaledFont(size: 15, weight: .semibold)
                                 .foregroundStyle(Theme.textPrimary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -33,7 +33,7 @@ struct BackendRowCard: View {
                         }
                         if let url = row.status.url, !url.isEmpty {
                             Text(url)
-                                .font(.system(size: 12))
+                                .scaledFont(size: 12)
                                 .foregroundStyle(Theme.textSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -41,7 +41,7 @@ struct BackendRowCard: View {
                         metaLine
                         if let probeLabel = BackendsContent.probeLabel(probe) {
                             Text(probeLabel.text)
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(probeLabel.color)
                                 .lineLimit(2)
                         }
@@ -59,7 +59,7 @@ struct BackendRowCard: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Button(action: onTest) {
                     Text(probe == .probing ? "Testing…" : "Test")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -73,7 +73,7 @@ struct BackendRowCard: View {
 
                 Button(action: onRemove) {
                     Text("Remove")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.danger)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -100,11 +100,11 @@ struct BackendRowCard: View {
         HStack(spacing: 6) {
             let count = row.status.models?.count ?? 0
             Text("\(count) model\(count == 1 ? "" : "s")")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
             if row.status.hasApiKey == true {
                 Text("· API key set")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -130,7 +130,7 @@ struct BackendRowCard: View {
 
     private func badge(text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(color)
@@ -160,17 +160,17 @@ struct CodexRowCard: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text("Codex")
-                                .font(.system(size: 15, weight: .semibold))
+                                .scaledFont(size: 15, weight: .semibold)
                                 .foregroundStyle(Theme.textPrimary)
                             statusBadge
                         }
                         Text(metaLine)
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                             .lineLimit(1)
                         if let reason = status.reason, !reason.isEmpty {
                             Text(reason)
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(status.loggedIn ? Theme.textMuted : Theme.warning)
                                 .lineLimit(2)
                         }
@@ -188,7 +188,7 @@ struct CodexRowCard: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Button(action: onRefresh) {
                     Text(status.status == "probing" ? "Checking..." : "Check")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -202,7 +202,7 @@ struct CodexRowCard: View {
 
                 Button(action: onRemove) {
                     Text("Remove")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.danger)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -262,7 +262,7 @@ struct CodexRowCard: View {
 
     private func badge(text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(color)
@@ -320,7 +320,7 @@ struct BackendDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         Text(row.key)
-                            .font(.system(size: 16, weight: .semibold))
+                            .scaledFont(size: 16, weight: .semibold)
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -328,7 +328,7 @@ struct BackendDetailView: View {
                     }
                     if let url = row.status.url, !url.isEmpty {
                         Text(url)
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                             .lineLimit(2)
                             .truncationMode(.middle)
@@ -354,7 +354,7 @@ struct BackendDetailView: View {
     private var verifySection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("Verify capabilities")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(Theme.textSecondary)
@@ -381,13 +381,13 @@ struct BackendDetailView: View {
     private var emptyVerify: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Nothing to verify yet.")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
             Text(
                 "Once this backend is reachable and its probe classifies a model into a verifiable role "
                     + "(embedder or agent), a Verify affordance shows up here."
             )
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textMuted)
         }
         .padding(Theme.Spacing.md)
@@ -400,11 +400,11 @@ struct BackendDetailView: View {
         HStack(spacing: 6) {
             let count = row.status.models?.count ?? 0
             Text("\(count) model\(count == 1 ? "" : "s")")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
             if row.status.hasApiKey == true {
                 Text("· API key set")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -430,7 +430,7 @@ struct BackendDetailView: View {
 
     private func badge(text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(color)
@@ -464,10 +464,10 @@ struct VerifyRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(ModelManagement.roleLabel(target.role))
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Text(target.model)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -475,7 +475,7 @@ struct VerifyRow: View {
                 verdictBadge
                 Button(action: hasVerdict ? onReVerify : onVerify) {
                     Text(buttonLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(Theme.accent)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
@@ -489,7 +489,7 @@ struct VerifyRow: View {
             }
             if let detail = detailLine {
                 Text(detail.text)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(detail.color)
                     .lineLimit(3)
             }
@@ -512,7 +512,7 @@ struct VerifyRow: View {
         switch state {
         case .verdict(let supported, _):
             Text(supported ? "✓" : "✗")
-                .font(.system(size: 13, weight: .bold))
+                .scaledFont(size: 13, weight: .bold)
                 .foregroundStyle(supported ? Theme.success : Theme.danger)
         default:
             EmptyView()
@@ -552,13 +552,13 @@ struct CredentialRowCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(entry.providerName)
-                            .font(.system(size: 15, weight: .semibold))
+                            .scaledFont(size: 15, weight: .semibold)
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
                         statusBadge
                     }
                     Text(entry.configured ? "API key set" : "Not configured")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(entry.configured ? Theme.textSecondary : Theme.textMuted)
                 }
                 Spacer(minLength: 0)
@@ -566,7 +566,7 @@ struct CredentialRowCard: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Button(action: onSet) {
                     Text(entry.configured ? "Replace key" : "Set key")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -581,7 +581,7 @@ struct CredentialRowCard: View {
                 if entry.configured {
                     Button(action: onClear) {
                         Text("Clear")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(size: 13, weight: .semibold)
                             .foregroundStyle(Theme.danger)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
@@ -609,7 +609,7 @@ struct CredentialRowCard: View {
     private var statusBadge: some View {
         if entry.configured {
             Text("configured")
-                .font(.system(size: 9, weight: .semibold))
+                .scaledFont(size: 9, weight: .semibold)
                 .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(Theme.success)

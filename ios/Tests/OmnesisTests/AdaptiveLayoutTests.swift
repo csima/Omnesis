@@ -55,3 +55,27 @@ final class AdaptiveLayoutTests: XCTestCase {
         XCTAssertNil(AdaptiveLayout.panes(length: 400, crease: -10, minimumPane: 100))
     }
 }
+
+/// Design sizes follow the text style they sit nearest to.
+final class ScaledTypeTests: XCTestCase {
+    func testEachStylesOwnDefaultSizeMapsToIt() {
+        XCTAssertEqual(ScaledType.style(forDesignSize: 11), .caption2)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 12), .caption)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 13), .footnote)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 15), .subheadline)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 16), .callout)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 17), .body)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 20), .title3)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 22), .title2)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 28), .title)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 34), .largeTitle)
+    }
+
+    func testOffGridSizesFollowTheirNeighbour() {
+        XCTAssertEqual(ScaledType.style(forDesignSize: 9), .caption2)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 14), .footnote)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 18), .body)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 19), .title3)
+        XCTAssertEqual(ScaledType.style(forDesignSize: 44), .largeTitle)
+    }
+}

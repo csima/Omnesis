@@ -156,7 +156,7 @@ struct PrivacyExchangeSpine: View {
                 PrivacyActorLine(kind: .external, label: "\(agentName) asked")
                 Spacer(minLength: Theme.Spacing.sm)
                 Text(privacyRelativeDate(exchange.createdAt))
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
             PrivacyQuote(text: exchange.question, role: "question", size: 16)
@@ -246,14 +246,14 @@ struct PrivacyExchangeSpine: View {
                 }
                 if !shared {
                     Text("This draft has not left this machine.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                 }
             } else {
                 // One sentence, not two: with no draft to show, the "has not
                 // left" note below would only repeat this line.
                 Text(privacyUnavailableDraftCopy(exchange))
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -262,7 +262,7 @@ struct PrivacyExchangeSpine: View {
             }
             if let model = modelLine(event) {
                 Text(model)
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -290,13 +290,13 @@ struct PrivacyExchangeSpine: View {
     private var failureLines: some View {
         if let message = privacyFailureMessage(exchange) {
             Text(message)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.danger)
                 .fixedSize(horizontal: false, vertical: true)
         }
         if let detail = privacyFailureDetailLine(exchange) {
             Text(detail)
-                .font(Theme.monospace(size: 10))
+                .scaledFont(size: 10, design: .monospaced)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -318,7 +318,7 @@ struct PrivacyExchangeSpine: View {
             PrivacyActorLine(kind: .check, label: "Privacy check")
             HStack(alignment: .top, spacing: Theme.Spacing.xs) {
                 Text(privacyExchangeDecisionCopy(exchange))
-                    .font(.system(size: 15, weight: .medium))
+                    .scaledFont(size: 15, weight: .medium)
                     .foregroundStyle(Theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 if privacyExchangeNeedsPolling(exchange), exchange.outcome == .checking,
@@ -340,7 +340,7 @@ struct PrivacyExchangeSpine: View {
             reductions
             if let reviewModel = modelLine(event ?? firstEvent(.privacyReview)) {
                 Text("Checked by \(reviewModel).")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
             if let policy = exchange.review?.reviewedPolicy {
@@ -374,11 +374,11 @@ struct PrivacyExchangeSpine: View {
         if !exchange.reductions.isEmpty {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Details removed before sharing")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.textSecondary)
                 ForEach(Array(exchange.reductions.enumerated()), id: \.offset) { _, item in
                     Text("• \(item)")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -434,7 +434,7 @@ struct PrivacyExchangeSpine: View {
             // receiving it, and the release step above says so.
             if shared {
                 Text(receivedText)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -468,11 +468,11 @@ struct PrivacyExchangeSpine: View {
     private func factRow(_ label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
                 .foregroundStyle(Theme.textMuted)
                 .textCase(.uppercase)
             Text(value)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

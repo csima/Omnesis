@@ -138,7 +138,7 @@ struct ModelsView: View {
             ProgressView()
                 .tint(Theme.accent)
             Text("Loading models…")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.top, Theme.Spacing.sm)
         }
@@ -399,22 +399,22 @@ struct ModelsContent: View {
                 "\(title) repeatedly failed",
                 systemImage: "exclamationmark.triangle.fill"
             )
-            .font(.system(size: 14, weight: .semibold))
+            .scaledFont(size: 14, weight: .semibold)
             .foregroundStyle(Theme.warning)
             Text(warning.assignment)
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(size: 12, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
                 .textSelection(.enabled)
             Text(warning.message)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textPrimary)
             Text(
                 "At least \(warning.consecutiveFailures) consecutive failures · Last failure \(lastFailure)"
             )
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textSecondary)
             Text("This warning clears after a successful request or a change to the model configuration.")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
         }
         .padding(Theme.Spacing.md)
@@ -483,7 +483,7 @@ struct ModelsContent: View {
 
     private func noticeBanner(_ notice: Notice) -> some View {
         Text(notice.text)
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(notice.ok ? Theme.success : Theme.danger)
             .padding(Theme.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -529,7 +529,7 @@ private struct CapabilityCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(cap.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                     if cap.experimental {
                         ExperimentalTag()
@@ -539,19 +539,19 @@ private struct CapabilityCard: View {
                 assignmentLine
                 if let behaviorSummary {
                     Text(behaviorSummary)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(2)
                 }
                 if state == .warn, let reason, !reason.isEmpty {
                     Text(reason)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.warning)
                         .lineLimit(2)
                 }
                 if onTap == nil {
                     Text("Configure this model from the portal.")
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                 }
             }
@@ -580,14 +580,14 @@ private struct CapabilityCard: View {
                 ProviderIcon(providerId: display.providerId, size: 14)
                     .foregroundStyle(Theme.textPrimary)
                 Text(modelLabel(display))
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
         } else {
             Text("Not configured")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textMuted)
         }
     }
@@ -606,7 +606,7 @@ private struct CapabilityCard: View {
 
     private func badge(text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(color)
@@ -779,7 +779,7 @@ struct ModelPickerSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 Text(cap.description)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
 
                 if let behavior = ModelManagement.assignedBehavior(role: cap.role, overview: overview) {
@@ -816,7 +816,7 @@ struct ModelPickerSheet: View {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 16))
                         Text("Add HTTP backend")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(Theme.accent)
@@ -831,7 +831,7 @@ struct ModelPickerSheet: View {
                 if currentlyConfigured {
                     Button(role: .destructive, action: onClear) {
                         Text("Clear assignment")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(Theme.danger)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, Theme.Spacing.sm)
@@ -863,7 +863,7 @@ struct ModelPickerSheet: View {
     private var recentSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Recently used")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             ForEach(Array(usableRecent.enumerated()), id: \.element.entry.id) { index, pair in
                 HStack(spacing: Theme.Spacing.sm) {
@@ -872,20 +872,20 @@ struct ModelPickerSheet: View {
                     BackendBrandIcon(key: pair.entry.providerId, size: 18)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(pair.entry.modelName.isEmpty ? pair.entry.assignment : pair.entry.modelName)
-                            .font(.system(size: 14, weight: .medium))
+                            .scaledFont(size: 14, weight: .medium)
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if !pair.entry.providerLabel.isEmpty {
                             Text(pair.entry.providerLabel)
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textMuted)
                                 .lineLimit(1)
                         }
                     }
                     Spacer(minLength: 0)
                     Button("Use") { pickAndReturn(pair.option) }
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.accent)
                         .disabled(busy)
                 }
@@ -911,12 +911,12 @@ struct ModelPickerSheet: View {
                 .foregroundStyle(Theme.textPrimary)
                 .frame(height: 24)
                 Text(backend.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(backendSubtitle(backend))
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(2)
                     .truncationMode(.middle)
@@ -963,7 +963,7 @@ struct ModelPickerSheet: View {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 12, weight: .semibold))
                         Text("Back")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(Theme.accent)
@@ -982,7 +982,7 @@ struct ModelPickerSheet: View {
                     }
                 } else if options.isEmpty {
                     Text(search.isEmpty ? "No models for this capability." : "No matching models.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                         .padding(.vertical, Theme.Spacing.sm)
                 } else {
@@ -1007,7 +1007,7 @@ struct ModelPickerSheet: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.textMuted)
             TextField("Search models…", text: $search)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -1026,11 +1026,11 @@ struct ModelPickerSheet: View {
     private func customModelField(backendKey: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Or use a custom model id")
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             HStack(spacing: Theme.Spacing.sm) {
                 TextField("model-id served by \(backendKey)", text: $customModel)
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.textPrimary)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -1042,7 +1042,7 @@ struct ModelPickerSheet: View {
                     )
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium))
                 Button("Use") { useCustomModel(backendKey: backendKey) }
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                     .disabled(busy || customModel.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -1072,7 +1072,7 @@ struct ModelPickerSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(row.entry.name)
-                            .font(.system(size: 14, weight: .medium))
+                            .scaledFont(size: 14, weight: .medium)
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1081,7 +1081,7 @@ struct ModelPickerSheet: View {
                         }
                     }
                     Text(localMetaLine(row.entry))
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                 }
@@ -1094,7 +1094,7 @@ struct ModelPickerSheet: View {
             }
             ForEach(row.fitWarnings) { warning in
                 Text("⚠ \(warning.text)")
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.warning)
                     .lineLimit(2)
             }
@@ -1118,24 +1118,24 @@ struct ModelPickerSheet: View {
                     .font(.system(size: 12, weight: .medium).monospacedDigit())
                     .foregroundStyle(Theme.textSecondary)
                 Button("Cancel") { onCancelDownload(row.entry.id) }
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.danger)
                     .disabled(busy)
             }
         case .installed:
             HStack(spacing: 10) {
                 Button("Use") { applyLocal(row) }
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                     .disabled(busy)
                 Button("Remove") { uninstallConfirm = row }
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.danger)
                     .disabled(busy)
             }
         case .available:
             Button("Install") { onInstall(row.entry.id) }
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.accent)
                 .disabled(busy)
         }
@@ -1171,7 +1171,7 @@ struct ModelPickerSheet: View {
 
     private func tag(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .textCase(.uppercase)
             .tracking(0.5)
             .foregroundStyle(color)
@@ -1188,12 +1188,12 @@ struct ModelPickerSheet: View {
                     .foregroundStyle(Theme.textPrimary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
-                        .font(.system(size: 14, weight: .medium))
+                        .scaledFont(size: 14, weight: .medium)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(option.detail)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -1223,10 +1223,10 @@ struct ModelPickerSheet: View {
     private var emptyBackends: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No backends available for this capability.")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
             Text("Add an HTTP backend below, or install a local model, then it will show up here.")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
         }
         .padding(Theme.Spacing.md)

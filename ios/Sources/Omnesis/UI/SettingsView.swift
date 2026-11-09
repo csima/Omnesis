@@ -503,10 +503,10 @@ struct SettingsView: View {
                         .foregroundStyle(Theme.success)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Enable Apple Health")
-                            .font(.system(size: 16, weight: .semibold))
+                            .scaledFont(size: 16, weight: .semibold)
                             .foregroundStyle(Theme.textPrimary)
                         Text("Sync your iPhone's Health data to Omnesis.")
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                             .multilineTextAlignment(.leading)
                     }
@@ -546,7 +546,7 @@ struct SettingsView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.success)
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .scaledFont(size: 10, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
         }
         .padding(.horizontal, 7)
@@ -621,10 +621,10 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Enable Photos")
-                        .font(.system(size: 16, weight: .semibold))
+                        .scaledFont(size: 16, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                     Text("OCR your photo library on-device for private search. No image ever leaves your phone.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .multilineTextAlignment(.leading)
                 }

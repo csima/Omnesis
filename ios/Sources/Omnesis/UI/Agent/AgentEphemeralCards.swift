@@ -190,11 +190,11 @@ private struct AgentInlineHeader<Trailing: View>: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.accent)
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             if let arg = monospaceArg, !arg.isEmpty {
                 Text(arg)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(2)
                     .truncationMode(.tail)
@@ -366,7 +366,7 @@ struct AgentEphemeralSearchCard: View {
         HStack(spacing: 6) {
             SourceIconView(sourceId: ref.sourceId, store: store, size: 11)
             Text(ref.title ?? "Untitled")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -528,7 +528,7 @@ struct AgentEphemeralTrailCard: View {
         HStack(spacing: 6) {
             SourceIconView(sourceId: doc.sourceId, store: store, size: 11)
             Text(doc.title.isEmpty ? "Untitled" : doc.title)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -677,7 +677,7 @@ struct AgentEphemeralDocumentCard: View {
                     HStack(spacing: 4) {
                         SourceIconView(sourceId: ref.sourceId, store: store, size: 11)
                         Text(ref.title ?? "Untitled")
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.textMuted)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -685,7 +685,7 @@ struct AgentEphemeralDocumentCard: View {
                     }
                 } else if let pendingTitle {
                     Text(pendingTitle)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -698,7 +698,7 @@ struct AgentEphemeralDocumentCard: View {
                     slotHeight: 16
                 ) { line in
                     Text(line)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -909,7 +909,7 @@ struct AgentEphemeralSqlCard: View {
                         }
                         if !subjects.isEmpty {
                             Text(subjects.joined(separator: " + "))
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textMuted)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -933,7 +933,7 @@ struct AgentEphemeralSqlCard: View {
             slotHeight: 16
         ) { line in
             Text(line.isEmpty ? " " : line)
-                .font(Theme.monospace(size: 11))
+                .scaledFont(size: 11, design: .monospaced)
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -991,7 +991,7 @@ struct AgentEphemeralSqlCard: View {
             let cells = normalised(row: row)
             ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
                 Text(formatCell(cell))
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1186,13 +1186,13 @@ struct AgentEphemeralPeopleCard: View {
     private func personRow(_ person: AgentPersonSummary) -> some View {
         HStack(spacing: 6) {
             Text(person.displayName)
-                .font(.system(size: 11, weight: .medium))
+                .scaledFont(size: 11, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             if let alias = Self.primaryAlias(for: person), !alias.isEmpty {
                 Text(alias)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1359,7 +1359,7 @@ struct AgentEphemeralUrlLookupCard: View {
             HStack(spacing: 6) {
                 SourceIconView(sourceId: r.sourceId, store: store, size: 11)
                 Text(r.title ?? "Untitled")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1400,7 +1400,7 @@ struct AgentLoopChip: View {
                 Image(systemName: "link")
                     .font(.system(size: 8, weight: .semibold))
                 Text("\(count)")
-                    .font(.system(size: 10, weight: .medium))
+                    .scaledFont(size: 10, weight: .medium)
                     .monospacedDigit()
             }
             .foregroundStyle(Theme.accent)
@@ -1431,7 +1431,7 @@ private struct AgentLoopStatePill: View {
 
     var body: some View {
         Text(state.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .tracking(0.4)
             .foregroundStyle(colors.fg)
             .padding(.horizontal, 5)
@@ -1606,7 +1606,7 @@ struct AgentEphemeralLoopSearchCard: View {
         HStack(spacing: 6) {
             AgentLoopStatePill(state: loop.state)
             Text(loop.title.isEmpty ? "Untitled loop" : loop.title)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -1770,7 +1770,7 @@ struct AgentEphemeralLoopFetchCard: View {
     @ViewBuilder
     private func loopDetail(_ loop: AgentLoopDetail) -> some View {
         Text(loop.title.isEmpty ? "Untitled loop" : loop.title)
-            .font(.system(size: 12, weight: .semibold))
+            .scaledFont(size: 12, weight: .semibold)
             .foregroundStyle(Theme.textPrimary)
             .lineLimit(2)
             .truncationMode(.tail)
@@ -1783,7 +1783,7 @@ struct AgentEphemeralLoopFetchCard: View {
                 slotHeight: 16
             ) { line in
                 Text(line)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1805,7 +1805,7 @@ struct AgentEphemeralLoopFetchCard: View {
                         Image(systemName: "calendar")
                             .font(.system(size: 9))
                         Text("Due \(deadline)")
-                            .font(.system(size: 10))
+                            .scaledFont(size: 10)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -1816,7 +1816,7 @@ struct AgentEphemeralLoopFetchCard: View {
                         Image(systemName: "person.2")
                             .font(.system(size: 9))
                         Text(peopleSummary)
-                            .font(.system(size: 10))
+                            .scaledFont(size: 10)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -1986,7 +1986,7 @@ struct AgentEphemeralActionCard: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(isError ? Theme.warning : Theme.textMuted)
                 Text(line)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(isError ? Theme.warning : Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)

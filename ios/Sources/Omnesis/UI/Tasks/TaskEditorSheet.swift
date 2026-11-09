@@ -48,13 +48,13 @@ struct TaskEditorSheet: View {
                     VStack(alignment: .leading, spacing: 0) {
                         TextField("Title", text: $draft.title, axis: .vertical)
                             .lineLimit(1 ... 4)
-                            .font(.system(size: 17, weight: .semibold))
+                            .scaledFont(size: 17, weight: .semibold)
                             .foregroundStyle(Theme.textPrimary)
                             .padding(.vertical, Theme.Spacing.md)
                         rule
                         TextField("Details", text: $draft.description, axis: .vertical)
                             .lineLimit(2 ... 8)
-                            .font(.system(size: 15))
+                            .scaledFont(size: 15)
                             .foregroundStyle(Theme.textSecondary)
                             .padding(.vertical, Theme.Spacing.md)
                     }

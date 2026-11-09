@@ -67,10 +67,10 @@ struct ResearchWorkspaceView: View {
         HStack(spacing: 7) {
             LivePulse()
             Text("Deep Research")
-                .font(.system(size: 12, weight: .bold))
+                .scaledFont(size: 12, weight: .bold)
                 .foregroundStyle(Theme.accent)
             Text(headerSub)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
             Spacer(minLength: 0)
         }
@@ -89,7 +89,7 @@ struct ResearchWorkspaceView: View {
             HStack(alignment: .center, spacing: 8) {
                 ForEach(panels) { panel in
                     Text(panel.title.isEmpty ? panel.specialist : panel.title)
-                        .font(.system(size: 11, weight: .medium))
+                        .scaledFont(size: 11, weight: .medium)
                         .foregroundStyle(panel.status == "complete" ? Theme.success : Theme.textSecondary)
                         .lineLimit(1)
                         .padding(.horizontal, 8)
@@ -124,7 +124,7 @@ private struct ResearchPanelView: View {
             docs
             if let summary = panel.summary, !summary.isEmpty {
                 Text(summary)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -146,14 +146,14 @@ private struct ResearchPanelView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.accent)
                 Text(panel.specialist)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 statusPill
             }
             Text(panel.task)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -166,7 +166,7 @@ private struct ResearchPanelView: View {
                 ProgressView().scaleEffect(0.5).tint(Theme.accent)
             }
             Text(statusLabel)
-                .font(.system(size: 9, weight: .semibold))
+                .scaledFont(size: 9, weight: .semibold)
                 .foregroundStyle(statusColor)
         }
         .fixedSize()
@@ -196,7 +196,7 @@ private struct ResearchPanelView: View {
         var line = "\(panel.docs.count) \(docNoun) · \(panel.stepCount) \(stepNoun)"
         if panel.tokens > 0 { line += " · \(formatTokenCount(panel.tokens)) tok" }
         return Text(line)
-            .font(Theme.monospace(size: 9))
+            .scaledFont(size: 9, design: .monospaced)
             .foregroundStyle(Theme.textMuted)
     }
 
@@ -204,7 +204,7 @@ private struct ResearchPanelView: View {
     private var docs: some View {
         if panel.docs.isEmpty {
             Text(running ? "Gathering sources…" : "No documents.")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .italic()
                 .foregroundStyle(Theme.textMuted)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,7 +250,7 @@ private struct ResearchDocChipView: View {
             HStack(spacing: 6) {
                 SourceIconView(sourceId: doc.sourceId, store: store, size: 13)
                 Text(doc.title ?? "Untitled")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)

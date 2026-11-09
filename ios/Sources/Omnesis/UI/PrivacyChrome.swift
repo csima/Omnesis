@@ -92,7 +92,7 @@ struct PrivacyChip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .scaledFont(size: 11, weight: .semibold)
             .lineLimit(1)
             .truncationMode(.tail)
             .foregroundStyle(tone.foreground)
@@ -180,7 +180,7 @@ private struct FlowChips: View {
 
     private func chip(_ label: String) -> some View {
         Text(label)
-            .font(.system(size: 11, weight: .medium))
+            .scaledFont(size: 11, weight: .medium)
             .foregroundStyle(Theme.textSecondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -213,7 +213,7 @@ struct PrivacyActorLine: View {
             // the line once rather than twice.
             glyph.accessibilityHidden(true)
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
@@ -340,7 +340,7 @@ struct PrivacyBoundaryLine: View {
         HStack(spacing: Theme.Spacing.sm) {
             rule
             Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
                 .tracking(1.1)
                 .foregroundStyle(Theme.textMuted)
                 // The crossing is one line or it is not a hairline; the rules
@@ -425,7 +425,7 @@ struct PrivacyBanner: View {
 
     var body: some View {
         Label(text, systemImage: tone.symbol)
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(tone.color)
             .padding(Theme.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -455,10 +455,10 @@ struct PrivacyEmptyState: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Text(detail)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -475,7 +475,7 @@ struct PrivacyLoadingRow: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
             ProgressView().controlSize(.small).tint(Theme.accent)
-            Text(label).font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+            Text(label).scaledFont(size: 13).foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, Theme.Spacing.md)
@@ -540,7 +540,7 @@ struct PrivacySpineCrossings: View {
 
     private func block(_ label: String) -> some View {
         Text(label)
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(Theme.textSecondary)
             .padding(Theme.Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -18,15 +18,15 @@ struct PrivacySubscriptionApprovalRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small))
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(externalAgentNarrativeName(approval.integration)) wants a standing watch")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(approval.interpretedCondition.summary)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(2)
                 Text(subscriptionRelativeDate(approval.createdAt))
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
             }
             Spacer(minLength: Theme.Spacing.sm)
@@ -107,14 +107,14 @@ struct PrivacySubscriptionApprovalDetailView: View {
                                 "Request failed: \(GatewayErrorView.classify(actionError).title)",
                                 systemImage: "exclamationmark.triangle"
                             )
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.warning)
                         } else if let loadError {
                             Label(
                                 "Refresh failed: \(GatewayErrorView.classify(loadError).title)",
                                 systemImage: "exclamationmark.triangle"
                             )
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.warning)
                         }
                         if detail.status == "pending" {
@@ -143,7 +143,7 @@ struct PrivacySubscriptionApprovalDetailView: View {
             "Your privacy policy requires approval before this integration can learn that the condition occurred. Documents, titles, people, content, and private evidence stay inside Omnesis.",
             systemImage: "shield.lefthalf.filled"
         )
-        .font(.system(size: 12))
+        .scaledFont(size: 12)
         .foregroundStyle(Theme.warning)
         .padding(Theme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -159,7 +159,7 @@ struct PrivacySubscriptionApprovalDetailView: View {
         -> some View {
         FlatSection(title) {
             Text(text)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Theme.Spacing.md)
@@ -171,7 +171,7 @@ struct PrivacySubscriptionApprovalDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium))
             if let footnote {
                 Text(footnote)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
             }
         }
@@ -202,7 +202,7 @@ struct PrivacySubscriptionApprovalDetailView: View {
                 .foregroundStyle(Theme.textPrimary)
                 .multilineTextAlignment(.trailing)
         }
-        .font(.system(size: 12))
+        .scaledFont(size: 12)
     }
 
     private var actionButtons: some View {

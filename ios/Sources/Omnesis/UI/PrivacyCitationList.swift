@@ -23,14 +23,14 @@ struct PrivacyCitationListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(list.heading)
-                .font(.system(size: 11, weight: .bold))
+                .scaledFont(size: 11, weight: .bold)
                 .textCase(.uppercase)
                 .kerning(0.7)
                 .foregroundStyle(Theme.textMuted)
                 .accessibilityAddTraits(.isHeader)
             ForEach([list.note, list.withheldNote].compactMap { $0 }, id: \.self) { note in
                 Text(note)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -83,7 +83,7 @@ private struct PrivacyCitationRowView: View {
     private var titleText: Text {
         let muted = row.removed || row.title == nil
         let title = Text(row.title ?? "Untitled")
-            .font(.system(size: 13, weight: .semibold))
+            .scaledFont(size: 13, weight: .semibold)
             .italic(row.title == nil)
             .strikethrough(row.titleWithheld)
             .foregroundStyle(muted || row.titleWithheld ? Theme.textMuted : Theme.textPrimary)
@@ -92,7 +92,7 @@ private struct PrivacyCitationRowView: View {
 
     private var metaText: Text {
         let source = Text(store?.sourceLabel(forSourceId: row.sourceType) ?? row.sourceType)
-        let meta = { (text: Text) in text.font(.system(size: 11)).foregroundStyle(Theme.textMuted) }
+        let meta = { (text: Text) in text.scaledFont(size: 11).foregroundStyle(Theme.textMuted) }
         guard let date = row.date else { return meta(source) }
         let line = meta(source + Text(" · ") + Text(date).strikethrough(row.dateWithheld))
         return row.dateWithheld ? line + Text(" ") + withheldTag : line
@@ -100,7 +100,7 @@ private struct PrivacyCitationRowView: View {
 
     private var withheldTag: Text {
         Text("withheld")
-            .font(.system(size: 11, weight: .semibold))
+            .scaledFont(size: 11, weight: .semibold)
             .italic()
             .foregroundStyle(PrivacyTone.kept.foreground)
     }
@@ -140,7 +140,7 @@ private struct PrivacyCitationRowView: View {
 
     private func linkLabel(_ link: PrivacyCitationLink) -> Text {
         let label = Text(link.label.uppercased())
-            .font(.system(size: 10, weight: .bold))
+            .scaledFont(size: 10, weight: .bold)
             .kerning(0.6)
             .foregroundStyle(Theme.textMuted)
         return link.withheld ? label + Text(" ") + withheldTag : label
@@ -171,7 +171,7 @@ private struct PrivacyCitationRowView: View {
 
     private func urlText(_ text: Text) -> some View {
         text
-            .font(Theme.monospace(size: 11))
+            .scaledFont(size: 11, design: .monospaced)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
     }

@@ -180,13 +180,13 @@ struct SourceRecentDocumentsView: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Text(doc.title.isEmpty ? "(untitled)" : doc.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                 metaRow(doc: doc)
                 if let preview = doc.contentPreview, !preview.isEmpty {
                     Text(preview)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(2)
                 }
@@ -206,7 +206,7 @@ struct SourceRecentDocumentsView: View {
         let parts = recentMetaParts(doc: doc)
         if !parts.isEmpty {
             Text(parts.joined(separator: " · "))
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(1)
         }
@@ -392,7 +392,7 @@ struct RecentAnalyticsRowsView: View {
                 "\(table) · \(pagingCountLabel(rows.count, countIsPartial: paging.countIsPartial)) "
                     + "\(rows.count == 1 ? "row" : "rows")"
             )
-            .font(Theme.monospace(size: 11))
+            .scaledFont(size: 11, design: .monospaced)
             .foregroundStyle(Theme.textMuted)
             .lineLimit(1)
         }
@@ -563,11 +563,11 @@ struct SourceRecentPreviewWrapper: View {
                                 SourceIconView(sourceId: doc.sourceId, store: store)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(doc.title)
-                                        .font(.system(size: 14, weight: .semibold))
+                                        .scaledFont(size: 14, weight: .semibold)
                                         .foregroundStyle(Theme.textPrimary)
                                     if let preview = doc.contentPreview {
                                         Text(preview)
-                                            .font(.system(size: 12))
+                                            .scaledFont(size: 12)
                                             .foregroundStyle(Theme.textSecondary)
                                             .lineLimit(2)
                                     }

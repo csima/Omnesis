@@ -475,7 +475,7 @@ private struct MenuRevealPreviewContent: View {
             HStack {
                 Image(systemName: "line.3.horizontal").foregroundStyle(Theme.textPrimary)
                 Spacer()
-                Text("Ask").font(.system(size: 17, weight: .semibold))
+                Text("Ask").scaledFont(size: 17, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Image(systemName: "square.and.pencil").foregroundStyle(Theme.textPrimary)
@@ -499,10 +499,10 @@ private struct MenuRevealPreviewContent: View {
 private struct MenuRevealPreviewMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            Text("Omnesis").font(.system(size: 22, weight: .semibold))
+            Text("Omnesis").scaledFont(size: 22, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             ForEach(["Search", "Tasks", "Sources", "People"], id: \.self) { label in
-                Text(label).font(.system(size: 18)).foregroundStyle(Theme.textPrimary)
+                Text(label).scaledFont(size: 18).foregroundStyle(Theme.textPrimary)
             }
             Spacer()
         }

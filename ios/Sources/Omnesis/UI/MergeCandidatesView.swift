@@ -388,11 +388,11 @@ struct MergeCandidatesList: View {
     private func statChip(value: Int, label: String, color: Color) -> some View {
         HStack(spacing: 4) {
             Text("\(value)")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(color)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textMuted)
         }
     }
@@ -410,7 +410,7 @@ struct MergeCandidatesList: View {
 
     private func noticeBanner(_ notice: Notice) -> some View {
         Text(notice.text)
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(notice.ok ? Theme.success : Theme.danger)
             .padding(Theme.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -434,16 +434,16 @@ struct MergeCandidatesList: View {
                 PersonAvatar(name: cluster.title, isSelf: false, size: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cluster.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                     HStack(spacing: 8) {
                         Text("\(cluster.members.count) \(cluster.members.count == 1 ? "entity" : "entities")")
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.textMuted)
                         if isPending {
                             Text("\(checkedCount) of \(cluster.members.count) selected")
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.accent)
                         }
                     }
@@ -453,7 +453,7 @@ struct MergeCandidatesList: View {
                     Button(allChecked ? "Uncheck all" : "Check all") {
                         toggleAll(cluster, allChecked: allChecked)
                     }
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .scaledFont(size: 11.5, weight: .semibold)
                     .foregroundStyle(Theme.textSecondary)
                     .disabled(isBusy)
                 }
@@ -517,7 +517,7 @@ struct MergeCandidatesList: View {
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text(member.canonicalName.isEmpty ? "(unnamed)" : member.canonicalName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(checked ? Theme.textPrimary : Theme.textMuted)
                     .lineLimit(1)
                 FlowLayout(spacing: 10) {
@@ -528,7 +528,7 @@ struct MergeCandidatesList: View {
                         Button(expanded ? "show less" : "+\(hidden) more") {
                             toggleAttrs(key)
                         }
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(size: 11, weight: .semibold)
                         .foregroundStyle(Theme.accent)
                     }
                 }
@@ -541,12 +541,12 @@ struct MergeCandidatesList: View {
     private func attrToken(_ attr: MergeRuleSide) -> some View {
         HStack(spacing: 5) {
             Text(attr.aliasType)
-                .font(.system(size: 9, weight: .semibold))
+                .scaledFont(size: 9, weight: .semibold)
                 .textCase(.uppercase)
                 .tracking(0.5)
                 .foregroundStyle(Theme.textMuted)
             Text(attr.alias)
-                .font(Theme.monospace(size: 11))
+                .scaledFont(size: 11, design: .monospaced)
                 .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -557,7 +557,7 @@ struct MergeCandidatesList: View {
                 runMerge(cluster)
             } label: {
                 Text("Merge \(checkedCount)")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -568,7 +568,7 @@ struct MergeCandidatesList: View {
                 runDismiss(cluster)
             } label: {
                 Text("Dismiss")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)

@@ -35,7 +35,7 @@ struct AgentSubAgentCard: View {
                     .fixedSize()
                     .accessibilityHidden(true)
                 Text(card.title.isEmpty ? card.specialist : card.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                     .lineLimit(1)
                     .layoutPriority(1)
@@ -45,25 +45,25 @@ struct AgentSubAgentCard: View {
                         .accessibilityHidden(true)
                 }
                 Text(statusLabel)
-                    .font(.system(size: 10, weight: .medium))
+                    .scaledFont(size: 10, weight: .medium)
                     .foregroundStyle(statusColor)
                     .fixedSize()
                 Text("\(formatTokenCount(card.tokens)) tok")
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .fixedSize()
             }
 
             if let failureDetail {
                 Text(failureDetail)
-                    .font(.system(size: 10, weight: .medium))
+                    .scaledFont(size: 10, weight: .medium)
                     .foregroundStyle(Theme.danger)
                     .lineLimit(2)
             }
 
             if let failureCause {
                 Text(failureCause)
-                    .font(Theme.monospace(size: 9))
+                    .scaledFont(size: 9, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(2)
                     .textSelection(.enabled)

@@ -84,7 +84,7 @@ struct AgentUnknownPartNotice: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textMuted)
             Text("Unknown \(label) (\(kind)) — update the app to view.")
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(2)
                 .truncationMode(.tail)
@@ -117,7 +117,7 @@ struct AgentEventTrailSummary: View {
         let noun = eventCount == 1 ? "event" : "events"
         HStack(spacing: 6) {
             Text("trace_connections · \(eventCount) \(noun)")
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
             if truncated {
                 Text("(truncated)")
@@ -168,7 +168,7 @@ struct AgentToolResultErrorView: View {
 
             if expanded, multi {
                 Text(message)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.danger.opacity(0.95))
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
@@ -199,11 +199,11 @@ struct AgentToolResultErrorView: View {
     private func header(first: String, multi: Bool) -> some View {
         HStack(spacing: 8) {
             Text(code)
-                .font(Theme.monospace(size: 11))
+                .scaledFont(size: 11, design: .monospaced)
                 .foregroundStyle(Theme.danger)
                 .layoutPriority(1)
             Text(first)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.danger)
                 .lineLimit(1)
                 .truncationMode(.tail)

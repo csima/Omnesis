@@ -241,7 +241,7 @@ struct MergeRulesList: View {
         return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             if paging.countIsPartial {
                 Text("LOADED RESULTS")
-                    .font(.system(size: 9, weight: .semibold))
+                    .scaledFont(size: 9, weight: .semibold)
                     .tracking(0.5)
                     .foregroundStyle(Theme.textMuted)
             }
@@ -258,11 +258,11 @@ struct MergeRulesList: View {
     private func statChip(value: Int, label: String) -> some View {
         HStack(spacing: 4) {
             Text("\(value)")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textMuted)
         }
     }
@@ -440,16 +440,16 @@ struct MergeIdentityCard: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text(identity.name)
-                                .font(.system(size: 14, weight: .semibold))
+                                .scaledFont(size: 14, weight: .semibold)
                                 .foregroundStyle(identity.person == nil ? Theme.textSecondary : Theme.accent)
                                 .lineLimit(1)
                             Text("\(identity.sources.count) \(identity.sources.count == 1 ? "rule" : "rules")")
-                                .font(.system(size: 10.5))
+                                .scaledFont(size: 10.5)
                                 .foregroundStyle(Theme.textMuted)
                         }
                         if let email = identity.canonicalEmail {
                             Text(email)
-                                .font(Theme.monospace(size: 11))
+                                .scaledFont(size: 11, design: .monospaced)
                                 .foregroundStyle(Theme.textSecondary)
                                 .lineLimit(1)
                         }
@@ -457,7 +457,7 @@ struct MergeIdentityCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let when = identity.latest.flatMap({ formatTimeAgo($0) }) {
                         Text(when)
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.textMuted)
                     }
                 }
@@ -486,22 +486,22 @@ struct MergeIdentityCard: View {
     private func sourceRow(_ source: MergeIdentity.Source) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text("↳")
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textMuted)
             VStack(alignment: .leading, spacing: 1) {
                 Text(source.alias)
-                    .font(Theme.monospace(size: 11.5))
+                    .scaledFont(size: 11.5, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                 if let name = source.name {
                     Text(name)
-                        .font(.system(size: 10.5))
+                        .scaledFont(size: 10.5)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                 }
                 if let reason = source.reason {
                     Text(reason)
-                        .font(.system(size: 10.5))
+                        .scaledFont(size: 10.5)
                         .italic()
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(2)
@@ -534,7 +534,7 @@ struct MergeSearchField: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.textMuted)
             TextField(placeholder, text: $text)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textPrimary)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()

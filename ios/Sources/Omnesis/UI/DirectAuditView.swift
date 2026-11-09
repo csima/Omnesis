@@ -37,26 +37,26 @@ struct DirectAuditSessionRow: View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(directAuditAgentName(session))
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 HStack(spacing: Theme.Spacing.xs) {
                     Text(directAuditSessionLabel(session))
-                        .font(.system(size: 12, weight: .medium))
+                        .scaledFont(size: 12, weight: .medium)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Text("·")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                         .accessibilityHidden(true)
                     Text(directAuditCallCountLabel(session.eventCount))
-                        .font(.system(size: 12, weight: .medium))
+                        .scaledFont(size: 12, weight: .medium)
                         .foregroundStyle(Theme.textSecondary)
                     if directAuditSessionIsHeuristic(session) {
                         Text("heuristic")
-                            .font(.system(size: 11, weight: .medium))
+                            .scaledFont(size: 11, weight: .medium)
                             .foregroundStyle(Theme.textMuted)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -71,7 +71,7 @@ struct DirectAuditSessionRow: View {
             }
             Spacer(minLength: 0)
             Text(time)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .monospacedDigit()
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(1)
@@ -134,7 +134,7 @@ struct DirectAuditPane: View {
                     "Raw reads by external agents using Direct tools — not privacy reviewed. "
                         + "Anything an agent saw here left the machine as-is."
                 )
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 content
@@ -240,7 +240,7 @@ struct DirectTranscriptDayHeading: View {
 
     var body: some View {
         Text(heading)
-            .font(.system(size: 12, weight: .medium))
+            .scaledFont(size: 12, weight: .medium)
             .foregroundStyle(Theme.textMuted)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, Theme.Spacing.md)
@@ -286,7 +286,7 @@ struct DirectTranscriptEventRow: View {
                     }
                 } else {
                     Text("No result recorded.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                 }
             } else {
@@ -472,7 +472,7 @@ struct DirectTranscriptView: View {
                             // capped session shows the first page, not the
                             // latest calls.
                             Text("Showing the first \(directEventLimit) calls.")
-                                .font(.system(size: 12))
+                                .scaledFont(size: 12)
                                 .foregroundStyle(Theme.textMuted)
                                 .padding(.top, Theme.Spacing.md)
                         }
@@ -488,16 +488,16 @@ struct DirectTranscriptView: View {
         if let session {
             VStack(alignment: .leading, spacing: 2) {
                 Text(directAuditSessionLabel(session))
-                    .font(.system(size: 17, weight: .semibold))
+                    .scaledFont(size: 17, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Text("\(directAuditAgentName(session)) · \(directAuditCallCountLabel(session.eventCount))")
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
             }
             .padding(.bottom, Theme.Spacing.md)
         } else if !events.isEmpty {
             Text(directAuditCallCountLabel(events.count))
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.bottom, Theme.Spacing.md)
         }

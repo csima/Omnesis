@@ -90,7 +90,7 @@ private struct PendingNoteDiagnosticRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text(note.text)
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(8)
 
@@ -107,7 +107,7 @@ private struct PendingNoteDiagnosticRow: View {
                     detail("Delivery", "Waiting for retry; no diagnostics from this app version")
                 }
                 Text("Queue ID \(note.id)")
-                    .font(.system(size: 10, design: .monospaced))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)

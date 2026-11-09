@@ -163,7 +163,7 @@ struct PrivacyExchangeDetailView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             PrivacyExchangeOutcomeChip(exchange: exchange)
             Text(externalAgentNarrativeName(exchange.externalAgent))
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
         }
     }

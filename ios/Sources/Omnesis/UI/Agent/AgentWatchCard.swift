@@ -71,7 +71,7 @@ struct AgentWatchCard: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.textMuted)
             Text("Setting up watch…")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textMuted)
             Spacer(minLength: 0)
         }
@@ -96,17 +96,17 @@ struct AgentWatchCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(verb)
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.textPrimary)
                     Text(name)
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.accent)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
                 if let summary, !summary.isEmpty {
                     Text(summary)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(2)
                 }
@@ -189,10 +189,10 @@ struct AgentToolErrorCard: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(code)
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(size: 11, weight: .semibold)
                         .foregroundStyle(Theme.danger)
                     Text(first)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -207,7 +207,7 @@ struct AgentToolErrorCard: View {
             .buttonStyle(.plain)
             if expanded, hasMore {
                 Text(message)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
                     .textSelection(.enabled)
             }

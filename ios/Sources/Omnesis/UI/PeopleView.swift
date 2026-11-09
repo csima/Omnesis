@@ -311,13 +311,13 @@ struct PersonRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(person.canonicalName.isEmpty ? "(no name)" : person.canonicalName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if person.isSelf {
                         Text("(self)")
-                            .font(.system(size: 11, weight: .medium))
+                            .scaledFont(size: 11, weight: .medium)
                             .foregroundStyle(Theme.success)
                             .fixedSize()
                     }
@@ -332,11 +332,11 @@ struct PersonRow: View {
             }
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(person.documentCount)")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .monospacedDigit()
                 Text("docs")
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
             }
             .layoutPriority(1)
@@ -347,7 +347,7 @@ struct PersonRow: View {
         HStack(spacing: 6) {
             if person.aliasCount > 0 {
                 Text("\(person.aliasCount) aliases")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
             if let lastSeen = formatTimeAgo(person.lastSeen) {
@@ -355,7 +355,7 @@ struct PersonRow: View {
                     Text("·").foregroundStyle(Theme.textMuted)
                 }
                 Text("seen \(lastSeen)")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -461,7 +461,7 @@ struct MergeShortcutPill: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                     Text("\(count)")
-                        .font(.system(size: 22, weight: .bold))
+                        .scaledFont(size: 22, weight: .bold)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
@@ -471,7 +471,7 @@ struct MergeShortcutPill: View {
                         .foregroundStyle(Theme.textMuted)
                 }
                 Text(label)
-                    .font(.system(size: 12, weight: .medium))
+                    .scaledFont(size: 12, weight: .medium)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
             }

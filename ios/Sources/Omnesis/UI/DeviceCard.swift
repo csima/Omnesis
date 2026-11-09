@@ -89,7 +89,7 @@ struct DeviceCard: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.danger)
             Text(text)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.danger)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -119,7 +119,7 @@ struct DeviceCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(device.name)
-                            .font(.system(size: 15, weight: .semibold))
+                            .scaledFont(size: 15, weight: .semibold)
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
                         if isThis {
@@ -131,16 +131,16 @@ struct DeviceCard: View {
                     }
                     HStack(spacing: 6) {
                         Text(DeviceKindMeta.label(device.kind))
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.textMuted)
                         if let integration = device.capabilities?.agentIntegration {
                             Text("· \(agentHarnessLabel(integration.harness))")
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textMuted)
                                 .lineLimit(1)
                         } else if let host = device.capabilities?.hostname, !host.isEmpty {
                             Text("· \(host)")
-                                .font(.system(size: 11, design: .monospaced))
+                                .scaledFont(size: 11, design: .monospaced)
                                 .foregroundStyle(Theme.textMuted)
                                 .lineLimit(1)
                         }
@@ -199,7 +199,7 @@ struct DeviceCard: View {
 
     private var thisDeviceBadge: some View {
         Text("This device")
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .tracking(0.3)
             .textCase(.uppercase)
             .foregroundStyle(Theme.accent)
@@ -212,7 +212,7 @@ struct DeviceCard: View {
 
     private var revokedBadge: some View {
         Text("Revoked")
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(size: 9, weight: .semibold)
             .tracking(0.3)
             .textCase(.uppercase)
             .foregroundStyle(Theme.danger)
@@ -232,7 +232,7 @@ struct DeviceCard: View {
                 .fill(activeNow ? Theme.success : Theme.textMuted)
                 .frame(width: 6, height: 6)
             Text(DeviceGrouping.statusLine(device, isCurrent: isThis))
-                .font(.system(size: 11, weight: .medium))
+                .scaledFont(size: 11, weight: .medium)
                 .foregroundStyle(activeNow ? Theme.success : Theme.textMuted)
                 .lineLimit(1)
         }
@@ -243,7 +243,7 @@ struct DeviceCard: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             timesRow
             Text(device.id)
-                .font(.system(size: 11, design: .monospaced))
+                .scaledFont(size: 11, design: .monospaced)
                 .foregroundStyle(Theme.textMuted)
                 .textSelection(.enabled)
                 .lineLimit(1)
@@ -251,11 +251,11 @@ struct DeviceCard: View {
             if let tokens {
                 if tokens.isEmpty {
                     Text("No tokens")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                 } else {
                     Text("CREDENTIALS")
-                        .font(.system(size: 10, weight: .semibold))
+                        .scaledFont(size: 10, weight: .semibold)
                         .tracking(0.6)
                         .foregroundStyle(Theme.textMuted)
                     ForEach(tokens) { token in
@@ -272,7 +272,7 @@ struct DeviceCard: View {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text("Loading tokens…")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                 }
             }
@@ -284,8 +284,8 @@ struct DeviceCard: View {
     private var cliFootnote: some View {
         (Text("Extra credentials are issued from the CLI: ")
             + Text("omnesis tokens create --device <device> --scopes …")
-            .font(.system(size: 10, design: .monospaced)))
-            .font(.system(size: 10))
+            .scaledFont(size: 10, design: .monospaced))
+            .scaledFont(size: 10)
             .foregroundStyle(Theme.textMuted)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, Theme.Spacing.xs)
@@ -305,10 +305,10 @@ struct DeviceCard: View {
     private func metaPair(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
-                .font(.system(size: 10))
+                .scaledFont(size: 10)
                 .foregroundStyle(Theme.textMuted)
             Text(value)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
         }
     }
