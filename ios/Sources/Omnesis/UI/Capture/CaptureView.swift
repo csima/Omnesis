@@ -47,11 +47,11 @@ struct CaptureView: View {
     @Environment(AppStore.self) var store
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openAgentConversation) private var openConversation
-    @Environment(\.foldHinge) private var foldHinge
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.foldHinge) var foldHinge
+    @Environment(\.dynamicTypeSize) var dynamicTypeSize
     /// This surface's frame in window coordinates, so its panes can be laid
     /// either side of the display's crease (see `arrangement`).
-    @State private var frameInWindow: CGRect = .zero
+    @State var frameInWindow: CGRect = .zero
 
     /// Attribution slug for the entry point that opened the surface.
     let surface: NoteSurface
@@ -152,310 +152,133 @@ struct CaptureView: View {
 
     var body: some View {
         arrangedContent
-        // Recede behind the confirmation card once the note is on its way.
-        .opacity(phase == .capturing || phase == .saving ? 1 : 0.35)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onGeometryChange(for: CGRect.self) { proxy in
-            proxy.frame(in: .global)
-        } action: { frame in
-            frameInWindow = frame
-        }
-        // Keep the backdrop outside layout so it cannot push actions offscreen.
-        // The same wash the agent landing screen sits on, with the halo
-        // centred on the mic — this surface is its sibling: one calm screen
-        // with a single glowing subject in the middle.
-        .background(LandingBackdrop(focusX: haloFocus.x, focusY: haloFocus.y))
-        .overlay {
-            if case .done(let outcome) = phase {
-                confirmationOverlay(outcome)
+            // Recede behind the confirmation card once the note is on its way.
+            .opacity(phase == .capturing || phase == .saving ? 1 : 0.35)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { frame in
+                frameInWindow = frame
             }
-        }
-        .omnesisColorScheme()
-        // A downward swipe discards; the threshold keeps editor scrolling distinct.
-        .gesture(
-            DragGesture(minimumDistance: 30)
-                .onEnded { value in
-                    if value.translation.height > 120,
-                       value.translation.height > abs(value.translation.width) * 2 {
-                        cancel()
-                    }
+            // Keep the backdrop outside layout so it cannot push actions offscreen.
+            // The same wash the agent landing screen sits on, with the halo
+            // centred on the mic — this surface is its sibling: one calm screen
+            // with a single glowing subject in the middle.
+            .background(LandingBackdrop(focusX: haloFocus.x, focusY: haloFocus.y))
+            .overlay {
+                if case .done(let outcome) = phase {
+                    confirmationOverlay(outcome)
                 }
-        )
-        .confirmationDialog(
-            unified ? "Discard this input?" : "Discard this note?",
-            isPresented: $confirmDiscard,
-            titleVisibility: .visible
-        ) {
-            Button("Discard", role: .destructive) {
+            }
+            .omnesisColorScheme()
+            // A downward swipe discards; the threshold keeps editor scrolling distinct.
+            .gesture(
+                DragGesture(minimumDistance: 30)
+                    .onEnded { value in
+                        if value.translation.height > 120,
+                           value.translation.height > abs(value.translation.width) * 2 {
+                            cancel()
+                        }
+                    }
+            )
+            .confirmationDialog(
+                unified ? "Discard this input?" : "Discard this note?",
+                isPresented: $confirmDiscard,
+                titleVisibility: .visible
+            ) {
+                Button("Discard", role: .destructive) {
+                    speech.cancel()
+                    discardRecording()
+                    close()
+                }
+                Button("Keep editing", role: .cancel) {}
+            }
+            .sheet(isPresented: $showNoteHistory) {
+                NotesHistoryScreen(
+                    model: noteHistoryModel(pairing: store.pairing),
+                    menuOpen: .constant(false),
+                    onClose: { showNoteHistory = false },
+                    historyRevision: store.notes.historyRevision
+                )
+                .environment(\.openAgentConversation, openConversation.map { open in
+                    { id in
+                        showNoteHistory = false
+                        close()
+                        open(id)
+                    }
+                })
+            }
+            .onAppear {
+                if voiceNoteLimit == nil, completion == nil, taskContext == nil { voiceNoteLimit = store.voiceNoteAudioLimit }
+                // Listen immediately, requesting permission on the first capture.
+                if !suspended, phase == .capturing, speech.state == .idle, !voiceNote.hasRecording,
+                   DictationTranscript.canStartAutomatically(text: text, taskContext: taskContext) {
+                    dictationBase = text
+                    prepareRecording()
+                    speech.requestPermissionsAndStart()
+                }
+            }
+            .onChange(of: suspended) { _, value in
+                if value {
+                    showNoteHistory = false
+                    confirmDiscard = false
+                    suspendCapture()
+                }
+            }
+            .onDisappear {
+                submissionTask?.cancel()
+                // A dismissed capture must release its audio session.
                 speech.cancel()
                 discardRecording()
-                close()
             }
-            Button("Keep editing", role: .cancel) {}
-        }
-        .sheet(isPresented: $showNoteHistory) {
-            NotesHistoryScreen(
-                model: noteHistoryModel(pairing: store.pairing),
-                menuOpen: .constant(false),
-                onClose: { showNoteHistory = false },
-                historyRevision: store.notes.historyRevision
-            )
-            .environment(\.openAgentConversation, openConversation.map { open in
-                { id in
-                    showNoteHistory = false
-                    close()
-                    open(id)
+            .onChange(of: text) {
+                saveError = nil
+            }
+            .onChange(of: speech.transcript) { _, newValue in
+                if isVoiceNote {
+                    // Every run in a voice-note capture is part of the voice
+                    // note, and keeps the phone's transcript out of sight.
+                    if speech.isListening || speech.state == .finishing { voiceNote.heard(newValue) }
+                } else if speech.isListening {
+                    text = DictationTranscript.compose(base: dictationBase, partial: newValue)
                 }
-            })
-        }
-        .onAppear {
-            if voiceNoteLimit == nil, completion == nil, taskContext == nil { voiceNoteLimit = store.voiceNoteAudioLimit }
-            // Listen immediately, requesting permission on the first capture.
-            if !suspended, phase == .capturing, speech.state == .idle, !voiceNote.hasRecording,
-               DictationTranscript.canStartAutomatically(text: text, taskContext: taskContext) {
-                dictationBase = text
-                prepareRecording()
-                speech.requestPermissionsAndStart()
             }
-        }
-        .onChange(of: suspended) { _, value in
-            if value {
-                showNoteHistory = false
-                confirmDiscard = false
-                suspendCapture()
-            }
-        }
-        .onDisappear {
-            submissionTask?.cancel()
-            // A dismissed capture must release its audio session.
-            speech.cancel()
-            discardRecording()
-        }
-        .onChange(of: text) {
-            saveError = nil
-        }
-        .onChange(of: speech.transcript) { _, newValue in
-            if isVoiceNote {
-                // Every run in a voice-note capture is part of the voice
-                // note, and keeps the phone's transcript out of sight.
-                if speech.isListening || speech.state == .finishing { voiceNote.heard(newValue) }
-            } else if speech.isListening {
-                text = DictationTranscript.compose(base: dictationBase, partial: newValue)
-            }
-        }
-        .onChange(of: speech.state) { oldValue, newValue in
-            if showNoteHistory, newValue == .listening {
-                stopDictation()
-                return
-            }
-            if isVoiceNote {
-                if newValue == .listening { voiceNote.startRun(at: Date()) }
-                if oldValue == .listening { voiceNote.stopRun(at: Date()) }
-                if newValue == .unavailable { keyboardFocused = true }
-                return
-            }
-            // Commit a final transcript only when it cannot overwrite an edit.
-            // Hand the user the keyboard when speech is unavailable.
-            if oldValue == .listening || oldValue == .finishing,
-               newValue == .idle {
-                if !speech.transcript.isEmpty, textAtStop == nil || text == textAtStop {
-                    text = DictationTranscript.compose(base: dictationBase, partial: speech.transcript)
+            .onChange(of: speech.state) { oldValue, newValue in
+                if showNoteHistory, newValue == .listening {
+                    stopDictation()
+                    return
                 }
-                textAtStop = nil
-            }
-            if newValue == .unavailable {
-                keyboardFocused = true
-            }
-        }
-    }
-
-    // MARK: - Arrangement
-
-    /// How the surface is laid out on this display.
-    ///
-    /// On a phone, and wherever this view does not span the display's crease,
-    /// it is one column with the mic in the middle. On a roomy display that
-    /// can fold — a foldable's inner display, which also covers an iPad — the
-    /// middle is where the crease runs, so the mic and the actions move to
-    /// either side of it instead: beside the note when the crease runs top to
-    /// bottom, below it when the crease runs side to side, so they rest on
-    /// the lower half a half-folded phone stands on. At an accessibility text
-    /// size the stacked halves are too short for the note, so that case keeps
-    /// the column: legible text outranks keeping off the crease.
-    enum Arrangement: Equatable {
-        case column
-        /// Panes either side of a crease running top to bottom; the width of
-        /// the leading one, measured from this view's leading edge.
-        case sideBySide(leading: CGFloat)
-        /// Panes either side of a crease running side to side; the heights
-        /// of the upper and lower ones.
-        case stacked(top: CGFloat, bottom: CGFloat)
-    }
-
-    static let minimumSidePane: CGFloat = 280
-    static let minimumStackedPane: CGFloat = 240
-
-    var arrangement: Arrangement {
-        Self.arrangement(
-            hinge: foldHinge,
-            frameInWindow: frameInWindow,
-            largeText: dynamicTypeSize.isAccessibilitySize
-        )
-    }
-
-    static func arrangement(
-        hinge: AdaptiveLayout.Hinge?,
-        frameInWindow frame: CGRect,
-        largeText: Bool = false
-    ) -> Arrangement {
-        guard frame.width > 0, frame.height > 0 else { return .column }
-        switch hinge {
-        case .vertical(let x):
-            guard let panes = AdaptiveLayout.panes(
-                length: frame.width, crease: x - frame.minX, minimumPane: minimumSidePane
-            ) else { return .column }
-            return .sideBySide(leading: panes.leading)
-        case .horizontal(let y):
-            guard !largeText, let panes = AdaptiveLayout.panes(
-                length: frame.height, crease: y - frame.minY, minimumPane: minimumStackedPane
-            ) else { return .column }
-            return .stacked(top: panes.leading, bottom: panes.trailing)
-        case nil:
-            return .column
-        }
-    }
-
-    /// The halo sits behind the mic wherever the arrangement puts it.
-    private var haloFocus: CGPoint {
-        guard frameInWindow.width > 0, frameInWindow.height > 0 else {
-            return CGPoint(x: 0.5, y: Self.micCentreY)
-        }
-        switch arrangement {
-        case .column:
-            return CGPoint(x: 0.5, y: Self.micCentreY)
-        case .sideBySide(let leading):
-            return CGPoint(x: leading / 2 / frameInWindow.width, y: 0.5)
-        case .stacked(let top, let bottom):
-            let gap = frameInWindow.height - top - bottom
-            return CGPoint(x: 0.5, y: (top + gap + bottom * 0.4) / frameInWindow.height)
-        }
-    }
-
-    @ViewBuilder private var arrangedContent: some View {
-        switch arrangement {
-        case .column:
-            columnLayout
-        case .sideBySide(let leading):
-            sideBySideLayout(leading: leading)
-        case .stacked(let top, let bottom):
-            stackedLayout(top: top, bottom: bottom)
-        }
-    }
-
-    private var columnLayout: some View {
-        VStack(spacing: 0) {
-            header
-            notices
-            Spacer(minLength: Theme.Spacing.lg)
-            micCluster
-            Spacer(minLength: Theme.Spacing.lg)
-            entryArea
-            saveErrorLine
-            actions
-        }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.bottom, Theme.Spacing.lg)
-    }
-
-    /// The mic in the middle of the leading pane, the note and its actions in
-    /// the trailing one, and the crease between them left clear.
-    private func sideBySideLayout(leading: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            header
-                .padding(.horizontal, Theme.Spacing.lg)
-            HStack(spacing: AdaptiveLayout.hingeClearance * 2) {
-                VStack(spacing: 0) {
-                    notices
-                    Spacer(minLength: Theme.Spacing.lg)
-                    micCluster
-                    Spacer(minLength: Theme.Spacing.lg)
+                if isVoiceNote {
+                    if newValue == .listening { voiceNote.startRun(at: Date()) }
+                    if oldValue == .listening { voiceNote.stopRun(at: Date()) }
+                    if newValue == .unavailable { keyboardFocused = true }
+                    return
                 }
-                .padding(.leading, Theme.Spacing.lg)
-                .frame(width: leading)
-                VStack(spacing: 0) {
-                    Spacer(minLength: Theme.Spacing.lg)
-                    entryArea
-                    saveErrorLine
-                    actions
+                // Commit a final transcript only when it cannot overwrite an edit.
+                // Hand the user the keyboard when speech is unavailable.
+                if oldValue == .listening || oldValue == .finishing,
+                   newValue == .idle {
+                    if !speech.transcript.isEmpty, textAtStop == nil || text == textAtStop {
+                        text = DictationTranscript.compose(base: dictationBase, partial: speech.transcript)
+                    }
+                    textAtStop = nil
                 }
-                .padding(.trailing, Theme.Spacing.lg)
-                .frame(maxWidth: .infinity)
+                if newValue == .unavailable {
+                    keyboardFocused = true
+                }
             }
-            .padding(.bottom, Theme.Spacing.lg)
-        }
-    }
-
-    /// The note above the crease; the mic and the actions below it.
-    private func stackedLayout(top: CGFloat, bottom: CGFloat) -> some View {
-        VStack(spacing: AdaptiveLayout.hingeClearance * 2) {
-            VStack(spacing: 0) {
-                header
-                notices
-                Spacer(minLength: Theme.Spacing.md)
-                entryArea
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: top, alignment: .top)
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                micCluster
-                Spacer(minLength: Theme.Spacing.lg)
-                saveErrorLine
-                actions
-            }
-            .padding(.bottom, Theme.Spacing.lg)
-            .frame(maxWidth: .infinity)
-            .frame(height: bottom)
-        }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    @ViewBuilder private var notices: some View {
-        if completion == nil { NoteProcessingNotice() }
-        if let subject = completion?.subject ?? taskContext?.title {
-            Text(subject)
-                .accessibilityLabel(taskContext == nil ? subject : "Task context: \(subject)")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .padding(.top, Theme.Spacing.md)
-        }
-    }
-
-    @ViewBuilder private var entryArea: some View {
-        if isVoiceNote, voiceNote.hasRecording {
-            voiceNoteCard
-        } else {
-            transcriptArea
-        }
-    }
-
-    @ViewBuilder private var actions: some View {
-        if unified { unifiedButtons } else { doneButton }
     }
 
     // MARK: - Pieces
 
     /// Where the mic's centre sits, as a fraction of the screen's height. The
     /// halo behind it is anchored to the same fraction.
-    private static let micCentreY: CGFloat = 0.43
+    static let micCentreY: CGFloat = 0.43
 
     /// The mic as this screen's subject — lit and breathing while the recogniser
     /// is hot, the way the Omnesis mark is lit on the agent landing screen.
     /// Tappable to stop and restart. Under it, one line of state copy.
-    private var micCluster: some View {
+    var micCluster: some View {
         VStack(spacing: Theme.Spacing.md) {
             Button {
                 micTapped()
@@ -503,7 +326,7 @@ struct CaptureView: View {
     /// Live transcript / manual entry. Editable whenever speech is
     /// stopped; while listening the recognizer owns the text, so a tap
     /// stops listening first and then hands over the keyboard.
-    private var transcriptArea: some View {
+    var transcriptArea: some View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty {
                 Text(speech.isListening ? "Start speaking…" : placeholder)
@@ -553,7 +376,7 @@ struct CaptureView: View {
     /// Inline deterministic-rejection message (the note itself was
     /// refused). The text stays in the editor above for fixing.
     @ViewBuilder
-    private var saveErrorLine: some View {
+    var saveErrorLine: some View {
         if let saveError {
             Label(saveError, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
@@ -711,7 +534,7 @@ extension CaptureView {
         }
     }
 
-    private var header: some View {
+    var header: some View {
         HStack {
             Button("Cancel") { cancel() }
                 .disabled(phase == .saving)
@@ -742,7 +565,7 @@ extension CaptureView {
         .padding(.top, Theme.Spacing.sm)
     }
 
-    private var doneButton: some View {
+    var doneButton: some View {
         Button {
             Task { await save() }
         } label: {
@@ -778,7 +601,7 @@ extension CaptureView {
         return text.isEmpty ? "Tap the mic to record, or just type" : "Typing a note — clear it to record instead"
     }
 
-    fileprivate var voiceNoteCard: some View {
+    var voiceNoteCard: some View {
         CaptureVoiceNoteCard(state: voiceNote, discardDisabled: phase != .capturing, unified: unified) {
             discardVoiceNote()
         }

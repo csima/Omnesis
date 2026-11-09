@@ -2103,7 +2103,7 @@ struct AgentComposer: View {
 // spans the full width, no sticky-tab gutter.
 @available(iOS 17.0, *)
 #Preview("AgentView — iPad landscape split (closed)") {
-    return AgentView(
+    AgentView(
         menuOpen: .constant(false),
         previewLayoutMode: .sidePanel,
         previewCitationsOpen: false,
