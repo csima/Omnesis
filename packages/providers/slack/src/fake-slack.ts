@@ -24,6 +24,7 @@ export class FakeSlack {
   forbidden = new Set<string>();
   failing = new Set<string>();
   authError = false;
+  restrictedUser = false;
   rateLimit = false;
   rateLimitWhen?: (method: string, params: URLSearchParams) => boolean;
   outage = false;
@@ -69,7 +70,10 @@ export class FakeSlack {
           profile: { display_name: "River Example", email: "river@example.com" },
         },
       ]);
-    if (method === "usergroups.list") data.usergroups = [{ id: "SEXAMPLE", users: ["USELF00"] }];
+    if (method === "usergroups.list") {
+      if (this.restrictedUser) return Response.json({ ok: false, error: "user_is_restricted" });
+      data.usergroups = [{ id: "SEXAMPLE", users: ["USELF00"] }];
+    }
     if (method === "users.conversations") data.channels = page(this.conversations);
     if (method === "conversations.info")
       data.channel = {

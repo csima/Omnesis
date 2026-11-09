@@ -238,7 +238,13 @@ export class SlackSource {
         active,
         signal,
       );
-      const groups = await client.call("usergroups.list", { include_users: "true" }, signal);
+      // A guest, or a workspace without user groups, may not list them; that only means no memberships.
+      const groups = await client
+        .call("usergroups.list", { include_users: "true" }, signal)
+        .catch((err: unknown) => {
+          if (err instanceof SyncError && err.kind === "permission") return { usergroups: [] };
+          throw err;
+        });
       if (!Array.isArray(groups.usergroups))
         throw new SyncError("transient", "Slack group membership listing was incomplete");
       const memberships: Record<string, unknown>[] = [];
