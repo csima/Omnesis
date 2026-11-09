@@ -1909,6 +1909,11 @@ final class PreviewSnapshotTests: XCTestCase {
     /// the home-indicator strip. That safe-area-specific behaviour is
     /// verified by hand against a real app process via the
     /// `DEMO_AGENT_PREVIEW=tall` launch route (see `OmnesisApp`).
+    ///
+    /// The capture pass can still apply the simulator screen's own insets
+    /// to a window sized for another display. `ignoresHostSafeArea` lays the
+    /// view out across the whole window instead, so a render sized for a
+    /// display other than the one the simulator is showing keeps its width.
     private func renderInWindow(
         _ view: some View,
         name: String,
@@ -1916,7 +1921,8 @@ final class PreviewSnapshotTests: XCTestCase {
         capturePresentedChrome: Bool = false,
         settle: TimeInterval = 0.6,
         size: CGSize? = nil,
-        primeLayout: Bool = false
+        primeLayout: Bool = false,
+        ignoresHostSafeArea: Bool = false
     ) {
         let isDark = scheme == .dark
         let screen = CGRect(origin: .zero, size: size ?? UIScreen.main.bounds.size)
@@ -1926,6 +1932,7 @@ final class PreviewSnapshotTests: XCTestCase {
                 .environment(\.appearanceStore, AppearanceStore(mode: isDark ? .dark : .light))
                 .preferredColorScheme(scheme)
         )
+        if ignoresHostSafeArea { host.safeAreaRegions = [] }
         host.overrideUserInterfaceStyle = isDark ? .dark : .light
         window.overrideUserInterfaceStyle = isDark ? .dark : .light
         window.rootViewController = host
@@ -5877,11 +5884,17 @@ final class PreviewSnapshotTests: XCTestCase {
         .environment(store)
     }
 
+    /// Renders at a Duo display's size whichever display the simulator is
+    /// showing, without that display's insets.
+    private func renderDuo(_ view: some View, name: String, scheme: ColorScheme = .dark, size: CGSize) {
+        renderInWindow(view, name: name, scheme: scheme, size: size, ignoresHostSafeArea: true)
+    }
+
     /// Folded, the outer display is a phone: the menu is still the drawer the
     /// app slides aside to reveal.
     func testDuoOuterDisplayMenuDrawer() {
-        renderInWindow(duoHome(menuOpen: true), name: "400a-duo-outer-menu-drawer", size: Self.duoOuter)
-        renderInWindow(
+        renderDuo(duoHome(menuOpen: true), name: "400a-duo-outer-menu-drawer", size: Self.duoOuter)
+        renderDuo(
             duoHome(menuOpen: true),
             name: "400a-duo-outer-menu-drawer-light",
             scheme: .light,
@@ -5891,8 +5904,8 @@ final class PreviewSnapshotTests: XCTestCase {
 
     /// Unfolded on its side, the menu stands beside the app as a sidebar.
     func testDuoInnerOnItsSideDockedSidebar() {
-        renderInWindow(duoHome(menuOpen: false), name: "400b-duo-inner-side-sidebar", size: Self.duoInnerOnItsSide)
-        renderInWindow(
+        renderDuo(duoHome(menuOpen: false), name: "400b-duo-inner-side-sidebar", size: Self.duoInnerOnItsSide)
+        renderDuo(
             duoHome(menuOpen: false),
             name: "400b-duo-inner-side-sidebar-light",
             scheme: .light,
@@ -5903,13 +5916,13 @@ final class PreviewSnapshotTests: XCTestCase {
     /// Unfolded upright: still a sidebar, with the section keeping a phone's
     /// width beside it.
     func testDuoInnerUprightDockedSidebar() {
-        renderInWindow(duoHome(menuOpen: false), name: "400c-duo-inner-upright-sidebar", size: Self.duoInnerUpright)
+        renderDuo(duoHome(menuOpen: false), name: "400c-duo-inner-upright-sidebar", size: Self.duoInnerUpright)
     }
 
     /// Opening the foldable with the drawer open hands the menu to the
     /// sidebar: no scrim, no slid-aside app.
     func testDuoInnerWithDrawerOpenShowsTheSidebar() {
-        renderInWindow(duoHome(menuOpen: true), name: "400d-duo-inner-drawer-open", size: Self.duoInnerOnItsSide)
+        renderDuo(duoHome(menuOpen: true), name: "400d-duo-inner-drawer-open", size: Self.duoInnerOnItsSide)
     }
 
     /// The agent screen given the whole inner display on its side splits the
@@ -5944,8 +5957,8 @@ final class PreviewSnapshotTests: XCTestCase {
             ),
             .sideBySide(leading: size.width / 2 - AdaptiveLayout.hingeClearance)
         )
-        renderInWindow(duoCapture(size: size), name: "400f-duo-capture-side-by-side", size: size)
-        renderInWindow(duoCapture(size: size), name: "400f-duo-capture-side-by-side-light", scheme: .light, size: size)
+        renderDuo(duoCapture(size: size), name: "400f-duo-capture-side-by-side", size: size)
+        renderDuo(duoCapture(size: size), name: "400f-duo-capture-side-by-side-light", scheme: .light, size: size)
     }
 
     /// Upright: the note above the crease, the mic and Done below it, on the
@@ -5962,7 +5975,7 @@ final class PreviewSnapshotTests: XCTestCase {
                 bottom: size.height / 2 - AdaptiveLayout.hingeClearance
             )
         )
-        renderInWindow(duoCapture(size: size), name: "400g-duo-capture-stacked", size: size)
+        renderDuo(duoCapture(size: size), name: "400g-duo-capture-stacked", size: size)
     }
 
     /// Beside a docked sidebar the crease falls near the capture surface's
@@ -5978,7 +5991,7 @@ final class PreviewSnapshotTests: XCTestCase {
             ),
             .column
         )
-        renderInWindow(duoCapture(size: Self.duoOuter), name: "400h-duo-outer-capture", size: Self.duoOuter)
+        renderDuo(duoCapture(size: Self.duoOuter), name: "400h-duo-outer-capture", size: Self.duoOuter)
     }
 
     /// The attention banner rides with the app rather than hanging over the
