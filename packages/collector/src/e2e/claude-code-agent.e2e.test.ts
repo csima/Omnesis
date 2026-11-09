@@ -88,10 +88,15 @@ describe("Claude Code agent backend — spawned gateway E2E", () => {
         "end_turn",
       );
 
-      const turn = readRecords(recordPath).find((run) =>
-        run.received.some((frame) => frame.type === "user"),
+      // The agent's own turn is the one offered Omnesis's tools; a review of its
+      // retrieval runs as a separate, toolless turn through the same CLI.
+      const offersTools = (frame: { type?: string }) =>
+        frame.type === "control_response" && JSON.stringify(frame).includes('"tools":[');
+      const turn = readRecords(recordPath).find(
+        (run) =>
+          run.received.some((frame) => frame.type === "user") && run.received.some(offersTools),
       );
-      if (!turn) throw new Error("the fake CLI recorded no turn");
+      if (!turn) throw new Error("the fake CLI recorded no agent turn");
       const flag = (name: string) => turn.args[turn.args.indexOf(name) + 1];
       expect(flag("--tools")).toBe("");
       expect(flag("--setting-sources")).toBe("");
@@ -100,12 +105,7 @@ describe("Claude Code agent backend — spawned gateway E2E", () => {
       expect(turn.envKeys).not.toContain("ANTHROPIC_API_KEY");
       expect(turn.envKeys).not.toContain("OMNESIS_PRIVATE_TOKEN");
 
-      const toolList = JSON.stringify(
-        turn.received.find(
-          (frame) =>
-            frame.type === "control_response" && JSON.stringify(frame).includes('"tools":['),
-        ),
-      );
+      const toolList = JSON.stringify(turn.received.find(offersTools));
       expect(toolList).toContain('"name":"search_many"');
       expect(toolList).toContain('"name":"spawn_subagent"');
     } finally {

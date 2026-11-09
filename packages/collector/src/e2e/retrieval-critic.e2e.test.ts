@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 /**
- * The retrieval critic end to end: with experimental mode on, a conversation
+ * The retrieval critic end to end: a conversation
  * turn's retrieval is shown to a reviewer before the agent answers, and a
  * reviewer that judges it insufficient reaches the agent as a note on the
  * tool result it reads next, in the same turn. The agent's corrected retrieval
@@ -79,7 +79,7 @@ describe("the retrieval critic", () => {
       },
     });
     harness = new SyntheticE2EHarness({
-      gatewayMode: "experimental",
+      gatewayMode: "stable",
       universe: "e2e-minimal",
       extraInference: {
         backends: { scripted: { type: "http", url: model.url } },

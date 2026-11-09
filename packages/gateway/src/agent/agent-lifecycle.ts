@@ -29,7 +29,6 @@ import {
 import {
   createLogger,
   resolveModelDisplay,
-  experimentalEnabled,
   experimentalVisible,
   type CompleteCapability,
   CLOUD_EGRESS_DISABLED_REASON,
@@ -108,7 +107,7 @@ export const PRIVACY_STATE_SWEEP_INTERVAL_MS = 60_000;
 
 /** Collaborators the agent's gateway ports and event wiring need. */
 export interface AgentServiceDeps {
-  /** The model reviewing a turn's retrieval; see `retrieval-critic.ts`. Experimental. */
+  /** The model reviewing a turn's retrieval; see `retrieval-critic.ts`. */
   retrievalCritic?: () => CompleteCapability | null;
   db: Database.Database;
   searchPipeline: SearchPipeline;
@@ -960,9 +959,7 @@ export class AgentLifecycle {
     });
     return createAgentService(
       {
-        ...(experimentalEnabled()
-          ? { retrievalCritic: () => this.retrievalCriticCompleter() }
-          : {}),
+        retrievalCritic: () => this.retrievalCriticCompleter(),
         db: this.deps.db,
         useBrainKnowledgeMode:
           this.deps.configStore.get().agent?.useBrainKnowledgeMode ?? "check_stale_claims",
