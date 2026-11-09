@@ -419,6 +419,14 @@ describe("Slack sync", () => {
     expect(JSON.stringify(first.cursor)).toBe(before);
     expect(h.db.tables.get("slack_messages")).toHaveLength(1);
   });
+  it("syncs a guest account that may not list user groups, with no memberships", async () => {
+    const h = harness(true);
+    h.server.restrictedUser = true;
+    h.server.messages = [msg(NOW - DAY)];
+    const r = await cycle(h);
+    expect(r.docs).toHaveLength(1);
+    expect(h.db.tables.get("slack_session_usergroups") ?? []).toEqual([]);
+  });
   it("auth.test failure only fails this account and keeps its existing rows", async () => {
     const h = harness(true);
     h.server.messages = [msg(NOW - DAY)];

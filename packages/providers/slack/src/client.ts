@@ -132,9 +132,14 @@ export class SlackClient {
       )
         throw new SyncError("auth", "Slack sign-in expired", { remediation: AUTH_REMEDIATION });
       if (
-        ["missing_scope", "not_in_channel", "channel_not_found", "access_denied"].includes(
-          data.error ?? "",
-        )
+        [
+          "missing_scope",
+          "not_in_channel",
+          "channel_not_found",
+          "access_denied",
+          "user_is_restricted",
+          "paid_teams_only",
+        ].includes(data.error ?? "")
       )
         throw new SyncError(
           "permission",
