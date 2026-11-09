@@ -101,19 +101,29 @@ enum MenuReveal {
     /// place.
     static let dockMinimumWidth: CGFloat = 660
 
+    /// The same threshold at an accessibility text size, where the sidebar
+    /// has to be wider for its rows to stay legible. Below it the section
+    /// keeps the whole width and the menu stays a drawer, which already
+    /// opens to most of the screen.
+    static let largeTextDockMinimumWidth: CGFloat = 900
+
     /// Sidebar width as a fraction of the container, clamped to a band where
     /// a row's label and the Settings button stay close enough to read as one
-    /// column.
+    /// column. Accessibility text sizes get a wider band.
     static let sidebarFraction: CGFloat = 0.3
     static let sidebarMinimumWidth: CGFloat = 260
     static let sidebarMaximumWidth: CGFloat = 340
+    static let largeTextSidebarMinimumWidth: CGFloat = 340
+    static let largeTextSidebarMaximumWidth: CGFloat = 420
 
-    static func docksMenu(containerWidth width: CGFloat) -> Bool {
-        width >= dockMinimumWidth
+    static func docksMenu(containerWidth width: CGFloat, largeText: Bool = false) -> Bool {
+        width >= (largeText ? largeTextDockMinimumWidth : dockMinimumWidth)
     }
 
-    static func sidebarWidth(forContainerWidth width: CGFloat) -> CGFloat {
-        min(sidebarMaximumWidth, max(sidebarMinimumWidth, width * sidebarFraction))
+    static func sidebarWidth(forContainerWidth width: CGFloat, largeText: Bool = false) -> CGFloat {
+        let lower = largeText ? largeTextSidebarMinimumWidth : sidebarMinimumWidth
+        let upper = largeText ? largeTextSidebarMaximumWidth : sidebarMaximumWidth
+        return min(upper, max(lower, width * sidebarFraction))
     }
 
     /// The space exclusion frames and a drag's start location are both
