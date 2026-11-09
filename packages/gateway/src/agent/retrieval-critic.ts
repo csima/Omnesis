@@ -19,7 +19,7 @@
  *
  * Bounded and fail-open: a turn gets a few reviews and fewer revisions, a
  * review that errors or outlasts its timeout passes the result through
- * untouched, and no reviewer model means no review. Experimental.
+ * untouched, and no reviewer model means no review.
  */
 
 import { createLogger, type CompleteCapability, type ToolResult } from "@omnesis/core";

@@ -234,7 +234,7 @@ export interface AgentServiceDeps {
   /**
    * The model that reviews a conversation turn's retrieval before the agent
    * answers (see `retrieval-critic.ts`), or null while none is available.
-   * When omitted, retrieval is not reviewed. Experimental.
+   * When omitted, retrieval is not reviewed.
    */
   retrievalCritic?: () => CompleteCapability | null;
   /**
