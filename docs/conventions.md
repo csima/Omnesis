@@ -38,6 +38,13 @@ every lane.
 
 Source providers expose a `defineSource<Cursor>({...})` factory call rather than implementing a `Source` interface — there is no such interface; structural typing on the descriptor object is the contract. Compact providers (Things, Browser History) live in a single `index.ts`; larger providers (Apple, Google) compose sub-modules behind the descriptor.
 
+Sibling sources that share an account but use distinct credential kinds may
+override `authType`, `credentials`, `authenticate`, and `cleanupCredentials`
+on their `ProviderSourceEntry`. The collector resolves each override before
+constructing its descriptor; omitted fields inherit the provider default.
+`createContext` stays account-scoped and must not eagerly load one sibling's
+secret when another sibling uses a different connection.
+
 - Helper: `packages/source-sdk/src/define-source.ts`
 
 ### Voice is a media lease on the canonical agent

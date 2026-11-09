@@ -79,6 +79,21 @@ const screenLegacy = {
   affectedDates: ["2026-01-02"],
 };
 
+const slackCursor = {
+  v: 1,
+  startedAt: 1767312000000,
+  lastDeepAt: 1767312000000,
+  channels: {
+    C100: { newest: "1767355200.000100", through: "2026-01-02T00:00:00.000Z", complete: true },
+  },
+  pending: {
+    cut: 1767398400000,
+    deep: false,
+    queue: [{ id: "C100", name: "general", is_member: true }],
+    day: "2026-01-02T00:00:00.000Z",
+  },
+};
+
 const current: Record<string, unknown> = {
   "apple-notes": { lastModifiedTimestamp: 700, lastModifiedPk: 12 },
   "apple-reminders": { lastModifiedTimestamp: 700, lastModifiedPk: 12 },
@@ -223,6 +238,8 @@ const current: Record<string, unknown> = {
     snapshot: { ids: { documents: ["3", "7", "9"] } },
   },
   plaid: { phase: "transactions", transactionsCursor: "page-2", lastSnapshotDate: "2026-01-02" },
+  slack: slackCursor,
+  "slack-session": slackCursor,
   "telegram-messages": { phase: "incremental", committedSeq: 42, storeId: "store-1" },
   "whatsapp-messages": {
     phase: "incremental",

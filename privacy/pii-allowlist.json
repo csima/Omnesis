@@ -12585,6 +12585,118 @@
         "scripts/release/install-sh-collector.test.mjs"
       ],
       "reason": "Product name of Cloudflare's access-control service, not a person; the suites test the client's support for it."
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": [
+        "evals/universes/sacha-bellamy/sources/gmail/messages.json",
+        "evals/universes/sacha-bellamy/sources/google-drive/files.json",
+        "packages/providers/discord/src/normalizer.test.ts",
+        "packages/providers/discord/src/source.test.ts",
+        "evals/universes/immich-sync/cast.json",
+        "evals/universes/immich-sync/sources/immich/fake-corpus.json",
+        "packages/collector/src/e2e/immich-sync.e2e.test.ts",
+        "packages/providers/immich/src/document-event-profile.test.ts",
+        "packages/providers/immich/src/provider.test.ts",
+        "packages/providers/immich/src/source.test.ts"
+      ],
+      "reason": "Reviewed deterministic output of the original fictional universe authoring modules; fictional cast/venue/product or public title-case prose, never personal corpus data."
+    },
+    {
+      "value": "Studio Northstar",
+      "paths": ["evals/universes/sacha-bellamy/_build/media_test.py"],
+      "reason": "Reviewed original fictional demo cast, invented venue/product, or public title-case prose in the named authoring module/test; no personal-corpus provenance."
+    },
+    {
+      "value": "Bad Request",
+      "paths": [
+        "packages/providers/google/src/api-error.test.ts",
+        "packages/providers/google/src/contacts.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Google Contacts",
+      "paths": [
+        "packages/gateway/src/people.test.ts",
+        "packages/providers/google/src/contacts.test.ts",
+        "packages/providers/google/src/setup.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Google Drive",
+      "paths": [
+        "evals/universes/default/agent-demos/_build/build-mixed-decks.mjs",
+        "evals/universes/default/agent-demos/_build/build-sleep-recovery.mjs",
+        "evals/universes/default/agent-demos/_build/build-url-lookup.mjs",
+        "evals/universes/default/agent-demos/sleep-recovery.jsonl",
+        "evals/universes/default/agent-demos/url-lookup.jsonl",
+        "ios/Sources/Omnesis/UI/PreviewMocks.swift",
+        "packages/collector/src/e2e/onedrive.e2e.test.ts",
+        "packages/gateway/src/merge-candidates.test.ts",
+        "packages/providers/google/src/setup.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Halden Press",
+      "paths": [
+        "packages/collector/src/e2e/fixtures/citation-link-review/delivery-review.jsonl",
+        "evals/universes/default/agent-demos/privacy-delivery-window-review.jsonl",
+        "evals/universes/default/agent-demos/privacy-delivery-window.jsonl",
+        "evals/universes/default/agent-demos/privacy-requests.json",
+        "packages/collector/src/e2e/agent-integration-connect.e2e.test.ts",
+        "packages/collector/src/e2e/agent-integration-graduated.e2e.test.ts",
+        "packages/collector/src/e2e/mcp-answer.e2e.test.ts",
+        "packages/collector/src/e2e/restart-durability.e2e.test.ts"
+      ],
+      "reason": "reviewed: invented organisation in the synthetic privacy fixtures"
+    },
+    {
+      "value": "Invalid Credentials",
+      "paths": [
+        "packages/collector/src/error-classifier.test.ts",
+        "packages/collector/src/sync-engine.test.ts",
+        "packages/providers/google/src/api-error.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Lunch Flow",
+      "paths": [
+        "evals/universes/e2e-minimal/_build/build.mjs",
+        "packages/collector/src/e2e/finance.e2e.test.ts",
+        "packages/providers/lunchflow/src/normalizer.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Example Workshop",
+      "paths": [
+        "evals/universes/default/sources/slack/messages.json",
+        "evals/universes/e2e-minimal/sources/slack/messages.json",
+        "packages/providers/slack/src/bridge.test.ts",
+        "packages/providers/slack/src/provider.test.ts",
+        "packages/providers/slack/src/session.test.ts"
+      ],
+      "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
+    },
+    {
+      "value": "John Smith",
+      "paths": [
+        "evals/universes/default/sources/slack/messages.json",
+        "evals/universes/e2e-minimal/sources/slack/messages.json"
+      ],
+      "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
+    },
+    {
+      "value": "River Example",
+      "paths": [
+        "evals/universes/default/sources/slack/messages.json",
+        "evals/universes/e2e-minimal/sources/slack/messages.json"
+      ],
+      "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
     }
   ],
   "secretFixtures": [
@@ -12628,6 +12740,11 @@
       "path": "packages/providers/strava/src/broker.test.ts",
       "kind": "bearer-token",
       "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/slack/src/provider.test.ts",
+      "kind": "slack-token",
+      "reason": "Invented Slack user token used to verify official-token credential handling; never a live credential."
     }
   ]
 }

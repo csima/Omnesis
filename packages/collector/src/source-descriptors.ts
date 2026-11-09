@@ -121,6 +121,8 @@ function providerSourceToDescriptor(
   sourceDef: ProviderSourceEntry,
 ): SourceDescriptor {
   const discover = sourceDef.discover ?? providerDef.discover;
+  const authenticate = sourceDef.authenticate ?? providerDef.authenticate;
+  const cleanup = sourceDef.cleanupCredentials ?? providerDef.cleanupCredentials;
   return {
     id: SourceType(sourceDef.id),
     name: sourceDef.name,
@@ -129,7 +131,7 @@ function providerSourceToDescriptor(
       id: ProviderType(providerDef.provider.id),
       name: providerDef.provider.name,
     },
-    authType: providerDef.authType,
+    authType: sourceDef.authType ?? providerDef.authType,
     acceptsAuthCode: providerDef.acceptsAuthCode,
     // A per-source flag wins over the provider default, so a multi-source
     // provider can mark one source experimental without hiding its siblings.
@@ -159,19 +161,17 @@ function providerSourceToDescriptor(
     singleInstance: sourceDef.singleInstance ?? providerDef.singleInstance,
     multiDevice: sourceDef.multiDevice ?? providerDef.multiDevice,
     defaultSyncInterval: sourceDef.defaultSyncInterval,
-    credentials: providerDef.credentials,
+    credentials: sourceDef.credentials ?? providerDef.credentials,
     historyImport: sourceDef.historyImport,
     authFlow: providerDef.authFlow
       ? async (params, callbacks, ctx) =>
           brandAuthFlowResult(await providerDef.authFlow!(params, callbacks, ctx))
       : undefined,
-    authenticate: providerDef.authenticate
-      ? async (session) => brandAuthResult(await providerDef.authenticate!(session))
+    authenticate: authenticate
+      ? async (session) => brandAuthResult(await authenticate(session))
       : undefined,
     discover: discover ? async (ctx) => brandDiscoveredAccounts(await discover(ctx)) : undefined,
-    cleanupCredentials: providerDef.cleanupCredentials
-      ? async (accountId, ctx) => providerDef.cleanupCredentials!(accountId, ctx)
-      : undefined,
+    cleanupCredentials: cleanup ? async (accountId, ctx) => cleanup(accountId, ctx) : undefined,
   };
 }
 

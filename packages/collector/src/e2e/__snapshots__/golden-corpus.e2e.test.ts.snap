@@ -64,6 +64,11 @@ exports[`Golden-corpus regression net (e2e-minimal) > people graph — top non-s
     "documentCount": 3,
     "identifyingName": "Daniel Harper",
   },
+  {
+    "aliasCount": 3,
+    "documentCount": 1,
+    "identifyingName": "River Example",
+  },
 ]
 `;
 
@@ -100,11 +105,12 @@ exports[`Golden-corpus regression net (e2e-minimal) > per-source document count 
     "outlook-email:john.smith@example.com": 3,
     "plaid:plaid-item-johnsmith": 2,
     "screen-time:john.smith@icloud.example": 3,
+    "slack:TEXAMPLE-USELF00": 1,
     "strava-activities:7000000": 3,
     "things:local": 3,
     "whatsapp-messages:+15550100": 3,
   },
-  "total": 105,
+  "total": 106,
 }
 `;
 
@@ -217,6 +223,7 @@ exports[`Golden-corpus regression net (e2e-minimal) > the source list contains e
   "outlook-email:john.smith@example.com",
   "plaid:plaid-item-johnsmith",
   "screen-time:john.smith@icloud.example",
+  "slack:TEXAMPLE-USELF00",
   "strava-activities:7000000",
   "things:local",
   "whatsapp-messages:+15550100",

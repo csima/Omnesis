@@ -195,6 +195,11 @@
       "descriptorId": "whatsapp-messages",
       "accountIds": ["+15550100"],
       "device": "macbook"
+    },
+    {
+      "descriptorId": "slack",
+      "accountIds": ["TEXAMPLE-USELF00"],
+      "device": "macbook"
     }
   ]
 }

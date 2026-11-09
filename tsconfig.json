@@ -24,6 +24,8 @@
     { "path": "packages/providers/codex" },
     { "path": "packages/providers/coinbase" },
     { "path": "packages/providers/discord" },
+    { "path": "packages/providers/slack" },
+    { "path": "packages/providers-synth/slack" },
     { "path": "packages/providers/enable-banking" },
     { "path": "packages/providers/github" },
     { "path": "packages/providers/google" },
