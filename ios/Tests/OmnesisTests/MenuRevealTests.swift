@@ -310,4 +310,20 @@ final class MenuRevealTests: XCTestCase {
         XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1000), 300, accuracy: 0.001)
         XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1366), 340)
     }
+
+    /// At an accessibility text size the sidebar needs more room: the upright
+    /// inner display keeps the drawer, so the section keeps its full width,
+    /// and on its side the sidebar is wider.
+    func testLargeTextDocksOnlyWhereAWiderSidebarFits() {
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 669, largeText: true))
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 951, largeText: true))
+        let width: CGFloat = 951
+        let sidebar = MenuReveal.sidebarWidth(forContainerWidth: width, largeText: true)
+        XCTAssertGreaterThan(sidebar, MenuReveal.sidebarWidth(forContainerWidth: width))
+        XCTAssertGreaterThanOrEqual(width - sidebar, 390)
+        XCTAssertEqual(
+            MenuReveal.sidebarWidth(forContainerWidth: 2000, largeText: true),
+            MenuReveal.largeTextSidebarMaximumWidth
+        )
+    }
 }

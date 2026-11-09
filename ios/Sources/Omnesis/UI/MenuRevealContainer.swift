@@ -144,6 +144,8 @@ extension View {
 @available(iOS 17.0, *)
 struct MenuRevealContainer<Menu: View, Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var isOpen: Bool
     /// Freezes the reveal at a fixed point of its travel (0 closed, 1 open),
     /// ignoring `isOpen` and any drag. Previews and snapshot tests use it to
@@ -193,7 +195,7 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
 
     /// Whether the menu stands beside the app rather than under it.
     private var docked: Bool {
-        width > 0 && MenuReveal.docksMenu(containerWidth: width)
+        width > 0 && MenuReveal.docksMenu(containerWidth: width, largeText: dynamicTypeSize.isAccessibilitySize)
     }
 
     private var sidebarVisible: Bool {
@@ -201,7 +203,7 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
     }
 
     private var sidebarWidth: CGFloat {
-        MenuReveal.sidebarWidth(forContainerWidth: width)
+        MenuReveal.sidebarWidth(forContainerWidth: width, largeText: dynamicTypeSize.isAccessibilitySize)
     }
 
     private var sidebarToggle: (() -> Void)? {
@@ -245,8 +247,13 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
                 .frame(width: menuWidth, alignment: .leading)
                 // A hidden sidebar slides out past the leading edge rather
                 // than vanishing, so showing it again reads as the same panel
-                // coming back.
-                .offset(x: docked && !sidebarVisible ? -sidebarWidth : 0)
+                // coming back. With Reduce Motion it fades in place instead.
+                .offset(x: docked && !sidebarVisible && !reduceMotion ? -sidebarWidth : 0)
+                .opacity(docked && !sidebarVisible && reduceMotion ? 0 : 1)
+                // Docked, the menu is a region of its own that VoiceOver's
+                // rotor can jump to, rather than rows run into the section.
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(docked ? "Sidebar" : "Menu")
                 // Inert until the menu has fully arrived, so a finger that
                 // lands on a row and then swipes the app back over it does not
                 // also fire that row on release.
@@ -451,7 +458,10 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
     }
 
     private func toggleSidebar() {
-        withAnimation(MenuReveal.openCloseAnimation) { sidebarCollapsed.toggle() }
+        withAnimation(reduceMotion ? nil : MenuReveal.openCloseAnimation) { sidebarCollapsed.toggle() }
+        // VoiceOver focus inside a sidebar that has just gone would be left on
+        // nothing; tell it the layout changed so it lands on what is there.
+        UIAccessibility.post(notification: .layoutChanged, argument: nil)
     }
 }
 
