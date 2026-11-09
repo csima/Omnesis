@@ -48,6 +48,7 @@ struct CaptureView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openAgentConversation) private var openConversation
     @Environment(\.foldHinge) private var foldHinge
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// This surface's frame in window coordinates, so its panes can be laid
     /// either side of the display's crease (see `arrangement`).
     @State private var frameInWindow: CGRect = .zero
@@ -278,7 +279,9 @@ struct CaptureView: View {
     /// middle is where the crease runs, so the mic and the actions move to
     /// either side of it instead: beside the note when the crease runs top to
     /// bottom, below it when the crease runs side to side, so they rest on
-    /// the lower half a half-folded phone stands on.
+    /// the lower half a half-folded phone stands on. At an accessibility text
+    /// size the stacked halves are too short for the note, so that case keeps
+    /// the column: legible text outranks keeping off the crease.
     enum Arrangement: Equatable {
         case column
         /// Panes either side of a crease running top to bottom; the width of
@@ -293,10 +296,18 @@ struct CaptureView: View {
     static let minimumStackedPane: CGFloat = 240
 
     var arrangement: Arrangement {
-        Self.arrangement(hinge: foldHinge, frameInWindow: frameInWindow)
+        Self.arrangement(
+            hinge: foldHinge,
+            frameInWindow: frameInWindow,
+            largeText: dynamicTypeSize.isAccessibilitySize
+        )
     }
 
-    static func arrangement(hinge: AdaptiveLayout.Hinge?, frameInWindow frame: CGRect) -> Arrangement {
+    static func arrangement(
+        hinge: AdaptiveLayout.Hinge?,
+        frameInWindow frame: CGRect,
+        largeText: Bool = false
+    ) -> Arrangement {
         guard frame.width > 0, frame.height > 0 else { return .column }
         switch hinge {
         case .vertical(let x):
@@ -305,7 +316,7 @@ struct CaptureView: View {
             ) else { return .column }
             return .sideBySide(leading: panes.leading)
         case .horizontal(let y):
-            guard let panes = AdaptiveLayout.panes(
+            guard !largeText, let panes = AdaptiveLayout.panes(
                 length: frame.height, crease: y - frame.minY, minimumPane: minimumStackedPane
             ) else { return .column }
             return .stacked(top: panes.leading, bottom: panes.trailing)

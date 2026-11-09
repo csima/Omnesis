@@ -13,7 +13,8 @@ import SwiftUI
 ///
 /// Where the menu is docked as a sidebar (see `MenuRevealContainer`), the
 /// same button shows or hides the sidebar instead, with the system's sidebar
-/// glyph so it reads as that control.
+/// glyph so it reads as that control. Either way ⌃⌘S, the system's sidebar
+/// shortcut, does the same from a hardware keyboard.
 @available(iOS 17.0, *)
 struct MenuToolbarButton: View {
     @Binding var isOpen: Bool
@@ -28,6 +29,7 @@ struct MenuToolbarButton: View {
             }
             .accessibilityLabel(presentation.showsSidebar ? "Hide sidebar" : "Show sidebar")
             .accessibilityIdentifier("menu.toggle")
+            .keyboardShortcut("s", modifiers: [.command, .control])
         } else {
             Button {
                 withAnimation(MenuReveal.openCloseAnimation) {
@@ -39,6 +41,7 @@ struct MenuToolbarButton: View {
             }
             .accessibilityLabel("Menu")
             .accessibilityIdentifier("menu.toggle")
+            .keyboardShortcut("s", modifiers: [.command, .control])
         }
     }
 }

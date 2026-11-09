@@ -5046,6 +5046,60 @@ final class PreviewSnapshotTests: XCTestCase {
         renderSized(duoCapture(size: size), name: "400g-duo-capture-stacked", size: size)
     }
 
+    // MARK: - iPhone Duo — accessibility
+
+    /// At an accessibility text size the docked sidebar widens so its rows
+    /// stay legible, on the inner display on its side.
+    func testDuoInnerOnItsSideSidebarLargeText() {
+        renderSized(
+            duoHome(menuOpen: false).dynamicTypeSize(.accessibility3),
+            name: "401a-duo-inner-side-sidebar-ax3",
+            size: Self.duoInnerOnItsSide
+        )
+    }
+
+    /// Upright at an accessibility text size the sidebar would leave the
+    /// section too narrow, so the menu stays a drawer and the section keeps
+    /// the full width.
+    func testDuoInnerUprightLargeTextKeepsTheDrawer() {
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: Self.duoInnerUpright.width, largeText: true))
+        renderSized(
+            duoHome(menuOpen: false).dynamicTypeSize(.accessibility3),
+            name: "401b-duo-inner-upright-ax3",
+            size: Self.duoInnerUpright
+        )
+    }
+
+    /// Upright at an accessibility text size the stacked halves are too short
+    /// for the note, so Tell Omnesis keeps its single column.
+    func testDuoCaptureUprightLargeTextKeepsTheColumn() {
+        let size = Self.duoInnerUpright
+        XCTAssertEqual(
+            CaptureView.arrangement(
+                hinge: AdaptiveLayout.hinge(windowSize: size),
+                frameInWindow: CGRect(origin: .zero, size: size),
+                largeText: true
+            ),
+            .column
+        )
+        renderSized(
+            duoCapture(size: size).dynamicTypeSize(.accessibility3),
+            name: "401c-duo-capture-upright-ax3",
+            size: size
+        )
+    }
+
+    /// On its side the panes are tall enough at an accessibility text size,
+    /// so the mic stays clear of the crease.
+    func testDuoCaptureSideBySideLargeText() {
+        let size = Self.duoInnerOnItsSide
+        renderSized(
+            duoCapture(size: size).dynamicTypeSize(.accessibility3),
+            name: "401d-duo-capture-side-by-side-ax3",
+            size: size
+        )
+    }
+
     /// Beside a docked sidebar the crease falls near the capture surface's
     /// leading edge, too close for two panes: it stays one column, whose
     /// centre is already clear of the crease.
