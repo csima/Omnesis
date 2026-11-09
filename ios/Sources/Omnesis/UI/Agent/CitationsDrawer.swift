@@ -687,13 +687,16 @@ struct CitationsDrawer: View {
                 }
             }
             .onEnded { value in
+                // A tap ends this zero-distance drag too. Only a horizontal
+                // close drag settles the panel, so a tap on the × button
+                // isn't undone here.
+                guard dragMode == .horizontalClose else {
+                    dragMode = .undetermined
+                    return
+                }
                 let translation = value.translation.width
                 let vx = value.velocity.width
-                let shouldClose: Bool = if dragMode == .horizontalClose {
-                    translation > panelWidth / 3 || vx > 500
-                } else {
-                    false
-                }
+                let shouldClose = translation > panelWidth / 3 || vx > 500
                 let currentResting: CGFloat = isOpen ? 0 : panelWidth
                 let currentVisible = currentResting + max(0, dragOffset)
                 let targetVisible: CGFloat = shouldClose ? panelWidth : 0
