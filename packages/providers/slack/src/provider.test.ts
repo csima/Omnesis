@@ -18,6 +18,7 @@ import {
   verifyOfficial,
 } from "./provider.js";
 import { bridge } from "./session.js";
+import provider from "./index.js";
 import type { AuthSession } from "@omnesis/source-sdk";
 vi.mock("@omnesis/core", async (original) => ({
   ...(await original<typeof import("@omnesis/core")>()),
@@ -153,6 +154,17 @@ describe("Slack connection boundaries", () => {
       "utf8",
     );
     expect(text).not.toMatch(/xoxc-|xoxd-|fictional-cookie/);
+    const sessionSource = provider.sources.find((v) => v.id === "slack-session")!;
+    const instance = await sessionSource.create!(
+      {
+        sourceId: "slack-session:TEXAMPLE-USELF00",
+        providerId: "slack:TEXAMPLE-USELF00",
+        config: {},
+        host: { now: () => new Date(), analytics: { query: vi.fn() } },
+      } as never,
+      { accountId: "TEXAMPLE-USELF00", configDir: ctx.configDir } as never,
+    );
+    expect(instance.label).toBe(identity.team);
     await cleanupSession("TEXAMPLE-USELF00", ctx);
     expect(await discoverSession(ctx)).toEqual(["TEXAMPLE-UOTHER0"]);
   });

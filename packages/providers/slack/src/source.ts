@@ -57,9 +57,14 @@ export class SlackSource {
   }
   private runtime?: { client: SlackClient; identity: Identity; users?: SlackUser[] };
   private strike?: { key: string; count: number };
+  private workspace?: string;
   constructor(private readonly options: SlackSourceOptions) {}
   dispose(): void {
     this.runtime = undefined;
+  }
+  /** The workspace's current name, once a cycle has signed in. */
+  get workspaceName(): string | undefined {
+    return this.workspace;
   }
   async sync(cursor: SlackCursor | null, opts?: SyncOptions) {
     const r = await this.syncStructured(cursor, opts);
@@ -205,6 +210,7 @@ export class SlackSource {
           remediation: AUTH_REMEDIATION,
         });
       this.runtime = { client, identity: credential.identity };
+      if (typeof auth.team === "string" && auth.team.trim()) this.workspace = auth.team.trim();
     }
     const runtime = this.runtime;
     const { client, identity } = runtime;
