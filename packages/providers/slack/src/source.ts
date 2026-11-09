@@ -38,6 +38,7 @@ const storedMessage = (row: Record<string, unknown>): Message =>
   messageSchema.parse(typeof row.raw === "string" ? JSON.parse(row.raw) : row.raw);
 /** A conversation failing the same way this many attempts in a row is skipped for the cycle. */
 const STRIKES = 3;
+const QUERY_ROW_LIMIT = 10_000;
 const STRIKE_KINDS: ReadonlySet<SyncErrorKind> = new Set(["transient", "network", "unknown"]);
 type Pending = NonNullable<SlackCursor["pending"]>;
 export interface SlackSourceOptions {
@@ -125,21 +126,25 @@ export class SlackSource {
       );
     }
   }
-  private async query(query: string): Promise<Record<string, unknown>[]> {
+  private async query(query: string): Promise<Record<string, unknown>[] | null> {
     if (!this.options.host.analytics)
       throw new SyncError("unknown", "Slack requires a source-scoped analytics host");
     const result = await this.options.host.analytics.query(
       this.options.session
         ? query.replace(/slack_(messages|days|read_positions|usergroups)/g, "slack_session_$1")
         : query,
-      { limit: 100_000 },
+      { limit: QUERY_ROW_LIMIT },
     );
-    if (result.rows.length >= 100_000)
+    return result.rows.length >= QUERY_ROW_LIMIT ? null : result.rows;
+  }
+  private async rows(query: string): Promise<Record<string, unknown>[]> {
+    const rows = await this.query(query);
+    if (!rows)
       throw new SyncError(
         "transient",
         "Slack day exceeds the safe reconciliation row limit; checkpoint preserved",
       );
-    return result.rows;
+    return rows;
   }
 
   /** One history read proves a conversation unchanged across the per-cycle reconciliation window. */
@@ -170,14 +175,11 @@ export class SlackSource {
     )
       .filter(inWindow)
       .sort(byTs);
-    const kept = (
-      await this.query(
-        `SELECT raw FROM slack_messages WHERE source_account_id=${sql(this.options.accountId)} AND conversation_id=${sql(conversation)} AND day>=${sql(utcDay(from))} ORDER BY ts`,
-      )
-    )
-      .map(storedMessage)
-      .filter(inWindow)
-      .sort(byTs);
+    const window = await this.query(
+      `SELECT raw FROM slack_messages WHERE source_account_id=${sql(this.options.accountId)} AND conversation_id=${sql(conversation)} AND day>=${sql(utcDay(from))} ORDER BY ts`,
+    );
+    if (!window) return false;
+    const kept = window.map(storedMessage).filter(inWindow).sort(byTs);
     return JSON.stringify(fresh) === JSON.stringify(kept);
   }
 
@@ -335,7 +337,7 @@ export class SlackSource {
     const end = Math.min(dayStart + DAY, p.cut);
     const scope = `${ownerWhere} AND conversation_id=${sql(c.id)} AND day=${sql(day)}`;
     const stored = (
-      await this.query(`SELECT raw FROM slack_messages WHERE ${scope} ORDER BY ts`)
+      await this.rows(`SELECT raw FROM slack_messages WHERE ${scope} ORDER BY ts`)
     ).map(storedMessage);
     // Stored rows stand in for a day only when an earlier cycle fetched that whole day.
     const threadOnly =
@@ -398,7 +400,7 @@ export class SlackSource {
       sourceId: o.sourceId,
       session: o.session,
     });
-    const hashes = await this.query(`SELECT hash FROM slack_days WHERE ${scope}`);
+    const hashes = await this.rows(`SELECT hash FROM slack_days WHERE ${scope}`);
     // Include complete message rows: edits beyond a bounded preview still update analytics.
     const hash = document
       ? computeContentHash(JSON.stringify(messages) + document.contentHash)
