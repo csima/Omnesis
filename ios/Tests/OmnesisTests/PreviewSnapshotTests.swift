@@ -5150,6 +5150,25 @@ final class PreviewSnapshotTests: XCTestCase {
         }
     }
 
+    /// The outer display's system strip down the trailing side, which the
+    /// app's content stays clear of.
+    private static let duoOuterStripWidth: CGFloat = 84
+
+    /// Folded, with the Timeline closed: nothing of the parked panel may show
+    /// in the strip beside the conversation. The strip is stood in for by a
+    /// trailing safe-area inset of its width, which the render shows as
+    /// background.
+    func testDuoOuterClosedTimelineStaysOutOfTheStrip() {
+        var seed = PreviewMocks.agentRichTranscript
+        seed.trailAnnotations = PreviewMocks.trailVoucherAnnotations
+        let view = AgentView(menuOpen: .constant(false))
+            .environment(AppStore.preview(agentPreview: seed))
+            .safeAreaInset(edge: .trailing, spacing: 0) {
+                Color.clear.frame(width: Self.duoOuterStripWidth)
+            }
+        renderSized(view, name: "400j-duo-outer-timeline-closed-strip", size: Self.duoOuter)
+    }
+
     // MARK: - iPhone Duo — accessibility
 
     /// At an accessibility text size the docked sidebar widens so its rows
