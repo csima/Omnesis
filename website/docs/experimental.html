@@ -135,6 +135,7 @@
             <li>
               <a href="experimental" aria-current="page">Experimental</a>
               <ul class="side-sub">
+                <li><a href="#retrieval-review">Reviewed retrieval</a></li>
                 <li><a href="#realtime-voice">Realtime voice in Omnesis Demo</a></li>
                 <li><a href="#browser-extension">Browser extension</a></li>
                 <li><a href="#brain">Omnesis Brain</a></li>
@@ -208,6 +209,25 @@
           collector matters only for sources: a source marked experimental is offered in the source
           picker only by a collector that runs with the flag itself. Experimental sources are
           listed, labelled, in the <a href="sources">sources catalogue</a>.
+        </p>
+
+        <h2 id="retrieval-review">Reviewed retrieval</h2>
+        <p>
+          With <code>OMNESIS_EXPERIMENTAL=1</code>, the agent's retrieval in a typed conversation is
+          reviewed before it answers. Each time a search, SQL query, date query or message count
+          returns, a second request to the agent's own model sees your question, what has been
+          retrieved so far and how much came back, and judges whether that can support a complete
+          answer. When it cannot, for example a handful of search hits standing in for "the top
+          discussions" across every workspace, or a filter the question did not ask for, the
+          reviewer's note reaches the agent with the result, and the agent retrieves again before it
+          answers.
+        </p>
+        <p>
+          A turn gets at most four reviews and two notes. A review that fails or takes longer than
+          20 seconds lets the result through unchanged, and a model that cannot answer a single
+          request leaves retrieval unreviewed. Spoken turns are not reviewed. The note is kept on
+          the result in the saved conversation, and the reviewer's tokens are recorded as
+          <code>retrieval-critic</code> spend. The behavior is unstable and may change.
         </p>
 
         <h2 id="realtime-voice">Realtime voice in Omnesis Demo</h2>

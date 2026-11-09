@@ -579,6 +579,18 @@ const retrievalCoverageSchema = z.object({
   notice: z.string(),
 });
 
+/**
+ * A reviewer's note on a retrieval result, written for the agent to act on
+ * before it answers: what came back cannot settle the request, and what to
+ * retrieve instead. Present only when the review asked for more; a result the
+ * reviewer judged sufficient carries none. Clients may ignore it.
+ */
+export const retrievalReviewSchema = z.object({
+  verdict: z.literal("revise"),
+  note: z.string().min(1),
+});
+export type RetrievalReview = z.infer<typeof retrievalReviewSchema>;
+
 const searchResultsResult = z.object({
   kind: z.literal("search.results"),
   query: z.string(),
@@ -586,6 +598,7 @@ const searchResultsResult = z.object({
   candidates: z.number().nonnegative().optional(),
   coverage: retrievalCoverageSchema.optional(),
   results: z.array(docRefSchema),
+  review: retrievalReviewSchema.optional(),
 });
 
 /**
@@ -623,6 +636,7 @@ const documentResult = z.object({
 
 const sqlRowsResult = z.object({
   kind: z.literal("sql.rows"),
+  review: retrievalReviewSchema.optional(),
   sql: z.string(),
   columns: z.array(z.string()),
   rows: z.array(z.array(z.unknown())),
@@ -1347,6 +1361,7 @@ const structuredResult = z.object({
   kind: z.literal("structured"),
   resultType: z.string(),
   data: z.unknown(),
+  review: retrievalReviewSchema.optional(),
 });
 export type StructuredToolResult = z.infer<typeof structuredResult>;
 
@@ -1391,6 +1406,7 @@ const annotateBatchItem = z.discriminatedUnion("kind", [annotateRecordedResult, 
 const searchBatchResult = z.object({
   kind: z.literal("search.batch"),
   items: z.array(searchBatchItem),
+  review: retrievalReviewSchema.optional(),
 });
 const documentBatchResult = z.object({
   kind: z.literal("document.batch"),

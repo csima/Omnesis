@@ -86,6 +86,7 @@ import {
   type ToolResult,
   type AgentUsage,
   type CapabilityRole,
+  type CompleteCapability,
   type RateLimitPatience,
   type WsEvent,
 } from "@omnesis/core";
@@ -140,6 +141,7 @@ import type { FiringAnswerEvidence } from "../privacy/firing-evidence.js";
 import type { CorpusAuthorization } from "../access/corpus-authorization.js";
 import type { AnswerCitation } from "@omnesis/types/privacy";
 import { withActivity } from "../observability/main-activity.js";
+import { RetrievalCriticTurn, withRetrievalCritic } from "./retrieval-critic.js";
 
 /**
  * Caller identifier for a session — a stable string the gateway derives
@@ -229,6 +231,12 @@ export interface AgentServiceDeps {
    * pages, telling the agent to open them first; empty when none is named.
    */
   namedPagesNote?: (message: string) => string;
+  /**
+   * The model that reviews a conversation turn's retrieval before the agent
+   * answers (see `retrieval-critic.ts`), or null while none is available.
+   * When omitted, retrieval is not reviewed. Experimental.
+   */
+  retrievalCritic?: () => CompleteCapability | null;
   /**
    * Sub-agent orchestration config. When omitted, the `spawn_subagent`
    * tool is not wired — a plain agent with no nesting. When present, the
@@ -914,6 +922,9 @@ export class AgentService {
   private readonly knowledgeReads: boolean;
   private readonly citationReads = new CitationReads();
   private readonly namedPagesNote: AgentServiceDeps["namedPagesNote"];
+  private readonly retrievalCritic: AgentServiceDeps["retrievalCritic"];
+  /** The turn under retrieval review, per session; see `retrieval-critic.ts`. */
+  private readonly criticTurns = new Map<string, RetrievalCriticTurn>();
   private readonly documentPort: DocumentPort;
   private readonly searchRecordPort: ToolPorts["record"];
   private readonly systemPrompt:
@@ -1158,6 +1169,7 @@ export class AgentService {
       });
     }
     this.namedPagesNote = deps.namedPagesNote;
+    this.retrievalCritic = deps.retrievalCritic;
     this.useBrainKnowledgeMode = deps.useBrainKnowledgeMode ?? "check_stale_claims";
     this.knowledgeReads = this.useBrainKnowledgeMode !== "off";
     const tools = buildBuiltinTools({
@@ -1725,7 +1737,18 @@ export class AgentService {
     // tools populate has no viewer. Withholding them removes several model
     // rounds from every spoken turn; the trade, accepted deliberately, is that
     // reopening a voice conversation in the app shows no Timeline.
-    const tools = profile === "voice" ? selectNonCitationTools(base) : base;
+    const selected = profile === "voice" ? selectNonCitationTools(base) : base;
+    // Spoken turns are not reviewed: the review's wait would land in the
+    // middle of a reply the user is waiting to hear.
+    const critic = profile === "interactive" ? this.retrievalCritic : undefined;
+    const tools = critic
+      ? selected.map((handle) =>
+          withRetrievalCritic(handle, {
+            turn: (ctx) => this.criticTurns.get(ctx.sessionId),
+            completer: critic,
+          }),
+        )
+      : selected;
     return tools.map((handle) =>
       withVoiceMutationAdmission(handle, (ctx, invoke) => {
         const batch = this.voiceMutationBatches.get(sessionId);
@@ -3271,6 +3294,8 @@ export class AgentService {
       events: [],
       acceptErrors: false,
     });
+    // The request the retrieval critic weighs this turn's retrieval against.
+    const criticTurn = this.retrievalCritic ? new RetrievalCriticTurn(text) : undefined;
     let started: ReturnType<AgentSession["send"]>;
     try {
       // A hint only: a failure to name pages must never fail the user's send.
@@ -3283,6 +3308,7 @@ export class AgentService {
           `named pages note failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      if (criticTurn) this.criticTurns.set(sessionId, criticTurn);
       started = entry.session.send(text, {
         signal: opts.signal,
         ...(opts.backend ? { backend: opts.backend } : {}),
@@ -3293,6 +3319,7 @@ export class AgentService {
       if (this.activeTurnReplays.get(sessionId)?.generation === replayGeneration) {
         this.activeTurnReplays.delete(sessionId);
       }
+      if (this.criticTurns.get(sessionId) === criticTurn) this.criticTurns.delete(sessionId);
       unsubscribeSpend?.();
       throw err;
     }
@@ -3327,6 +3354,7 @@ export class AgentService {
       if (this.activeTurnReplays.get(sessionId)?.generation === replayGeneration) {
         this.activeTurnReplays.delete(sessionId);
       }
+      if (this.criticTurns.get(sessionId) === criticTurn) this.criticTurns.delete(sessionId);
       unsubscribeSpend?.();
       if (this.recordSpend && turnUsage) {
         try {

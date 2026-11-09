@@ -29,7 +29,9 @@ import {
 import {
   createLogger,
   resolveModelDisplay,
+  experimentalEnabled,
   experimentalVisible,
+  type CompleteCapability,
   CLOUD_EGRESS_DISABLED_REASON,
   type CapabilityRole,
   type ResolvedAssignment,
@@ -53,6 +55,8 @@ import { toCognitionRunUsage } from "../brain/run-driver.js";
 import { renderOperatorInstructionsSection } from "../instructions/render.js";
 import { captureKnowledgeRootContext } from "../brain/knowledge/root-context.js";
 import { namedPagesNote, renderKnowledgePageDirectory } from "../brain/knowledge/page-directory.js";
+import { loadCompletionFromResolved } from "../inference/completion-loader.js";
+import { withSpendRecording } from "../inference/spend-recording-completer.js";
 import { renderNoteConversationContext } from "./note-context.js";
 import { makeReplayBackendFactory } from "./replay-factory.js";
 import {
@@ -104,6 +108,8 @@ export const PRIVACY_STATE_SWEEP_INTERVAL_MS = 60_000;
 
 /** Collaborators the agent's gateway ports and event wiring need. */
 export interface AgentServiceDeps {
+  /** The model reviewing a turn's retrieval; see `retrieval-critic.ts`. Experimental. */
+  retrievalCritic?: () => CompleteCapability | null;
   db: Database.Database;
   searchPipeline: SearchPipeline;
   syncStatus: SyncStatusRegistry;
@@ -458,6 +464,7 @@ export function createAgentService(
   };
   return new AgentService({
     backendFactory,
+    ...(deps.retrievalCritic ? { retrievalCritic: deps.retrievalCritic } : {}),
     useBrainKnowledgeMode,
     namedPagesNote: knowledgeReads ? (message) => namedPagesNote(db, message) : undefined,
     ports: createGatewayAgentPorts(deps),
@@ -953,6 +960,9 @@ export class AgentLifecycle {
     });
     return createAgentService(
       {
+        ...(experimentalEnabled()
+          ? { retrievalCritic: () => this.retrievalCriticCompleter() }
+          : {}),
         db: this.deps.db,
         useBrainKnowledgeMode:
           this.deps.configStore.get().agent?.useBrainKnowledgeMode ?? "check_stale_claims",
@@ -987,6 +997,48 @@ export class AgentLifecycle {
       roleAware,
       this.resolveSubagentCaps(),
     );
+  }
+
+  private retrievalCritic: { revision: number; completer: CompleteCapability | null } | null = null;
+
+  /**
+   * The model that reviews a turn's retrieval: the conversation agent's own
+   * model, asked a single question with no tools. Rebuilt when the model
+   * assignments change; null while that model cannot serve a completion.
+   */
+  private retrievalCriticCompleter(): CompleteCapability | null {
+    const registry = this.deps.inferenceRegistry;
+    const revision = registry.revision();
+    if (this.retrievalCritic?.revision === revision) return this.retrievalCritic.completer;
+    void this.retrievalCritic?.completer?.dispose().catch(() => {});
+    const provider = loadCompletionFromResolved(registry.resolve("agent"), {
+      health: registry.health,
+      configDir: this.deps.configDir,
+      codexRuntimeService: this.deps.codexRuntimeService ?? undefined,
+      claudeCodeService: this.deps.claudeCodeService ?? undefined,
+      getBackendApiKey: (key) => registry.getBackendApiKey(key),
+    });
+    const completer = provider
+      ? withSpendRecording(provider, (sample) => {
+          this.deps.writeGate
+            .recordCognitionSpend(
+              cognitionSpendDay(Date.now()),
+              "retrieval-critic",
+              sample.modelId,
+              {
+                promptTokens: sample.promptTokens,
+                completionTokens: sample.completionTokens,
+              },
+            )
+            .catch((err) => {
+              this.deps.log.warn(
+                `Failed to record retrieval-critic spend: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+        })
+      : null;
+    this.retrievalCritic = { revision, completer };
+    return completer;
   }
 
   /**
