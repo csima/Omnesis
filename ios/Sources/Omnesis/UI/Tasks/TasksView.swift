@@ -376,6 +376,9 @@ struct TaskSegmentBar: View {
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
             }
+            // A horizontal scroller draws on into a side safe area, which put
+            // the trailing chips under the outer display's system strip.
+            .clipped()
             .onChange(of: selected) { _, now in
                 withAnimation { proxy.scrollTo(now, anchor: .center) }
             }
