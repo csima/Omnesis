@@ -313,6 +313,11 @@ struct PersonRow: View {
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
             stackedBody
+        } else if dynamicTypeSize > .large {
+            ViewThatFits(in: .horizontal) {
+                rowBody
+                stackedBody
+            }
         } else {
             rowBody
         }
@@ -344,8 +349,9 @@ struct PersonRow: View {
         }
     }
 
-    /// At accessibility text sizes the name gets the row's whole width, and
-    /// the sources and document count move beneath it.
+    /// At accessibility text sizes, and at the larger standard sizes when the
+    /// row would truncate, the name gets the row's whole width, and the
+    /// sources and document count move beneath it.
     private var stackedBody: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             PersonAvatar(name: person.canonicalName, isSelf: person.isSelf)

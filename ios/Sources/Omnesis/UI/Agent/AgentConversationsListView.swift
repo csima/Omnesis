@@ -27,6 +27,7 @@ import SwiftUI
 @available(iOS 17.0, *)
 struct AgentConversationsList: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var onSelect: (ConversationSummary) -> Void
 
     var body: some View {
@@ -202,13 +203,13 @@ extension AgentConversationsList {
             Text(item.title.isEmpty ? "(untitled)" : item.title)
                 .scaledFont(size: 15, weight: unreadForDisplay(item) ? .semibold : .regular)
                 .foregroundStyle(Theme.textPrimary)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 10)
-        .frame(height: 40)
+        .frame(minHeight: 40, maxHeight: dynamicTypeSize.isAccessibilitySize ? nil : 40)
         .contentShape(Rectangle())
     }
 }
