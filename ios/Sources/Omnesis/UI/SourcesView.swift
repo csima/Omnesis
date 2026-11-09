@@ -237,17 +237,26 @@ private struct OverviewCard: View {
             statsGrid
 
             if let model = store.indexStats?.model?.name, !model.isEmpty {
-                HStack(spacing: 8) {
-                    Text("EMBEDDING MODEL")
-                        .scaledFont(size: 10, weight: .semibold)
-                        .tracking(0.5)
-                        .foregroundStyle(Theme.textMuted)
-                    Text(model)
-                        .scaledFont(size: 11, design: .monospaced)
-                        .foregroundStyle(Theme.textSecondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { embeddingModelLabel; embeddingModelName(model).fixedSize() }
+                    VStack(alignment: .leading, spacing: 2) { embeddingModelLabel; embeddingModelName(model) }
                 }
             }
         }
+    }
+
+    private var embeddingModelLabel: some View {
+        Text("EMBEDDING MODEL")
+            .scaledFont(size: 10, weight: .semibold)
+            .tracking(0.5)
+            .foregroundStyle(Theme.textMuted)
+            .fixedSize()
+    }
+
+    private func embeddingModelName(_ model: String) -> some View {
+        Text(model)
+            .scaledFont(size: 11, design: .monospaced)
+            .foregroundStyle(Theme.textSecondary)
     }
 
     /// Top status pill: "INDEXING 99%" / "UP TO DATE" / "INDEXER OFF".
@@ -304,16 +313,27 @@ private struct OverviewCard: View {
             .shadow(color: color.opacity(0.6), radius: 4)
     }
 
+    /// One row of figures while they fit; two columns once larger text makes
+    /// them too wide, so no figure or label ever breaks mid-word.
     private var statsGrid: some View {
-        HStack(spacing: Theme.Spacing.lg) {
-            stat(value: "\(store.sources.count + store.internalSources.count)", label: "sources")
-            stat(value: formatCount(store.statusSnapshot?.documents.total ?? 0), label: "docs")
-            stat(value: formatCount(store.indexStats?.totalChunks ?? 0), label: "chunks")
-            if let bytes = store.statusSnapshot?.onDiskBytes, bytes > 0 {
-                stat(value: formatBytes(bytes), label: "on disk")
-            }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Spacing.lg) { statItems }
+            LazyVGrid(
+                columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                alignment: .leading,
+                spacing: Theme.Spacing.sm
+            ) { statItems }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var statItems: some View {
+        stat(value: "\(store.sources.count + store.internalSources.count)", label: "sources")
+        stat(value: formatCount(store.statusSnapshot?.documents.total ?? 0), label: "docs")
+        stat(value: formatCount(store.indexStats?.totalChunks ?? 0), label: "chunks")
+        if let bytes = store.statusSnapshot?.onDiskBytes, bytes > 0 {
+            stat(value: formatBytes(bytes), label: "on disk")
+        }
     }
 
     private func stat(value: String, label: String) -> some View {
@@ -322,10 +342,12 @@ private struct OverviewCard: View {
                 .scaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
+                .fixedSize()
             Text(label)
                 .scaledFont(size: 10)
                 .foregroundStyle(Theme.textMuted)
                 .tracking(0.3)
+                .fixedSize()
         }
     }
 
@@ -347,6 +369,7 @@ private struct OverviewCard: View {
 
 @available(iOS 17.0, *)
 private struct SourceRowView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let source: SourceRecord
     let store: AppStore
     @State private var noticesPresentation: SourceNoticesPresentation?
@@ -376,7 +399,7 @@ private struct SourceRowView: View {
                 Text(source.accountId)
                     .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
 
                 metadataRow(
                     docCount: docCount,
@@ -418,7 +441,8 @@ private struct SourceRowView: View {
 
     /// Counts, index progress and host, with one notice icon standing for
     /// every device's notices — the row has no room for one per device; the
-    /// detail screen places them beside each device.
+    /// detail screen places them beside each device. At accessibility text
+    /// sizes each takes its own line.
     private func metadataRow(
         docCount: Int,
         pctIndexed: Double?,
@@ -426,14 +450,18 @@ private struct SourceRowView: View {
         noticeSections: [SourceNoticeSection]
     )
         -> some View {
-        HStack(spacing: 8) {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
             if docCount > 0 {
                 Text("\(docCount)")
-                    .scaledFont(size: 11, weight: .semibold)
+                    .font(.scaledSystem(size: 11, weight: .semibold, at: dynamicTypeSize))
                     .foregroundStyle(Theme.textSecondary)
                     .monospacedDigit()
                     + Text(" \(store.sourceUnitName(forSourceType: source.type) ?? unitName(for: source))")
-                    .scaledFont(size: 11)
+                    .font(.scaledSystem(size: 11, at: dynamicTypeSize))
                     .foregroundStyle(Theme.textMuted)
             }
             if let pct = pctIndexed {
@@ -448,8 +476,10 @@ private struct SourceRowView: View {
                 }
             }
             if let hostName, !hostName.isEmpty {
-                Text("·")
-                    .foregroundStyle(Theme.textMuted)
+                if !stacked {
+                    Text("·")
+                        .foregroundStyle(Theme.textMuted)
+                }
                 Text(hostName)
                     .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
@@ -845,7 +875,7 @@ struct SourceDetailView: View {
                     HStack(spacing: 4) {
                         SourceNoticeIcons(notices: entry.notices, deviceName: entry.name)
                         Text(entry.name)
-                            .font(entry.isResolved ? .system(size: 12) : Theme.monospace(size: 12))
+                            .scaledFont(size: 12, design: entry.isResolved ? nil : .monospaced)
                             .foregroundStyle(Theme.textPrimary)
                             .multilineTextAlignment(.trailing)
                             .lineLimit(2)
@@ -862,7 +892,7 @@ struct SourceDetailView: View {
                 .foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 12)
             Text(value)
-                .font(mono ? Theme.monospace(size: 12) : .system(size: 12))
+                .scaledFont(size: 12, design: mono ? .monospaced : nil)
                 .foregroundStyle(Theme.textPrimary)
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)

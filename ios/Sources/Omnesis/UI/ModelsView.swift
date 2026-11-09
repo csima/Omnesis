@@ -1115,7 +1115,7 @@ struct ModelPickerSheet: View {
         case .downloading(let percent):
             HStack(spacing: 8) {
                 Text("\(percent)%")
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .scaledFont(size: 12, weight: .medium).monospacedDigit()
                     .foregroundStyle(Theme.textSecondary)
                 Button("Cancel") { onCancelDownload(row.entry.id) }
                     .scaledFont(size: 12, weight: .semibold)

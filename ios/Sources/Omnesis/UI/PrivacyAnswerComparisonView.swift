@@ -115,7 +115,7 @@ private struct PrivacyAnswerDiffRow: View {
                 .foregroundStyle(markerColor)
                 .frame(width: PrivacyAnswerDiffStyle.markerWidth, alignment: .center)
             Text(rendered)
-                .font(Theme.monospace(size: PrivacyAnswerDiffStyle.lineSize))
+                .scaledFont(size: PrivacyAnswerDiffStyle.lineSize, design: .monospaced)
                 .foregroundStyle(Theme.textPrimary)
                 // A phone is narrower than an answer's lines: they wrap here
                 // rather than being cut off at the edge of the card.

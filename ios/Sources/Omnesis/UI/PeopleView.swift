@@ -13,6 +13,7 @@ import SwiftUI
 /// labelled with live counts from `GET /people/stats`.
 @available(iOS 17.0, *)
 struct PeopleView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(AppStore.self) private var store
 
     @State private var query: String = ""
@@ -152,7 +153,10 @@ struct PeopleView: View {
     /// review queue and the read-only merge-rules viewer. Counts come from
     /// `GET /people/stats`; the buttons scroll with the list above "YOU".
     private func mergeShortcuts(_ stats: PeopleStats) -> some View {
-        HStack(spacing: Theme.Spacing.md) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: Theme.Spacing.sm))
+            : AnyLayout(HStackLayout(spacing: Theme.Spacing.md))
+        return layout {
             MergeShortcutPill(
                 count: stats.pendingMergeCandidates,
                 noun: "merge candidate",
@@ -303,24 +307,24 @@ struct PeopleView: View {
 @available(iOS 17.0, *)
 struct PersonRow: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let person: PersonSummary
 
     var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            stackedBody
+        } else {
+            rowBody
+        }
+    }
+
+    private var rowBody: some View {
         HStack(spacing: Theme.Spacing.md) {
             PersonAvatar(name: person.canonicalName, isSelf: person.isSelf)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(person.canonicalName.isEmpty ? "(no name)" : person.canonicalName)
-                        .scaledFont(size: 14, weight: .semibold)
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if person.isSelf {
-                        Text("(self)")
-                            .scaledFont(size: 11, weight: .medium)
-                            .foregroundStyle(Theme.success)
-                            .fixedSize()
-                    }
+                    name.lineLimit(1).truncationMode(.tail)
+                    selfTag
                 }
                 PersonRow.metaRow(person: person)
             }
@@ -331,10 +335,7 @@ struct PersonRow: View {
                     .layoutPriority(1)
             }
             VStack(alignment: .trailing, spacing: 2) {
-                Text("\(person.documentCount)")
-                    .scaledFont(size: 13, weight: .semibold)
-                    .foregroundStyle(Theme.textPrimary)
-                    .monospacedDigit()
+                documentCount
                 Text("docs")
                     .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
@@ -343,15 +344,62 @@ struct PersonRow: View {
         }
     }
 
-    static func metaRow(person: PersonSummary) -> some View {
-        HStack(spacing: 6) {
+    /// At accessibility text sizes the name gets the row's whole width, and
+    /// the sources and document count move beneath it.
+    private var stackedBody: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+            PersonAvatar(name: person.canonicalName, isSelf: person.isSelf)
+            VStack(alignment: .leading, spacing: 4) {
+                name.lineLimit(3)
+                selfTag
+                PersonRow.metaRow(person: person, wraps: true)
+                HStack(spacing: Theme.Spacing.sm) {
+                    if let ids = person.sourceIds, !ids.isEmpty {
+                        PersonSourceStrip(sourceIds: ids, store: store)
+                    }
+                    (Text("\(person.documentCount)").monospacedDigit() + Text(" docs"))
+                        .scaledFont(size: 13, weight: .semibold)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var name: some View {
+        Text(person.canonicalName.isEmpty ? "(no name)" : person.canonicalName)
+            .scaledFont(size: 14, weight: .semibold)
+            .foregroundStyle(Theme.textPrimary)
+    }
+
+    @ViewBuilder private var selfTag: some View {
+        if person.isSelf {
+            Text("(self)")
+                .scaledFont(size: 11, weight: .medium)
+                .foregroundStyle(Theme.success)
+                .fixedSize()
+        }
+    }
+
+    private var documentCount: some View {
+        Text("\(person.documentCount)")
+            .scaledFont(size: 13, weight: .semibold)
+            .foregroundStyle(Theme.textPrimary)
+            .monospacedDigit()
+    }
+
+    static func metaRow(person: PersonSummary, wraps: Bool = false) -> some View {
+        let layout = wraps
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(spacing: 6))
+        return layout {
             if person.aliasCount > 0 {
                 Text("\(person.aliasCount) aliases")
                     .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
             if let lastSeen = formatTimeAgo(person.lastSeen) {
-                if person.aliasCount > 0 {
+                if person.aliasCount > 0, !wraps {
                     Text("·").foregroundStyle(Theme.textMuted)
                 }
                 Text("seen \(lastSeen)")
@@ -359,7 +407,7 @@ struct PersonRow: View {
                     .foregroundStyle(Theme.textMuted)
             }
         }
-        .lineLimit(1)
+        .lineLimit(wraps ? nil : 1)
     }
 }
 
@@ -473,7 +521,7 @@ struct MergeShortcutPill: View {
                 Text(label)
                     .scaledFont(size: 12, weight: .medium)
                     .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)

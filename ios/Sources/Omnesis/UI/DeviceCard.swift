@@ -12,6 +12,7 @@ import SwiftUI
 
 @available(iOS 17.0, *)
 struct DeviceCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let device: DeviceRecord
     /// Whether this card is the device backing the current app session.
     var isThis = false
@@ -284,8 +285,8 @@ struct DeviceCard: View {
     private var cliFootnote: some View {
         (Text("Extra credentials are issued from the CLI: ")
             + Text("omnesis tokens create --device <device> --scopes …")
-            .scaledFont(size: 10, design: .monospaced))
-            .scaledFont(size: 10)
+            .font(.scaledSystem(size: 10, design: .monospaced, at: dynamicTypeSize)))
+            .font(.scaledSystem(size: 10, at: dynamicTypeSize))
             .foregroundStyle(Theme.textMuted)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, Theme.Spacing.xs)
