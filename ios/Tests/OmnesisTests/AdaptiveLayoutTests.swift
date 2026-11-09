@@ -56,26 +56,42 @@ final class AdaptiveLayoutTests: XCTestCase {
     }
 }
 
-/// Design sizes follow the text style they sit nearest to.
+/// How design sizes follow the reader's text size.
 final class ScaledTypeTests: XCTestCase {
-    func testEachStylesOwnDefaultSizeMapsToIt() {
-        XCTAssertEqual(ScaledType.style(forDesignSize: 11), .caption2)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 12), .caption)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 13), .footnote)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 15), .subheadline)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 16), .callout)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 17), .body)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 20), .title3)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 22), .title2)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 28), .title)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 34), .largeTitle)
+    private let sizes: [CGFloat] = [9, 10, 10.5, 11, 11.5, 12, 13, 14, 15, 16, 17, 18, 20, 22, 28, 34, 44]
+
+    /// At the default setting every size is exactly as designed, fractions
+    /// included.
+    func testTheDefaultSettingChangesNothing() {
+        for size in sizes {
+            XCTAssertEqual(ScaledType.size(size, bodySize: ScaledType.defaultBodySize), size)
+        }
+        XCTAssertEqual(ScaledType.bodySizes[3], ScaledType.defaultBodySize)
     }
 
-    func testOffGridSizesFollowTheirNeighbour() {
-        XCTAssertEqual(ScaledType.style(forDesignSize: 9), .caption2)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 14), .footnote)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 18), .body)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 19), .title3)
-        XCTAssertEqual(ScaledType.style(forDesignSize: 44), .largeTitle)
+    /// At every setting a larger design size never reads smaller than a
+    /// smaller one, so captions and footnotes cannot swap.
+    func testSizesKeepTheirOrderAtEverySetting() {
+        for body in ScaledType.bodySizes {
+            let scaled = sizes.map { ScaledType.size($0, bodySize: body) }
+            XCTAssertEqual(scaled, scaled.sorted(), "out of order at body \(body)")
+        }
+    }
+
+    /// Body text and smaller grow in proportion; titles grow by the points
+    /// body text gains rather than in proportion.
+    func testLargeSettingsScaleTextAndDampTitles() {
+        let body: CGFloat = 40
+        XCTAssertEqual(ScaledType.size(17, bodySize: body), 40)
+        XCTAssertEqual(ScaledType.size(8.5, bodySize: body), 20)
+        XCTAssertEqual(ScaledType.size(28, bodySize: body), 51)
+    }
+
+    /// Smaller settings shrink text, but nothing goes below 11pt or below its
+    /// own design size if that is smaller still.
+    func testSmallSettingsKeepTextReadable() {
+        XCTAssertEqual(ScaledType.size(12, bodySize: 14), 11)
+        XCTAssertEqual(ScaledType.size(17, bodySize: 14), 14)
+        XCTAssertEqual(ScaledType.size(9, bodySize: 14), 9)
     }
 }
