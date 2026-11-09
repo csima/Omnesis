@@ -57,7 +57,8 @@ extension Font {
         weight: Font.Weight? = nil,
         design: Font.Design? = nil,
         at dynamicTypeSize: DynamicTypeSize
-    ) -> Font {
+    )
+        -> Font {
         .system(size: ScaledType.size(size, at: dynamicTypeSize), weight: weight, design: design)
     }
 }
