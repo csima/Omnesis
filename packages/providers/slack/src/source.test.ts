@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { SourceId, ProviderId } from "@omnesis/types";
 import { SlackSource } from "./source.js";
-import { CHANNEL, CREDENTIAL, FakeSlack, MemoryAnalytics } from "./fake-slack.js";
+import { CHANNEL, CREDENTIAL, FakeSlack, IDENTITY, MemoryAnalytics } from "./fake-slack.js";
 import { DAY, slackTs } from "./types.js";
 import type { SlackCursor } from "./state.js";
 import type { StructuredSyncResult } from "@omnesis/source-sdk";
@@ -286,6 +286,12 @@ describe("Slack sync", () => {
       kind: "transient",
       message: expect.stringContaining("row limit"),
     });
+  });
+  it("names itself after the workspace once a cycle signs in", async () => {
+    const h = harness(true);
+    expect(h.source.workspaceName).toBeUndefined();
+    await cycle(h);
+    expect(h.source.workspaceName).toBe(IDENTITY.team);
   });
   it("keeps a stored day's hash stable when a later cycle reads it back", async () => {
     const h = harness();

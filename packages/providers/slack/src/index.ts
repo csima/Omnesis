@@ -85,8 +85,8 @@ function entry(
     // A daily document is addressed by its first message, but inbound message URLs
     // need the UTC root day. No regex can infer that day from Slack's decimal epoch.
     // Deliberately no misleading urlPattern that resolves to a different externalId.
-    create(options, ctx) {
-      if (!options.host) return Promise.reject(new Error("Slack requires a source-scoped host"));
+    async create(options, ctx) {
+      if (!options.host) throw new Error("Slack requires a source-scoped host");
       const days = Number(options.config?.historyDays ?? 180);
       const source = new SlackSource({
         accountId: ctx.accountId,
@@ -120,8 +120,12 @@ function entry(
           return credential;
         },
       });
-      return Promise.resolve({
+      const stored = await storedWorkspaceName(session, ctx.accountId, ctx.configDir);
+      return {
         icon: slackIcon,
+        get label() {
+          return source.workspaceName ?? stored;
+        },
         analyticsSchemas: schemasFor(session),
         sync: (cursor, opts) => source.sync(slackStateSpec.decode(cursor), opts),
         syncStructured: (cursor, opts) =>
@@ -132,9 +136,25 @@ function entry(
             status: "unknown" as const,
             because: "Credentials are checked at sync, not with a network admission probe",
           }),
-      });
+      };
     },
   };
+}
+async function storedWorkspaceName(
+  session: boolean,
+  accountId: string,
+  configDir: string,
+): Promise<string | undefined> {
+  try {
+    const identity = session
+      ? (await loadSessionManifest(configDir, accountId)).accounts.find(
+          (a) => accountKey(a) === accountId,
+        )
+      : (await loadOfficial(accountId, configDir)).identity;
+    return identity?.team.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 export default defineProvider<Context>({
   provider: { id: "slack", name: "Slack" },
