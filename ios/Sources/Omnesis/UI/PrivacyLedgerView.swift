@@ -27,7 +27,7 @@ struct PrivacyMomentLabel: View {
         HStack(spacing: Theme.Spacing.sm) {
             if showsDay {
                 Text(day)
-                    .font(Theme.monospace(size: 10).weight(.semibold))
+                    .scaledFont(size: 10, weight: .semibold, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
             }
             Text(clock)

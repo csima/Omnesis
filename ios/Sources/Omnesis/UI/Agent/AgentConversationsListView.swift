@@ -200,7 +200,7 @@ extension AgentConversationsList {
                     .accessibilityHidden(true)
             }
             Text(item.title.isEmpty ? "(untitled)" : item.title)
-                .font(.system(size: 15, weight: unreadForDisplay(item) ? .semibold : .regular))
+                .scaledFont(size: 15, weight: unreadForDisplay(item) ? .semibold : .regular)
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(1)
                 .truncationMode(.tail)

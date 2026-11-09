@@ -619,7 +619,7 @@ struct SearchPipelineFooter: View {
                 .foregroundStyle(Theme.textMuted)
                 .frame(minWidth: 60, alignment: .leading)
             Text(value)
-                .font(mono ? Theme.monospace(size: 10) : .system(size: 10))
+                .scaledFont(size: 10, design: mono ? .monospaced : nil)
                 .foregroundStyle(valueColor)
                 .textSelection(.enabled)
             Spacer(minLength: 0)

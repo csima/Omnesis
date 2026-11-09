@@ -422,7 +422,7 @@ struct CodexSetupSheet: View {
             if let code = flow.userCode {
                 HStack(spacing: Theme.Spacing.sm) {
                     Text(code)
-                        .font(.system(size: 24, weight: .semibold).monospaced())
+                        .scaledFont(size: 24, weight: .semibold, design: .monospaced)
                         .foregroundStyle(Theme.textPrimary)
                         .minimumScaleFactor(0.7)
                     Spacer(minLength: 0)
