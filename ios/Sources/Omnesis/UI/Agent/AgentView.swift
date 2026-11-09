@@ -416,10 +416,19 @@ public struct AgentView: View {
         let newMode = AgentLayout.mode(for: size)
         if newMode != layoutMode {
             layoutMode = newMode
-            // Rotating into the split with citations already present
-            // reveals the Timeline so the landscape layout shows both
-            // panes immediately.
-            if newMode == .sidePanel { autoRevealTimelineIfNeeded() }
+            switch newMode {
+            case .sidePanel:
+                // Rotating into the split with citations already present
+                // reveals the Timeline so the landscape layout shows both
+                // panes immediately.
+                autoRevealTimelineIfNeeded()
+            case .overlay:
+                // Leaving the split — folding a foldable, showing the
+                // sidebar, rotating an iPad upright — closes the Timeline
+                // rather than turning the column beside the conversation
+                // into a drawer laid over it.
+                citationsOpen = false
+            }
         }
     }
 
