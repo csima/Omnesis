@@ -39,13 +39,13 @@ struct WatchFiringContextCard: View {
                 Image(systemName: "bell.badge")
                     .font(.system(size: 12, weight: .semibold))
                 Text("Watch fired")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .textCase(.uppercase)
                     .kerning(0.6)
                 Spacer(minLength: 0)
                 if showsOpenAffordance {
                     Text("View watch")
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(size: 11, weight: .semibold)
                         .textCase(nil)
                         .kerning(0)
                     Image(systemName: "chevron.right")
@@ -54,7 +54,7 @@ struct WatchFiringContextCard: View {
             }
             .foregroundStyle(Theme.accent)
             Text(snapshot.name)
-                .font(.system(size: 20, weight: .bold))
+                .scaledFont(size: 20, weight: .bold)
                 .foregroundStyle(Theme.textPrimary)
             // A heading rather than a sentence stem. The condition is
             // quoted verbatim in the operator's own words — often first
@@ -62,17 +62,17 @@ struct WatchFiringContextCard: View {
             // to be told when…" would clash on person.
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text("Watching for")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .textCase(.uppercase)
                     .kerning(0.5)
                     .foregroundStyle(Theme.textSecondary.opacity(0.7))
                 Text(snapshot.condition)
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Label(firedAtText, systemImage: "clock")
-                .font(.system(size: 13, weight: .medium))
+                .scaledFont(size: 13, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
         }
         .padding(Theme.Spacing.lg)

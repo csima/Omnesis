@@ -162,7 +162,7 @@ extension CaptureView {
         if let subject = completion?.subject ?? taskContext?.title {
             Text(subject)
                 .accessibilityLabel(taskContext == nil ? subject : "Task context: \(subject)")
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)

@@ -494,7 +494,7 @@ struct PairingConfirmationSheet: View {
                     .tracking(0.6)
                     .foregroundStyle(Theme.textMuted)
                 Text(hostAndPort)
-                    .font(Theme.monospace(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold, design: .monospaced)
                     .foregroundStyle(Theme.textPrimary)
                     .textSelection(.enabled)
                 Text(versionLabel)
@@ -549,7 +549,7 @@ struct PairingConfirmationSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
                         Text(formatted)
-                            .font(Theme.monospace(size: 12))
+                            .scaledFont(size: 12, design: .monospaced)
                             .foregroundStyle(Theme.textPrimary)
                             .textSelection(.enabled)
                             .lineLimit(4)

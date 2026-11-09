@@ -311,7 +311,7 @@ struct CaptureView: View {
             .accessibilityLabel(micAccessibilityLabel)
 
             Text(stateCopy)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
         }
@@ -330,14 +330,14 @@ struct CaptureView: View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty {
                 Text(speech.isListening ? "Start speaking…" : placeholder)
-                    .font(.system(size: 17))
+                    .scaledFont(size: 17)
                     .foregroundStyle(Theme.textMuted)
                     .padding(.horizontal, Theme.Spacing.md + 4)
                     .padding(.vertical, Theme.Spacing.md + 8)
                     .allowsHitTesting(false)
             }
             TextField("", text: $text, axis: .vertical)
-                .font(.system(size: 17))
+                .scaledFont(size: 17)
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(3 ... 10)
                 .padding(.horizontal, Theme.Spacing.md)
@@ -398,11 +398,11 @@ struct CaptureView: View {
                 .font(.system(size: 44, weight: .medium))
                 .foregroundStyle(outcome == .saved ? Theme.success : Theme.warning)
             Text(confirmationTitle(outcome))
-                .font(.system(size: 18, weight: .semibold))
+                .scaledFont(size: 18, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             if let subtitle = confirmationSubtitle(outcome) {
                 Text(subtitle)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
             }
@@ -538,12 +538,12 @@ extension CaptureView {
         HStack {
             Button("Cancel") { cancel() }
                 .disabled(phase == .saving)
-                .font(.system(size: 16))
+                .scaledFont(size: 16)
                 .foregroundStyle(Theme.textSecondary)
                 .accessibilityLabel("Cancel capture")
             Spacer()
             Text(unified ? "Omnesis" : (completion?.heading ?? "Tell Omnesis"))
-                .font(.system(size: 16, weight: .semibold))
+                .scaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
             if completion == nil, !unified {
@@ -559,7 +559,7 @@ extension CaptureView {
                 .accessibilityLabel("Previous notes")
                 .disabled(phase != .capturing)
             } else {
-                Text("Cancel").font(.system(size: 16)).hidden()
+                Text("Cancel").scaledFont(size: 16).hidden()
             }
         }
         .padding(.top, Theme.Spacing.sm)
@@ -574,7 +574,7 @@ extension CaptureView {
                     ProgressView().tint(.white)
                 }
                 Text("Done")
-                    .font(.system(size: 17, weight: .semibold))
+                    .scaledFont(size: 17, weight: .semibold)
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)

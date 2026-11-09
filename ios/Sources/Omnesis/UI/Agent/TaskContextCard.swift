@@ -44,13 +44,13 @@ struct TaskContextCard: View {
                 Image(systemName: "checklist")
                     .font(.system(size: 12, weight: .semibold))
                 Text("Task")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .textCase(.uppercase)
                     .kerning(0.6)
                 Spacer(minLength: 0)
                 if showsOpenAffordance {
                     Text("View task")
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(size: 11, weight: .semibold)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
                 }
@@ -58,19 +58,19 @@ struct TaskContextCard: View {
             .foregroundStyle(Theme.accent)
             .accessibilityHidden(true)
             Text(snapshot.title)
-                .font(.system(size: 20, weight: .bold))
+                .scaledFont(size: 20, weight: .bold)
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             TaskFlowLayout(spacing: 12, lineSpacing: 4) {
                 ForEach(snapshot.cardFacts(today: today), id: \.self) { fact in
                     Label(fact.text, systemImage: fact.icon)
                         .labelStyle(TaskCardFactLabelStyle())
-                        .font(.system(size: 13, weight: .medium))
+                        .scaledFont(size: 13, weight: .medium)
                         .foregroundStyle(fact.tone == .danger ? Theme.danger : Theme.textSecondary)
                 }
             }
             Text("Omnesis reads this task's notes, history and sources with each reply.")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }

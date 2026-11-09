@@ -53,7 +53,7 @@ struct AnnotationsSection: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.accent)
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(2)
         }
@@ -64,11 +64,11 @@ struct AnnotationsSection: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(a.claimType)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 if let basis = a.claimBasis, !basis.isEmpty {
                     Text(basis)
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
@@ -78,21 +78,21 @@ struct AnnotationsSection: View {
                 Spacer(minLength: 6)
                 if let verification = verificationLabel(a) {
                     Text(verification)
-                        .font(.system(size: 10))
+                        .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }
                 Text("\(Int((a.confidence * 100).rounded()))%")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .monospacedDigit()
             }
             Text(a.claimText)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             if let quote = a.evidenceQuote, !quote.isEmpty {
                 Text("“\(quote)”")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .italic()
                     .foregroundStyle(Theme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
