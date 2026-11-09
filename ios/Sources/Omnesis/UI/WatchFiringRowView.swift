@@ -38,7 +38,7 @@ struct WatchFiringRowView: View {
                     // `verbatim` because a sequence is an identifier, not a quantity: SwiftUI's
                     // localized interpolation would group it into "15,775".
                     Text(verbatim: "seq \(caught.seq)")
-                        .font(Theme.monospace(size: 11))
+                        .scaledFont(size: 11, design: .monospaced)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
@@ -69,7 +69,7 @@ struct WatchFiringRowView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                 Text(shortSubscriptionId(sent.id))
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
             }
         }

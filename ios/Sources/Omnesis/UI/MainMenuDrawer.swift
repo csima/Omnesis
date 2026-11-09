@@ -141,7 +141,7 @@ struct MainMenuDrawer: View {
     private var header: some View {
         HStack {
             Text("Omnesis")
-                .font(.system(size: 22, weight: .semibold))
+                .scaledFont(size: 22, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
         }
@@ -190,7 +190,7 @@ struct MainMenuDrawer: View {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 16, weight: .semibold))
                     Text("Ask")
-                        .font(.system(size: 16, weight: .semibold))
+                        .scaledFont(size: 16, weight: .semibold)
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, Theme.Spacing.lg)
@@ -348,7 +348,7 @@ struct MainMenuDrawer: View {
     private var conversationsHeader: some View {
         HStack {
             Text("Conversations")
-                .font(.system(size: 14, weight: .medium))
+                .scaledFont(size: 14, weight: .medium)
                 .foregroundStyle(Theme.textMuted)
             Spacer()
         }
@@ -488,7 +488,7 @@ private struct MenuBadge: View {
 
     var body: some View {
         Text(count > 99 ? "99+" : "\(count)")
-            .font(.system(size: 13, weight: .semibold))
+            .scaledFont(size: 13, weight: .semibold)
             .monospacedDigit()
             .foregroundStyle(.white)
             .padding(.horizontal, 7)

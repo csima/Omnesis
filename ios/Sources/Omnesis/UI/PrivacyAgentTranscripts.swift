@@ -23,15 +23,15 @@ struct PrivacyAgentTranscriptsView: View {
         if !traces.isEmpty || omittedAttempts > 0 {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(traces.count == 1 ? "Agent transcript" : "Agent transcripts")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Text("Local generation activity. Only the final draft, when one exists, enters the privacy check.")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if omittedAttempts > 0 {
                     Text(agentTraceOmittedAttemptsNote(omittedAttempts))
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -62,7 +62,7 @@ private struct PrivacyAgentTranscriptView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 if calls.isEmpty {
                     Text("No tool calls were recorded.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                 } else {
                     ForEach(Array(calls.enumerated()), id: \.offset) { _, call in
@@ -79,7 +79,7 @@ private struct PrivacyAgentTranscriptView: View {
                 }
                 if let note = agentTraceTruncatedNote(trace) {
                     Text(note)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -87,7 +87,7 @@ private struct PrivacyAgentTranscriptView: View {
             .padding(.top, Theme.Spacing.xs)
         } label: {
             Text(agentTraceAttemptTitle(trace))
-                .font(.system(size: 13, weight: .medium))
+                .scaledFont(size: 13, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(2)
         }

@@ -530,11 +530,11 @@ struct CitationsDrawer: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Timeline")
-                        .font(.system(size: 22, weight: .semibold))
+                        .scaledFont(size: 22, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                     if !headerSubtitle.isEmpty {
                         Text(headerSubtitle)
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.textMuted.opacity(0.85))
                     }
                 }
@@ -588,7 +588,7 @@ struct CitationsDrawer: View {
                 .font(.system(size: 36))
                 .foregroundStyle(Theme.textMuted)
             Text("The agent has not referenced any document yet.")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -875,7 +875,7 @@ struct OverflowCountPill: View {
     var body: some View {
         Button(action: onTap) {
             Text("+\(count)")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: Self.width, height: Self.height)
                 .background(

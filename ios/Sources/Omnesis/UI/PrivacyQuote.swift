@@ -165,7 +165,7 @@ struct PrivacyQuoteGallery: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 label("Prose Omnesis wrote")
                 Text("Omnesis removed details from this answer, then the external agent received the rest.")
-                    .font(.system(size: 15, weight: .medium))
+                    .scaledFont(size: 15, weight: .medium)
                     .foregroundStyle(Theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 label("The request, quoted")
@@ -198,7 +198,7 @@ struct PrivacyQuoteGallery: View {
 
     private func label(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold))
+            .scaledFont(size: 10, weight: .semibold)
             .tracking(0.6)
             .foregroundStyle(Theme.textMuted)
     }

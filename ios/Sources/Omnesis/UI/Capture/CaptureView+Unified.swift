@@ -48,7 +48,7 @@ extension CaptureView {
         } label: {
             HStack(spacing: 8) {
                 if phase == .saving { ProgressView().tint(.white) }
-                Text(title).font(.system(size: 17, weight: .semibold))
+                Text(title).scaledFont(size: 17, weight: .semibold)
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)

@@ -209,10 +209,10 @@ struct TrailTimelineView: View {
                 .font(.system(size: 30))
                 .foregroundStyle(Theme.textMuted)
             Text("No events on this trail")
-                .font(.system(size: 13, weight: .medium))
+                .scaledFont(size: 13, weight: .medium)
                 .foregroundStyle(Theme.textPrimary)
             Text("No connected events were found for this document.")
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -444,7 +444,7 @@ struct TrailTimelineDateHeader: View {
                 .frame(width: TrailTimelineLayout.spineColumnWidth)
 
             Text(TrailTimelineFormat.dateHeaderLabel(date))
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
                 .textCase(.uppercase)
                 .tracking(0.6)
                 .foregroundStyle(Theme.textMuted)
@@ -748,7 +748,7 @@ struct TrailTimelineEventBody: View {
             }
         let parts = (timeStr.isEmpty ? [] : [timeStr]) + peopleParts
         return Text(parts.joined(separator: " · "))
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textSecondary)
             .lineLimit(2)
     }
@@ -758,7 +758,7 @@ struct TrailTimelineEventBody: View {
     /// `by Alice · to Bob, Carol` style line (used for attachments only).
     private var peopleRow: some View {
         Text(TrailTimelineFormat.peopleLine(buckets: visibleBuckets))
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textSecondary)
             .lineLimit(2)
     }
@@ -799,13 +799,13 @@ struct TrailTimelineEventBody: View {
                     .accessibilityHidden(true)
             }
             Text(phrase)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
             SourceIconView(sourceId: rel.sourceId, store: store, size: 11)
                 .padding(.top, 1)
                 .accessibilityHidden(true)
             Text(rel.title.isEmpty ? "(untitled)" : rel.title)
-                .font(.system(size: 11, weight: .medium))
+                .scaledFont(size: 11, weight: .medium)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -958,11 +958,11 @@ struct TrailTimelineEventBody: View {
         VStack(alignment: alignment, spacing: 2) {
             if let author = entry.quoteAuthor {
                 Text(author)
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(quoteAuthorColors[author] ?? Theme.textPrimary)
             }
             Text(entry.quote)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1042,7 +1042,7 @@ struct TrailTimelineRecordBody: View {
                 .foregroundStyle(Theme.textMuted)
                 .padding(.top, 2)
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(2)
                 .truncationMode(.tail)
@@ -1057,7 +1057,7 @@ struct TrailTimelineRecordBody: View {
         let timeStr = TrailTimelineFormat.timeLabel(time)
         let parts = [timeStr, record.tableDisplayName].filter { !$0.isEmpty }
         return Text(parts.joined(separator: " · "))
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textSecondary)
             .lineLimit(2)
     }
@@ -1078,10 +1078,10 @@ struct TrailTimelineRecordKeyFields: View {
                 ForEach(Array(keyFields.enumerated()), id: \.0) { _, field in
                     HStack(alignment: .top, spacing: 6) {
                         Text(field.label)
-                            .font(.system(size: 11, weight: .medium))
+                            .scaledFont(size: 11, weight: .medium)
                             .foregroundStyle(Theme.textMuted)
                         Text(field.value ?? "—")
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
@@ -1491,14 +1491,14 @@ enum TrailTimelineFormat {
 #Preview("ChatBubbleShape — left vs right tail") {
     VStack(spacing: 20) {
         Text("Incoming bubble")
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .padding(.leading, 10 + 6)
             .padding(.trailing, 10)
             .padding(.vertical, 8)
             .background(ChatBubbleShape(tailSide: .left).fill(Theme.bgTertiary))
             .frame(maxWidth: .infinity, alignment: .leading)
         Text("Sent bubble")
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .padding(.leading, 10)
             .padding(.trailing, 10 + 6)
             .padding(.vertical, 8)
