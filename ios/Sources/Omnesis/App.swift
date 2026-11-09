@@ -333,6 +333,7 @@ private struct MenuRevealDemoRoot: View {
         }
         .environment(AppStore.preview())
         .environment(\.appearanceStore, AppearanceStore(mode: .dark))
+        .publishesFoldHinge()
     }
 
     private var listSurface: some View {
