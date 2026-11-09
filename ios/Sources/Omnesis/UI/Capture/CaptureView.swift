@@ -393,6 +393,7 @@ struct CaptureView: View {
                 Spacer(minLength: Theme.Spacing.md)
                 entryArea
             }
+            .frame(maxWidth: .infinity)
             .frame(height: top, alignment: .top)
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
@@ -402,6 +403,7 @@ struct CaptureView: View {
                 actions
             }
             .padding(.bottom, Theme.Spacing.lg)
+            .frame(maxWidth: .infinity)
             .frame(height: bottom)
         }
         .padding(.horizontal, Theme.Spacing.lg)
