@@ -445,8 +445,9 @@ private struct SourceRowView: View {
 
     /// Counts, index progress and host, with one notice icon standing for
     /// every device's notices — the row has no room for one per device; the
-    /// detail screen places them beside each device. At accessibility text
-    /// sizes each takes its own line.
+    /// detail screen places them beside each device. Above the default text
+    /// size, when they don't fit on one line, each takes its own line.
+    @ViewBuilder
     private func metadataRow(
         docCount: Int,
         pctIndexed: Double?,
@@ -454,7 +455,33 @@ private struct SourceRowView: View {
         noticeSections: [SourceNoticeSection]
     )
         -> some View {
-        let stacked = dynamicTypeSize.isAccessibilitySize
+        let items = { (stacked: Bool) in
+            metadataItems(
+                docCount: docCount,
+                pctIndexed: pctIndexed,
+                hostName: hostName,
+                noticeSections: noticeSections,
+                stacked: stacked
+            )
+        }
+        if dynamicTypeSize > .large {
+            ViewThatFits(in: .horizontal) {
+                items(false)
+                items(true)
+            }
+        } else {
+            items(false)
+        }
+    }
+
+    private func metadataItems(
+        docCount: Int,
+        pctIndexed: Double?,
+        hostName: String?,
+        noticeSections: [SourceNoticeSection],
+        stacked: Bool
+    )
+        -> some View {
         let layout = stacked
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(spacing: 8))
