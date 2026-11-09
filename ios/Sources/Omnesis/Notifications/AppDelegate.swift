@@ -104,6 +104,21 @@ public final class OmnesisAppDelegate: NSObject, UIApplicationDelegate {
         onDidFailRegister?(error)
     }
 
+    /// Phone-sized displays stay upright; roomy ones — an iPad, a foldable's
+    /// inner display — turn with the device. Decided from the size of the
+    /// display the window is on, so a foldable folds back to upright on its
+    /// outer display, and a narrow iPad pane never pins the whole iPad
+    /// upright. The Info.plist lists every orientation this can allow.
+    public func application(
+        _: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        guard let size = window?.windowScene?.screen.bounds.size ?? window?.bounds.size,
+              AdaptiveLayout.allowsRotation(windowSize: size)
+        else { return .portrait }
+        return .all
+    }
+
     public func application(
         _: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],

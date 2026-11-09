@@ -5,7 +5,8 @@ import CoreGraphics
 import Foundation
 
 /// Geometry, thresholds and the gesture decisions for the slide-out menu —
-/// the menu that sits under the app, which the app slides aside to reveal.
+/// the menu that sits under the app, which the app slides aside to reveal —
+/// and for when a wide container docks that menu as a sidebar instead.
 ///
 /// Deliberately free of SwiftUI and UIKit so it compiles, and is tested,
 /// natively on macOS in the sim-less logic lane. `MenuRevealContainer` renders
@@ -87,6 +88,33 @@ enum MenuReveal {
     /// it. A hairline on the cut edge draws the separation instead, which
     /// works the same way in both.
     static let scrimOpacity: Double = 0.18
+
+    // MARK: - Docked sidebar
+
+    /// Container width from which the menu stops being a drawer under the app
+    /// and stands beside it as a sidebar: the inner display of a foldable
+    /// iPhone (669pt upright, 951pt on its side), an iPad, a wide window. The
+    /// folded outer display (466pt) and every phone stay below it. Chosen so
+    /// the section beside the sidebar still gets at least a phone's width; a
+    /// narrower container keeps the drawer, and folding or narrowing the
+    /// window hands the same menu back to it without the section losing its
+    /// place.
+    static let dockMinimumWidth: CGFloat = 660
+
+    /// Sidebar width as a fraction of the container, clamped to a band where
+    /// a row's label and the Settings button stay close enough to read as one
+    /// column.
+    static let sidebarFraction: CGFloat = 0.3
+    static let sidebarMinimumWidth: CGFloat = 260
+    static let sidebarMaximumWidth: CGFloat = 340
+
+    static func docksMenu(containerWidth width: CGFloat) -> Bool {
+        width >= dockMinimumWidth
+    }
+
+    static func sidebarWidth(forContainerWidth width: CGFloat) -> CGFloat {
+        min(sidebarMaximumWidth, max(sidebarMinimumWidth, width * sidebarFraction))
+    }
 
     /// The space exclusion frames and a drag's start location are both
     /// resolved in, so the two are comparable wherever in the hierarchy an

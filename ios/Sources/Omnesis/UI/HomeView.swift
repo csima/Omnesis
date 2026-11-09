@@ -330,6 +330,7 @@ struct HomeView: View {
 
     var body: some View {
         tracksDeferredPresentations(homeChrome)
+            .publishesFoldHinge()
     }
 
     private var homeChrome: some View {

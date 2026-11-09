@@ -95,11 +95,12 @@ public struct AgentView: View {
     @State private var composerTopY: CGFloat = 0
     @State private var citationsOpen: Bool = false
     /// Resolved adaptive layout for the current container size. `.overlay`
-    /// on iPhone and iPad-portrait (the Timeline drawer slides over the
-    /// conversation); `.sidePanel` on iPad-landscape (the Timeline docks
-    /// as a ~⅓-width column and the conversation shrinks beside it).
+    /// where the screen is phone-sized or tall (the Timeline drawer slides
+    /// over the conversation); `.sidePanel` where there is room for a split,
+    /// such as iPad landscape or a foldable's inner display (the Timeline
+    /// docks as a ~⅓-width column and the conversation shrinks beside it).
     /// Updated from `sizeProbe`. Gated by `AgentLayout` — flip
-    /// `AgentLayout.iPadSplitEnabled` to revert to overlay everywhere.
+    /// `AgentLayout.splitEnabled` to revert to overlay everywhere.
     @State private var layoutMode: AgentLayoutMode = .overlay
     /// Width of the container, used to size the docked side panel.
     @State private var availableWidth: CGFloat = 0
@@ -2075,12 +2076,9 @@ struct AgentComposer: View {
 
 // iPad-landscape split with the Timeline open. Seeded directly (the
 // geometry probe + demo auto-pilot that drive this in production don't
-// run in the canvas) and forced through the `idiomOverride` seam so the
-// gate resolves `.sidePanel` on a non-iPad canvas. View in a 13" iPad
-// landscape canvas.
+// run in the canvas). View in a 13" iPad landscape canvas.
 @available(iOS 17.0, *)
 #Preview("AgentView — iPad landscape split (open)") {
-    AgentLayout.idiomOverride = true
     var seed = PreviewMocks.agentRichTranscript
     seed.trailAnnotations = PreviewMocks.trailVoucherAnnotations
     return AgentView(
@@ -2096,7 +2094,6 @@ struct AgentComposer: View {
 // spans the full width, no sticky-tab gutter.
 @available(iOS 17.0, *)
 #Preview("AgentView — iPad landscape split (closed)") {
-    AgentLayout.idiomOverride = true
     return AgentView(
         menuOpen: .constant(false),
         previewLayoutMode: .sidePanel,

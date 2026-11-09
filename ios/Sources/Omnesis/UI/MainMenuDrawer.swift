@@ -37,6 +37,7 @@ import SwiftUI
 struct MainMenuDrawer: View {
     @Environment(AppStore.self) private var store
     @Environment(\.openCapture) private var openCapture
+    @Environment(\.menuPresentation) private var presentation
     @Binding var isOpen: Bool
     @Binding var selection: HomeTab
     let onOpenSettings: () -> Void
@@ -44,6 +45,12 @@ struct MainMenuDrawer: View {
     @State private var showPendingNotes: Bool = false
     @State private var warningClock = Date()
     @State private var warningDeadlineTask: Task<Void, Never>?
+
+    /// Whether the menu is in view: opened as a drawer, or standing as a
+    /// docked sidebar, which is never "opened" at all.
+    private var isShowing: Bool {
+        isOpen || presentation.showsSidebar
+    }
 
     var body: some View {
         panel
@@ -66,24 +73,25 @@ struct MainMenuDrawer: View {
             //     advanced on another device never pushes to us; re-fetching on
             //     open is how the list picks up cross-device activity without a
             //     full relaunch.
-            .onChange(of: isOpen) { _, nowOpen in
+            //
+            // A docked sidebar is in view all the time, so it refreshes when
+            // it appears and again whenever the user moves to another
+            // section, the moment a drawer would have been opened.
+            .onChange(of: isShowing) { _, nowOpen in
                 if nowOpen {
-                    Task { await store.refreshGatewayStats() }
-                    Task { await store.refreshTasksTodayCount() }
-                    Task { await store.refreshPrivacyPendingCount() }
-                    Task { await store.agent.refreshConversations() }
-                    // Siri and Watch capture can enqueue through separate
-                    // store instances while the app is alive. Disk is the
-                    // queue authority, so refresh before deciding whether
-                    // the warning triangle belongs in the drawer.
-                    Task { await store.notes.refreshPending() }
-                    scheduleWarningDeadline()
+                    refreshOnShow()
                 } else {
                     warningDeadlineTask?.cancel()
                 }
             }
-            .task(id: isOpen) {
-                guard isOpen else { return }
+            .onAppear {
+                if presentation.showsSidebar { refreshOnShow() }
+            }
+            .onChange(of: selection) { _, _ in
+                if presentation.showsSidebar { refreshOnShow() }
+            }
+            .task(id: isShowing) {
+                guard isShowing else { return }
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(15)) } catch { return }
                     await store.refreshGatewayStats()
@@ -310,6 +318,18 @@ struct MainMenuDrawer: View {
         }
     }
 
+    private func refreshOnShow() {
+        Task { await store.refreshGatewayStats() }
+        Task { await store.refreshTasksTodayCount() }
+        Task { await store.refreshPrivacyPendingCount() }
+        Task { await store.agent.refreshConversations() }
+        // Siri and Watch capture can enqueue through separate store instances
+        // while the app is alive. Disk is the queue authority, so refresh
+        // before deciding whether the warning triangle belongs in the drawer.
+        Task { await store.notes.refreshPending() }
+        scheduleWarningDeadline()
+    }
+
     /// Redraw exactly when the oldest quiet note crosses the five-minute
     /// threshold. Queue changes reschedule this one-shot task, so there is
     /// no polling timer and no stale warning after delivery/discard.
@@ -317,7 +337,7 @@ struct MainMenuDrawer: View {
         warningDeadlineTask?.cancel()
         let now = Date()
         warningClock = now
-        guard isOpen, let deadline = store.notes.nextWarningDeadline(now: now) else { return }
+        guard isShowing, let deadline = store.notes.nextWarningDeadline(now: now) else { return }
         let delay = max(0, deadline.timeIntervalSince(now))
         warningDeadlineTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))

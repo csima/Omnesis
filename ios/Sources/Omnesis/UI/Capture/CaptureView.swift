@@ -47,6 +47,10 @@ struct CaptureView: View {
     @Environment(AppStore.self) var store
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openAgentConversation) private var openConversation
+    @Environment(\.foldHinge) private var foldHinge
+    /// This surface's frame in window coordinates, so its panes can be laid
+    /// either side of the display's crease (see `arrangement`).
+    @State private var frameInWindow: CGRect = .zero
 
     /// Attribution slug for the entry point that opened the surface.
     let surface: NoteSurface
@@ -146,39 +150,20 @@ struct CaptureView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if completion == nil { NoteProcessingNotice() }
-            if let subject = completion?.subject ?? taskContext?.title {
-                Text(subject)
-                    .accessibilityLabel(taskContext == nil ? subject : "Task context: \(subject)")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.top, Theme.Spacing.md)
-            }
-            Spacer(minLength: Theme.Spacing.lg)
-            micCluster
-            Spacer(minLength: Theme.Spacing.lg)
-            if isVoiceNote, voiceNote.hasRecording {
-                voiceNoteCard
-            } else {
-                transcriptArea
-            }
-            saveErrorLine
-            if unified { unifiedButtons } else { doneButton }
-        }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.bottom, Theme.Spacing.lg)
+        arrangedContent
         // Recede behind the confirmation card once the note is on its way.
         .opacity(phase == .capturing || phase == .saving ? 1 : 0.35)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: { frame in
+            frameInWindow = frame
+        }
         // Keep the backdrop outside layout so it cannot push actions offscreen.
         // The same wash the agent landing screen sits on, with the halo
         // centred on the mic — this surface is its sibling: one calm screen
         // with a single glowing subject in the middle.
-        .background(LandingBackdrop(focusY: Self.micCentreY))
+        .background(LandingBackdrop(focusX: haloFocus.x, focusY: haloFocus.y))
         .overlay {
             if case .done(let outcome) = phase {
                 confirmationOverlay(outcome)
@@ -281,6 +266,171 @@ struct CaptureView: View {
                 keyboardFocused = true
             }
         }
+    }
+
+    // MARK: - Arrangement
+
+    /// How the surface is laid out on this display.
+    ///
+    /// On a phone, and wherever this view does not span the display's crease,
+    /// it is one column with the mic in the middle. On a roomy display that
+    /// can fold — a foldable's inner display, which also covers an iPad — the
+    /// middle is where the crease runs, so the mic and the actions move to
+    /// either side of it instead: beside the note when the crease runs top to
+    /// bottom, below it when the crease runs side to side, so they rest on
+    /// the lower half a half-folded phone stands on.
+    enum Arrangement: Equatable {
+        case column
+        /// Panes either side of a crease running top to bottom; the width of
+        /// the leading one, measured from this view's leading edge.
+        case sideBySide(leading: CGFloat)
+        /// Panes either side of a crease running side to side; the heights
+        /// of the upper and lower ones.
+        case stacked(top: CGFloat, bottom: CGFloat)
+    }
+
+    static let minimumSidePane: CGFloat = 280
+    static let minimumStackedPane: CGFloat = 240
+
+    var arrangement: Arrangement {
+        Self.arrangement(hinge: foldHinge, frameInWindow: frameInWindow)
+    }
+
+    static func arrangement(hinge: AdaptiveLayout.Hinge?, frameInWindow frame: CGRect) -> Arrangement {
+        guard frame.width > 0, frame.height > 0 else { return .column }
+        switch hinge {
+        case .vertical(let x):
+            guard let panes = AdaptiveLayout.panes(
+                length: frame.width, crease: x - frame.minX, minimumPane: minimumSidePane
+            ) else { return .column }
+            return .sideBySide(leading: panes.leading)
+        case .horizontal(let y):
+            guard let panes = AdaptiveLayout.panes(
+                length: frame.height, crease: y - frame.minY, minimumPane: minimumStackedPane
+            ) else { return .column }
+            return .stacked(top: panes.leading, bottom: panes.trailing)
+        case nil:
+            return .column
+        }
+    }
+
+    /// The halo sits behind the mic wherever the arrangement puts it.
+    private var haloFocus: CGPoint {
+        guard frameInWindow.width > 0, frameInWindow.height > 0 else {
+            return CGPoint(x: 0.5, y: Self.micCentreY)
+        }
+        switch arrangement {
+        case .column:
+            return CGPoint(x: 0.5, y: Self.micCentreY)
+        case .sideBySide(let leading):
+            return CGPoint(x: leading / 2 / frameInWindow.width, y: 0.5)
+        case .stacked(let top, let bottom):
+            let gap = frameInWindow.height - top - bottom
+            return CGPoint(x: 0.5, y: (top + gap + bottom * 0.4) / frameInWindow.height)
+        }
+    }
+
+    @ViewBuilder private var arrangedContent: some View {
+        switch arrangement {
+        case .column:
+            columnLayout
+        case .sideBySide(let leading):
+            sideBySideLayout(leading: leading)
+        case .stacked(let top, let bottom):
+            stackedLayout(top: top, bottom: bottom)
+        }
+    }
+
+    private var columnLayout: some View {
+        VStack(spacing: 0) {
+            header
+            notices
+            Spacer(minLength: Theme.Spacing.lg)
+            micCluster
+            Spacer(minLength: Theme.Spacing.lg)
+            entryArea
+            saveErrorLine
+            actions
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.bottom, Theme.Spacing.lg)
+    }
+
+    /// The mic in the middle of the leading pane, the note and its actions in
+    /// the trailing one, and the crease between them left clear.
+    private func sideBySideLayout(leading: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, Theme.Spacing.lg)
+            HStack(spacing: AdaptiveLayout.hingeClearance * 2) {
+                VStack(spacing: 0) {
+                    notices
+                    Spacer(minLength: Theme.Spacing.lg)
+                    micCluster
+                    Spacer(minLength: Theme.Spacing.lg)
+                }
+                .padding(.leading, Theme.Spacing.lg)
+                .frame(width: leading)
+                VStack(spacing: 0) {
+                    Spacer(minLength: Theme.Spacing.lg)
+                    entryArea
+                    saveErrorLine
+                    actions
+                }
+                .padding(.trailing, Theme.Spacing.lg)
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.bottom, Theme.Spacing.lg)
+        }
+    }
+
+    /// The note above the crease; the mic and the actions below it.
+    private func stackedLayout(top: CGFloat, bottom: CGFloat) -> some View {
+        VStack(spacing: AdaptiveLayout.hingeClearance * 2) {
+            VStack(spacing: 0) {
+                header
+                notices
+                Spacer(minLength: Theme.Spacing.md)
+                entryArea
+            }
+            .frame(height: top, alignment: .top)
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                micCluster
+                Spacer(minLength: Theme.Spacing.lg)
+                saveErrorLine
+                actions
+            }
+            .padding(.bottom, Theme.Spacing.lg)
+            .frame(height: bottom)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder private var notices: some View {
+        if completion == nil { NoteProcessingNotice() }
+        if let subject = completion?.subject ?? taskContext?.title {
+            Text(subject)
+                .accessibilityLabel(taskContext == nil ? subject : "Task context: \(subject)")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .padding(.top, Theme.Spacing.md)
+        }
+    }
+
+    @ViewBuilder private var entryArea: some View {
+        if isVoiceNote, voiceNote.hasRecording {
+            voiceNoteCard
+        } else {
+            transcriptArea
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        if unified { unifiedButtons } else { doneButton }
     }
 
     // MARK: - Pieces
