@@ -387,6 +387,15 @@ struct CitationsDrawer: View {
                 }
             }
             .preference(key: ComposerNeedsGutterKey.self, value: composerNeedsGutter)
+            // The closed panel parks just past the content area's trailing
+            // edge. On a phone that is off the screen, but where the screen
+            // carries an inset there — the system strip down the side of a
+            // foldable's outer display — it is on screen, and the parked
+            // panel would show through the strip. Cut everything at that
+            // edge; top and bottom still reach the screen's edges.
+            .mask {
+                Rectangle().ignoresSafeArea(edges: .vertical)
+            }
         }
     }
 
