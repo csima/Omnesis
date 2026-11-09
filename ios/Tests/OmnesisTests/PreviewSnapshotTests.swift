@@ -5049,12 +5049,14 @@ final class PreviewSnapshotTests: XCTestCase {
     /// Current iPhones and iPads, in points, upright unless named otherwise.
     private static let matrixDevices: [(name: String, size: CGSize)] = [
         ("se", CGSize(width: 375, height: 667)),
+        ("iphone-e", CGSize(width: 390, height: 844)),
         ("iphone", CGSize(width: 402, height: 874)),
         ("air", CGSize(width: 420, height: 912)),
         ("pro-max", CGSize(width: 440, height: 956)),
         ("duo-outer", CGSize(width: 466, height: 678)),
         ("duo-inner-side", CGSize(width: 951, height: 669)),
         ("ipad-mini", CGSize(width: 744, height: 1133)),
+        ("ipad-air-side", CGSize(width: 1180, height: 820)),
         ("ipad-pro-side", CGSize(width: 1376, height: 1032)),
     ]
 
