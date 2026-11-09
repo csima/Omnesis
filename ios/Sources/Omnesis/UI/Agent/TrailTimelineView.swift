@@ -717,7 +717,7 @@ struct TrailTimelineEventBody: View {
                 .opacity(0.7)
             }
             Text((event.doc?.title.isEmpty ?? true) ? "(untitled)" : (event.doc?.title ?? "(untitled)"))
-                .font(.system(size: isAttachment ? 12 : 13, weight: .semibold))
+                .scaledFont(size: isAttachment ? 12 : 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 // Strict one-line titles on phone: middle-truncate
                 // so the extension stays visible
@@ -833,7 +833,7 @@ struct TrailTimelineEventBody: View {
                         .opacity(0.5)
                         .padding(.top, 3)
                     Text(note)
-                        .font(.system(size: 11).italic())
+                        .scaledFont(size: 11).italic()
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -870,12 +870,12 @@ struct TrailTimelineEventBody: View {
                     .frame(width: 5)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.quote)
-                        .font(.system(size: 11).italic())
+                        .scaledFont(size: 11).italic()
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if let author = entry.quoteAuthor {
                         Text("\u{2014} \(author)")
-                            .font(.system(size: 11).italic())
+                            .scaledFont(size: 11).italic()
                             .foregroundStyle(Theme.textSecondary)
                     }
                 }

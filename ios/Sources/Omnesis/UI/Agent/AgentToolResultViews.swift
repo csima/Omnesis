@@ -121,7 +121,7 @@ struct AgentEventTrailSummary: View {
                 .foregroundStyle(Theme.textSecondary)
             if truncated {
                 Text("(truncated)")
-                    .font(.system(size: 11).italic())
+                    .scaledFont(size: 11).italic()
                     .foregroundStyle(Theme.textMuted)
             }
         }

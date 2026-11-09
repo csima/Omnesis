@@ -51,6 +51,7 @@ struct PrivacyCitationListView: View {
 
 @available(iOS 17.0, *)
 private struct PrivacyCitationRowView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let row: PrivacyCitationRow
 
     /// Optional so the list renders wherever it is placed; without a store the
@@ -83,7 +84,7 @@ private struct PrivacyCitationRowView: View {
     private var titleText: Text {
         let muted = row.removed || row.title == nil
         let title = Text(row.title ?? "Untitled")
-            .scaledFont(size: 13, weight: .semibold)
+            .font(.scaledSystem(size: 13, weight: .semibold, at: dynamicTypeSize))
             .italic(row.title == nil)
             .strikethrough(row.titleWithheld)
             .foregroundStyle(muted || row.titleWithheld ? Theme.textMuted : Theme.textPrimary)
@@ -92,7 +93,7 @@ private struct PrivacyCitationRowView: View {
 
     private var metaText: Text {
         let source = Text(store?.sourceLabel(forSourceId: row.sourceType) ?? row.sourceType)
-        let meta = { (text: Text) in text.scaledFont(size: 11).foregroundStyle(Theme.textMuted) }
+        let meta = { (text: Text) in text.font(.scaledSystem(size: 11, at: dynamicTypeSize)).foregroundStyle(Theme.textMuted) }
         guard let date = row.date else { return meta(source) }
         let line = meta(source + Text(" · ") + Text(date).strikethrough(row.dateWithheld))
         return row.dateWithheld ? line + Text(" ") + withheldTag : line
@@ -100,7 +101,7 @@ private struct PrivacyCitationRowView: View {
 
     private var withheldTag: Text {
         Text("withheld")
-            .scaledFont(size: 11, weight: .semibold)
+            .font(.scaledSystem(size: 11, weight: .semibold, at: dynamicTypeSize))
             .italic()
             .foregroundStyle(PrivacyTone.kept.foreground)
     }
@@ -140,7 +141,7 @@ private struct PrivacyCitationRowView: View {
 
     private func linkLabel(_ link: PrivacyCitationLink) -> Text {
         let label = Text(link.label.uppercased())
-            .scaledFont(size: 10, weight: .bold)
+            .font(.scaledSystem(size: 10, weight: .bold, at: dynamicTypeSize))
             .kerning(0.6)
             .foregroundStyle(Theme.textMuted)
         return link.withheld ? label + Text(" ") + withheldTag : label

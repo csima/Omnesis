@@ -346,7 +346,7 @@ private struct MetadataPane: View {
                 .foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 12)
             Text(value)
-                .font(mono ? Theme.monospace(size: 11) : .system(size: 12))
+                .scaledFont(size: mono ? 11 : 12, design: mono ? .monospaced : nil)
                 .foregroundStyle(Theme.textPrimary)
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)

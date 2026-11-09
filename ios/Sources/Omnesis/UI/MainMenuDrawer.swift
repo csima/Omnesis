@@ -380,7 +380,7 @@ struct MainMenuDrawer: View {
                         .foregroundStyle(isActive ? Theme.accent : Theme.textPrimary)
                         .frame(width: 22)
                     Text(label)
-                        .font(.system(size: 18, weight: isActive ? .semibold : .regular))
+                        .scaledFont(size: 18, weight: isActive ? .semibold : .regular)
                         .foregroundStyle(Theme.textPrimary)
                     Spacer()
                     if badge > 0 {

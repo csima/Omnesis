@@ -534,35 +534,53 @@ extension CaptureView {
         }
     }
 
+    /// Cancel, the title and Notes on one line; at accessibility text sizes
+    /// the title takes a line of its own beneath them rather than breaking
+    /// mid-word between them.
     var header: some View {
-        HStack {
-            Button("Cancel") { cancel() }
-                .disabled(phase == .saving)
-                .scaledFont(size: 16)
-                .foregroundStyle(Theme.textSecondary)
-                .accessibilityLabel("Cancel capture")
-            Spacer()
-            Text(unified ? "Omnesis" : (completion?.heading ?? "Tell Omnesis"))
-                .scaledFont(size: 16, weight: .semibold)
-                .foregroundStyle(Theme.textPrimary)
-            Spacer()
-            if completion == nil, !unified {
-                Button {
-                    keyboardFocused = false
-                    if speech.isListening { stopDictation() }
-                    showNoteHistory = true
-                } label: {
-                    Label("Notes", systemImage: "clock.arrow.circlepath")
-                        .labelStyle(.titleOnly)
-                        .frame(minWidth: 44, minHeight: 44)
+        let titleOnOwnLine = dynamicTypeSize.isAccessibilitySize
+        return VStack(spacing: Theme.Spacing.xs) {
+            HStack {
+                Button("Cancel") { cancel() }
+                    .disabled(phase == .saving)
+                    .scaledFont(size: 16)
+                    .foregroundStyle(Theme.textSecondary)
+                    .accessibilityLabel("Cancel capture")
+                Spacer()
+                if !titleOnOwnLine {
+                    headerTitle
+                    Spacer()
                 }
-                .accessibilityLabel("Previous notes")
-                .disabled(phase != .capturing)
-            } else {
-                Text("Cancel").scaledFont(size: 16).hidden()
+                if completion == nil, !unified {
+                    Button {
+                        keyboardFocused = false
+                        if speech.isListening { stopDictation() }
+                        showNoteHistory = true
+                    } label: {
+                        Label("Notes", systemImage: "clock.arrow.circlepath")
+                            .labelStyle(.titleOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("Previous notes")
+                    .disabled(phase != .capturing)
+                } else if !titleOnOwnLine {
+                    Text("Cancel").scaledFont(size: 16).hidden()
+                }
+            }
+            if titleOnOwnLine {
+                headerTitle
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
             }
         }
         .padding(.top, Theme.Spacing.sm)
+    }
+
+    private var headerTitle: some View {
+        Text(unified ? "Omnesis" : (completion?.heading ?? "Tell Omnesis"))
+            .scaledFont(size: 16, weight: .semibold)
+            .foregroundStyle(Theme.textPrimary)
+            .accessibilityAddTraits(.isHeader)
     }
 
     var doneButton: some View {

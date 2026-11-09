@@ -6,62 +6,59 @@ import Foundation
 
 /// How the app's fixed design sizes follow the reader's text size.
 ///
-/// The app is designed in exact point sizes. Each size grows and shrinks with
-/// the text style it sits nearest to, so at the default setting every
-/// screen is exactly as designed, and larger settings scale a caption the way
-/// a caption scales and a title the way a title does. Free of SwiftUI and
-/// UIKit so the logic lane tests the mapping.
+/// The app is designed in exact point sizes at the default text size. Every
+/// size up to body text scales by the same factor body text does, so small
+/// labels stay in proportion to one another and never swap order; sizes above
+/// body text grow by the same number of points body text gains, the way the
+/// system's own titles grow less than its body. At the default setting every
+/// size is returned exactly, fractions included, and at the smaller settings
+/// nothing designed at 11pt or more goes below 11pt. Free of SwiftUI and
+/// UIKit so the logic lane tests it.
 enum ScaledType {
-    /// The text styles a design size can follow.
-    enum Style: Equatable {
-        case caption2, caption, footnote, subheadline, callout, body, title3, title2, title, largeTitle
-    }
+    /// The size body text takes at each text-size setting, smallest to
+    /// largest, from extra small to the fifth accessibility size, per the
+    /// Human Interface Guidelines. Index 3 is the default.
+    static let bodySizes: [CGFloat] = [14, 15, 16, 17, 19, 21, 23, 28, 33, 40, 47, 53]
+    static let defaultBodySize: CGFloat = 17
+    static let minimumReadableSize: CGFloat = 11
 
-    /// The text style whose default size a design size sits nearest to.
-    static func style(forDesignSize size: CGFloat) -> Style {
-        switch size {
-        case ..<11.5: .caption2
-        case ..<12.5: .caption
-        case ..<14.5: .footnote
-        case ..<15.5: .subheadline
-        case ..<16.5: .callout
-        case ..<18.5: .body
-        case ..<21: .title3
-        case ..<25: .title2
-        case ..<31: .title
-        default: .largeTitle
-        }
+    /// `size` as it reads when body text is `bodySize`.
+    static func size(_ size: CGFloat, bodySize: CGFloat) -> CGFloat {
+        guard bodySize != defaultBodySize else { return size }
+        let ratio = bodySize / defaultBodySize
+        let scaled = size <= defaultBodySize
+            ? size * ratio
+            : bodySize + (size - defaultBodySize)
+        return max(scaled, min(size, minimumReadableSize))
     }
 }
 
 #if canImport(SwiftUI) && canImport(UIKit)
 import SwiftUI
-import UIKit
 
-extension ScaledType.Style {
-    var uiTextStyle: UIFont.TextStyle {
-        switch self {
-        case .caption2: .caption2
-        case .caption: .caption1
-        case .footnote: .footnote
-        case .subheadline: .subheadline
-        case .callout: .callout
-        case .body: .body
-        case .title3: .title3
-        case .title2: .title2
-        case .title: .title1
-        case .largeTitle: .largeTitle
-        }
+extension ScaledType {
+    static func bodySize(at dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        let index = DynamicTypeSize.allCases.firstIndex(of: dynamicTypeSize) ?? 3
+        return bodySizes[min(index, bodySizes.count - 1)]
+    }
+
+    /// `size` as it reads at `dynamicTypeSize`.
+    static func size(_ size: CGFloat, at dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        self.size(size, bodySize: bodySize(at: dynamicTypeSize))
     }
 }
 
-extension ScaledType {
-    /// `size` as it reads at `dynamicTypeSize`: unchanged at the default
-    /// setting, scaled with its text style everywhere else.
-    static func size(_ size: CGFloat, at dynamicTypeSize: DynamicTypeSize) -> CGFloat {
-        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(dynamicTypeSize))
-        return UIFontMetrics(forTextStyle: style(forDesignSize: size).uiTextStyle)
-            .scaledValue(for: size, compatibleWith: traits)
+extension Font {
+    /// The system font at a design size, scaled for `dynamicTypeSize`. For
+    /// text joined with `+`, which needs a `Font` rather than a modifier; the
+    /// view reads `dynamicTypeSize` from its environment.
+    static func scaledSystem(
+        size: CGFloat,
+        weight: Font.Weight? = nil,
+        design: Font.Design? = nil,
+        at dynamicTypeSize: DynamicTypeSize
+    ) -> Font {
+        .system(size: ScaledType.size(size, at: dynamicTypeSize), weight: weight, design: design)
     }
 }
 
@@ -73,7 +70,7 @@ private struct ScaledSystemFont: ViewModifier {
     let design: Font.Design?
 
     func body(content: Content) -> some View {
-        content.font(.system(size: ScaledType.size(size, at: dynamicTypeSize), weight: weight, design: design))
+        content.font(.scaledSystem(size: size, weight: weight, design: design, at: dynamicTypeSize))
     }
 }
 

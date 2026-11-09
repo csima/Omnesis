@@ -966,7 +966,7 @@ struct AgentEphemeralSqlCard: View {
                 HStack(spacing: 0) {
                     ForEach(Array(columns.enumerated()), id: \.offset) { _, col in
                         Text(col)
-                            .font(Theme.monospace(size: 11).weight(.semibold))
+                            .scaledFont(size: 11, weight: .semibold, design: .monospaced)
                             .foregroundStyle(Theme.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -1368,7 +1368,7 @@ struct AgentEphemeralUrlLookupCard: View {
         case .noMatch:
             HStack(spacing: 6) {
                 Text("No match in your corpus")
-                    .font(.system(size: 11).italic())
+                    .scaledFont(size: 11).italic()
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1759,7 +1759,7 @@ struct AgentEphemeralLoopFetchCard: View {
                     loopDetail(loop)
                 } else {
                     Text("No such loop")
-                        .font(.system(size: 11).italic())
+                        .scaledFont(size: 11).italic()
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                 }
