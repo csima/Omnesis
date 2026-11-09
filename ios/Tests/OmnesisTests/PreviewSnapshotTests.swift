@@ -4904,11 +4904,9 @@ final class PreviewSnapshotTests: XCTestCase {
         } content: {
             AgentView(menuOpen: .constant(true))
         }
-        snapshot(
-            view.environment(store),
-            name: "86-menu-reveal-ipad-landscape",
-            size: CGSize(width: 1366, height: 1024)
-        )
+        let size = CGSize(width: 1366, height: 1024)
+        renderSized(view.environment(store), name: "86-menu-reveal-ipad-landscape", size: size)
+        renderSized(view.environment(store), name: "86-menu-reveal-ipad-landscape-light", scheme: .light, size: size)
     }
 
     // MARK: - iPhone Duo
