@@ -774,7 +774,7 @@ public struct AgentView: View {
             VStack(spacing: 22) {
                 OmnesisMarkGlyph(width: Self.landingMarkBox)
                 Text("Ask Omnesis about your corpus")
-                    .font(.system(size: 21, weight: .semibold))
+                    .scaledFont(size: 21, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1182,7 +1182,7 @@ public struct AgentView: View {
             // floating over the transcript, matching the composer pill
             // and the scroll-to-bottom chevron.
             MenuToolbarButton(isOpen: $menuOpen)
-                .font(.system(size: 18, weight: .medium))
+                .scaledFont(size: 18, weight: .medium)
                 .frame(width: Self.topButtonDiameter, height: Self.topButtonDiameter)
                 .contentShape(Circle())
                 .modifier(GlassCircleButton())
@@ -1342,18 +1342,18 @@ private struct ContextWindowExceededCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Context window reached", systemImage: "text.badge.xmark")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             Text(
                 "This conversation no longer fits in the selected model's context window. "
                     + "Start a new conversation to continue."
             )
-            .font(.system(size: 13))
+            .scaledFont(size: 13)
             .foregroundStyle(Theme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
 
             Button("New conversation", action: onNewConversation)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
         }
@@ -1387,15 +1387,15 @@ private struct ReadOnlyConversationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Read-only", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             Text(reason)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Button("Retry", action: onRetry)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
         }
@@ -1766,7 +1766,7 @@ struct AgentComposer: View {
                     )
                     .focused(focused)
                     .lineLimit(1 ... 5)
-                    .font(.system(size: 19))
+                    .scaledFont(size: 19)
                     .padding(.leading, 20)
                     .padding(.vertical, 20)
                     .foregroundStyle(Theme.textPrimary)
@@ -1902,10 +1902,10 @@ struct AgentComposer: View {
                             .frame(width: 22)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(cmd.label)
-                                .font(.system(size: 14, weight: .semibold))
+                                .scaledFont(size: 14, weight: .semibold)
                                 .foregroundStyle(Theme.textPrimary)
                             Text(cmd.hint)
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textSecondary)
                                 .lineLimit(1)
                         }
@@ -1938,7 +1938,7 @@ struct AgentComposer: View {
                 Image(systemName: cmd.systemImage)
                     .font(.system(size: 11, weight: .semibold))
                 Text(cmd.label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
                     .padding(2)

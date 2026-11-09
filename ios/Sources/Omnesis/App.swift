@@ -3455,6 +3455,10 @@ struct RootView: View {
 
     var body: some View {
         RootContent()
+            // Text follows the reader's size up to the third accessibility
+            // size; past it the dense screens, built in fixed point sizes,
+            // would truncate more than they gain.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility3)
             // Shake-to-annotate (developer mode only): a hidden channel for filing
             // data-quality notes on the current entity for later engineering review.
             .developerAnnotationCapture()

@@ -72,7 +72,7 @@ struct SearchView: View {
                 .frame(height: 64)
                 .foregroundStyle(AppBuild.isDemo ? Theme.brandLogoDemo : Theme.brandLogo)
             Text("Search")
-                .font(.system(size: 22, weight: .semibold))
+                .scaledFont(size: 22, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
         }
         .frame(maxWidth: .infinity)
@@ -173,7 +173,7 @@ struct SearchView: View {
                 Image(systemName: "sparkle.magnifyingglass")
                     .foregroundStyle(Theme.accent)
                 Text(text)
-                    .font(Theme.monospace(size: 13))
+                    .scaledFont(size: 13, design: .monospaced)
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
             }
@@ -281,13 +281,13 @@ struct SearchResultRow: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Text(displayTitle)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                 metaRow
                 if !item.chunkText.isEmpty {
                     Text(snippet)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(3)
                 }
@@ -317,7 +317,7 @@ struct SearchResultRow: View {
                 let parts = metaPartsExcludingDocLabel
                 if !parts.isEmpty {
                     Text(parts.joined(separator: " · "))
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                 }
@@ -326,7 +326,7 @@ struct SearchResultRow: View {
             let parts = metaParts
             if !parts.isEmpty {
                 Text(parts.joined(separator: " · "))
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
             }
@@ -423,7 +423,7 @@ struct ScoreBreakdownStrip: View {
             Text(value)
                 .foregroundStyle(emphasised ? Theme.accent : Theme.textSecondary)
         }
-        .font(Theme.monospace(size: 10))
+        .scaledFont(size: 10, design: .monospaced)
     }
 
     private func format(_ value: Double, places: Int, signed: Bool = false) -> String {
@@ -464,13 +464,13 @@ struct SearchPipelineFooter: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.accent)
             Text("SEARCH PIPELINE")
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
                 .tracking(0.6)
                 .foregroundStyle(Theme.textSecondary)
             Spacer()
             if let total = response.timing?.totalMs {
                 Text("\(Int(total))ms")
-                    .font(Theme.monospace(size: 10, weight: .semibold))
+                    .scaledFont(size: 10, weight: .semibold, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
             }
         }
@@ -479,7 +479,7 @@ struct SearchPipelineFooter: View {
     private func section(_ label: String, @ViewBuilder _ body: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .scaledFont(size: 9, weight: .semibold)
                 .tracking(0.5)
                 .foregroundStyle(Theme.textMuted)
             body()
@@ -510,31 +510,31 @@ struct SearchPipelineFooter: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(name)
-                    .font(Theme.monospace(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold, design: .monospaced)
                     .foregroundStyle(stageColor(report))
                 if let status = report.status, status != "ran" {
                     Text(status)
-                        .font(Theme.monospace(size: 10))
+                        .scaledFont(size: 10, design: .monospaced)
                         .foregroundStyle(Theme.warning)
                 }
                 Spacer()
                 if let ms = report.durationMs {
                     Text("\(Int(ms))ms")
-                        .font(Theme.monospace(size: 10))
+                        .scaledFont(size: 10, design: .monospaced)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
             let metrics = stageMetrics(name: name, report: report)
             if !metrics.isEmpty {
                 Text(metrics.joined(separator: " · "))
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
                     .padding(.leading, 8)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let reason = report.reason, !reason.isEmpty {
                 Text(reason)
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
                     .padding(.leading, 8)
             }
@@ -595,17 +595,17 @@ struct SearchPipelineFooter: View {
             HStack(spacing: 10) {
                 if let cands = timing.bm25Candidates {
                     Text("bm25 \(cands)")
-                        .font(Theme.monospace(size: 10))
+                        .scaledFont(size: 10, design: .monospaced)
                         .foregroundStyle(Theme.textMuted)
                 }
                 if let cands = timing.vectorCandidates {
                     Text("vec \(cands)")
-                        .font(Theme.monospace(size: 10))
+                        .scaledFont(size: 10, design: .monospaced)
                         .foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
                 Text("\(response.results.count) result\(response.results.count == 1 ? "" : "s")")
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
             }
             .padding(.top, 2)
@@ -615,7 +615,7 @@ struct SearchPipelineFooter: View {
     private func kv(label: String, value: String, valueColor: Color = Theme.textPrimary, mono: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(label)
-                .font(Theme.monospace(size: 10))
+                .scaledFont(size: 10, design: .monospaced)
                 .foregroundStyle(Theme.textMuted)
                 .frame(minWidth: 60, alignment: .leading)
             Text(value)

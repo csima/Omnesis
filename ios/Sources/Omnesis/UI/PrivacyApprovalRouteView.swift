@@ -108,7 +108,7 @@ struct PrivacyApprovalRoute: View {
     private func decidedNotice(_ detail: PrivacyApprovalDetail) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("This review is already decided.")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             NavigationLink(
                 value: PrivacyRoute.exchange(
@@ -117,7 +117,7 @@ struct PrivacyApprovalRoute: View {
                 )
             ) {
                 Label("See what happened", systemImage: "arrow.right.circle")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
             }
             .foregroundStyle(Theme.accent)
         }

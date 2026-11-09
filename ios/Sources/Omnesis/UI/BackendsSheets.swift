@@ -93,7 +93,7 @@ struct AddBackendSheet: View {
                     "Pick a provider to pre-fill its URL, or point Omnesis at any OpenAI-compatible server. "
                         + "Backends are shared across every capability."
                 )
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
 
                 LazyVGrid(
@@ -144,12 +144,12 @@ struct AddBackendSheet: View {
                     .foregroundStyle(Theme.textPrimary)
                     .frame(height: 24)
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(2)
             }
@@ -199,12 +199,12 @@ struct AddBackendSheet: View {
                         ProviderIcon(providerId: preset.id, size: 16)
                             .foregroundStyle(Theme.textPrimary)
                         Text("Configuring \(preset.name) — add your API key; the URL is pre-filled.")
-                            .font(.system(size: 13))
+                            .scaledFont(size: 13)
                             .foregroundStyle(Theme.textSecondary)
                     }
                 } else {
                     Text("Point Omnesis at any OpenAI-compatible server. Backends are shared across every capability.")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.textSecondary)
                 }
 
@@ -247,10 +247,10 @@ struct AddBackendSheet: View {
         -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             TextField(placeholder, text: text)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(disabled ? Theme.textMuted : Theme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -265,7 +265,7 @@ struct AddBackendSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium))
             if let error {
                 Text(error)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.danger)
             }
         }
@@ -274,10 +274,10 @@ struct AddBackendSheet: View {
     private func secureField(label: String, placeholder: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             SecureField(placeholder, text: text)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -339,23 +339,23 @@ struct CodexSetupSheet: View {
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Codex")
-                        .font(.system(size: 17, weight: .semibold))
+                        .scaledFont(size: 17, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                     Text(statusLine)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(statusColor)
                 }
                 Spacer(minLength: 0)
             }
             if let reason = status?.reason, !reason.isEmpty {
                 Text(reason)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(3)
             }
             if let refreshedAt = status?.refreshedAt {
                 Text("Last checked \(refreshedAt)")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -374,12 +374,12 @@ struct CodexSetupSheet: View {
             Text(
                 "Use Codex with the gateway host's dedicated Codex login. OpenAI will show a one-time code flow; Omnesis never sees your ChatGPT password."
             )
-            .font(.system(size: 13))
+            .scaledFont(size: 13)
             .foregroundStyle(Theme.textSecondary)
 
             Button(action: onStartLogin) {
                 Text(status?.loggedIn == true ? "Log in again" : "Log in to OpenAI")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.sm)
                     .foregroundStyle(.white)
@@ -401,7 +401,7 @@ struct CodexSetupSheet: View {
     private func loginInstructions(_ flow: CodexLoginFlow) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text("Open this link to log in to OpenAI, then paste this one-time code.")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
 
             if let uri = flow.verificationUri, let url = URL(string: uri) {
@@ -411,7 +411,7 @@ struct CodexSetupSheet: View {
                         Text("Open OpenAI login")
                         Spacer(minLength: 0)
                     }
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                     .padding(Theme.Spacing.md)
                     .background(Theme.accent.opacity(0.10))
@@ -429,7 +429,7 @@ struct CodexSetupSheet: View {
                     Button("Copy") {
                         UIPasteboard.general.string = code
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                 }
                 .padding(Theme.Spacing.md)
@@ -443,7 +443,7 @@ struct CodexSetupSheet: View {
 
             if let expiresAt = flow.expiresAt {
                 Text("Expires \(expiresAt)")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
 
@@ -452,7 +452,7 @@ struct CodexSetupSheet: View {
                     ? "Checking login status…"
                     : "Omnesis checks automatically when you return to the app. Use Check now if it does not update."
             )
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textMuted)
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -465,7 +465,7 @@ struct CodexSetupSheet: View {
     private func outlineButton(title: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(color)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -529,7 +529,7 @@ struct SetCredentialSheet: View {
                         "Enter your \(entry.providerName) credentials. They're stored on the gateway host "
                             + "and used to call \(entry.providerName); the key is never shown again."
                     )
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
 
                     ForEach(entry.spec.fields) { field in
@@ -564,7 +564,7 @@ struct SetCredentialSheet: View {
         )
         VStack(alignment: .leading, spacing: 4) {
             Text(field.label)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             Group {
                 if field.secret == true {
@@ -573,7 +573,7 @@ struct SetCredentialSheet: View {
                     TextField(field.placeholder ?? "", text: binding)
                 }
             }
-            .font(.system(size: 14))
+            .scaledFont(size: 14)
             .foregroundStyle(Theme.textPrimary)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -586,7 +586,7 @@ struct SetCredentialSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.medium))
             if let hint = field.patternHint {
                 Text(hint)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }

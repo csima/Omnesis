@@ -26,11 +26,11 @@ struct MergedIntoBanner: View {
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Merged into \(targetName ?? "another identity")")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                     Text("You're seeing this row's pre-merge state. Edge counts and interaction scores live on the canonical.")
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -70,18 +70,18 @@ struct MergedFromSummary: View {
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(count) \(count == 1 ? "person" : "people") merged into this")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Text("Aliases, documents, and edge counts have been rolled up.")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(2)
             }
             Spacer(minLength: 4)
             Button(action: onShowDetails) {
                 Text("Details")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(Theme.accent.opacity(0.18))
@@ -118,7 +118,7 @@ struct MergedFromSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     Text(rollupBlurb)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     VStack(spacing: 0) {
@@ -176,11 +176,11 @@ struct MergedFromRow: View {
             PersonAvatar(name: person.canonicalName, isSelf: false, size: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(person.canonicalName.isEmpty ? "(no name)" : person.canonicalName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Text(mergedAtLabel)
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -249,7 +249,7 @@ struct PersonDetailMergePreview: View {
                             .lineLimit(2)
                         if let lastSeen = formatTimeAgo(person.lastSeen) {
                             Text("last seen \(lastSeen)")
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textMuted)
                         }
                     }

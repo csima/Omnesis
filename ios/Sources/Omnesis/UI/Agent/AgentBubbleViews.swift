@@ -45,7 +45,7 @@ struct AgentTurnBubble: View {
             HStack {
                 Spacer(minLength: 32)
                 Text(userMessageWithLinks(text))
-                    .font(.system(size: 15))
+                    .scaledFont(size: 15)
                     .tint(Theme.accent)
                     .foregroundStyle(Theme.textPrimary)
                     .padding(.horizontal, 14)
@@ -85,7 +85,7 @@ struct AgentTurnBubble: View {
                     // quiet italic line, the register the portal uses for
                     // the same note.
                     Text(stopped)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .italic()
                         .foregroundStyle(Theme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -179,7 +179,7 @@ struct AgentCitingPill: View {
                     value: pulse
                 )
             Text(label)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
         }
         .padding(.horizontal, 8)
@@ -249,7 +249,7 @@ struct AgentThinkingBlock: View {
                     .buttonStyle(.plain)
                     if expanded {
                         Text(text)
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                             .padding(.leading, 2)
                             .transition(.opacity)
@@ -318,7 +318,7 @@ private struct AgentThinkingShimmerLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12, weight: .medium))
+            .scaledFont(size: 12, weight: .medium)
             .foregroundStyle(Theme.textMuted)
             .overlay(
                 GeometryReader { geo in
@@ -331,7 +331,7 @@ private struct AgentThinkingShimmerLabel: View {
                     .frame(width: w * 0.7)
                     .offset(x: -w * 0.7 + phase * (w * 1.7))
                 }
-                .mask(Text(text).font(.system(size: 12, weight: .medium)))
+                .mask(Text(text).scaledFont(size: 12, weight: .medium))
                 .allowsHitTesting(false)
             )
             .onAppear {
@@ -708,7 +708,7 @@ struct AgentToolCallView: View {
                 HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.65).tint(Theme.accent)
                     Text(pendingLabel)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textMuted)
                 }
             }
@@ -736,11 +736,11 @@ struct AgentToolCallView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Theme.accent)
             Text(prettyToolName(call.tool))
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.accent)
             if !call.argsSummary.isEmpty {
                 Text(call.argsSummary)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(2)
                     .truncationMode(.tail)
@@ -748,7 +748,7 @@ struct AgentToolCallView: View {
             Spacer()
             if let ms = call.durationMs {
                 Text("\(Int(ms))ms")
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
             }
         }

@@ -31,7 +31,7 @@ struct PrivacyMomentLabel: View {
                     .foregroundStyle(Theme.textSecondary)
             }
             Text(clock)
-                .font(Theme.monospace(size: 10))
+                .scaledFont(size: 10, design: .monospaced)
                 .foregroundStyle(Theme.textMuted)
         }
         .accessibilityElement()
@@ -68,7 +68,7 @@ struct PrivacyLedgerStep: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
                 Text(event.display.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 PrivacyAuditStatusChip(status: event.display.status)
                 Spacer(minLength: 0)
@@ -78,18 +78,18 @@ struct PrivacyLedgerStep: View {
             }
             ForEach(narrative, id: \.self) { line in
                 Text(line)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let model {
                 Text(model)
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textMuted)
             }
             ForEach(Array(event.display.reductions.enumerated()), id: \.offset) { _, reduction in
                 Text("• \(reduction)")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textSecondary)
             }
             if let comparison = event.answerComparison {
