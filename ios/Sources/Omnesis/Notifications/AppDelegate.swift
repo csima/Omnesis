@@ -112,7 +112,8 @@ public final class OmnesisAppDelegate: NSObject, UIApplicationDelegate {
     public func application(
         _: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
-    ) -> UIInterfaceOrientationMask {
+    )
+        -> UIInterfaceOrientationMask {
         guard let size = window?.windowScene?.screen.bounds.size ?? window?.bounds.size,
               AdaptiveLayout.allowsRotation(windowSize: size)
         else { return .portrait }
