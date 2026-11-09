@@ -125,7 +125,14 @@ struct MarkdownView: View {
                 codeBlock(raw, closed: closed)
             }
         case .table(let headers, let rows):
-            MarkdownTable(headers: headers, rows: rows, bodyFont: resolvedBodyFont, cache: cache, copyValues: copyValues, copyFont: scaledCopyFont)
+            MarkdownTable(
+                headers: headers,
+                rows: rows,
+                bodyFont: resolvedBodyFont,
+                cache: cache,
+                copyValues: copyValues,
+                copyFont: scaledCopyFont
+            )
         }
     }
 
