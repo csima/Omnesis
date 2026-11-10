@@ -101,9 +101,11 @@ public actor OfflineBuffer {
         /// can spend the whole attempt budget in seconds. Timing the run of
         /// failures is what actually holds the window open.
         public let quarantineGrace: TimeInterval
-        /// Upper bound on retained quarantined batches. They are kept so the
-        /// undelivered data is inspectable rather than silently destroyed;
-        /// the cap stops that from growing without limit. Oldest first out.
+        /// Upper bound on quarantined batches. Each is a page its source's
+        /// cursor has moved past, so nothing deletes them but the user's
+        /// discard. Once the quarantine holds this many, a batch that runs
+        /// out of retries stays queued instead, where it counts toward its
+        /// source's backlog and so pauses that source's reading.
         public let maxQuarantinedBatches: Int
 
         public static let `default` = Config(
@@ -360,8 +362,8 @@ public actor OfflineBuffer {
     /// Returns true when that failure was the batch's last: it has now been
     /// moved into `quarantine/` and no longer appears in the FIFO, so the
     /// caller should stop counting it as pending. Returns false while the
-    /// batch is still within its retry budget — it stays queued and the next
-    /// drain tries it again.
+    /// batch is still within its retry budget, or the quarantine is full —
+    /// it stays queued and the next drain tries it again.
     ///
     /// Call this ONLY for failures that repeating cannot fix. A network
     /// error, a 5xx, or a 403 awaiting a scope grant are all states the
@@ -386,6 +388,7 @@ public actor OfflineBuffer {
             persistFailures()
             guard run.attempts >= config.quarantineAfterAttempts else { return false }
             guard now.timeIntervalSince(run.firstAt) >= config.quarantineGrace else { return false }
+            guard quarantinedURLs().count < config.maxQuarantinedBatches else { return false }
             try quarantine(id: id)
             return true
         }
@@ -437,21 +440,12 @@ public actor OfflineBuffer {
 
     // MARK: - Internals
 
-    /// Move a batch out of the FIFO into `quarantine/`, evicting the oldest
-    /// quarantined batches if that would exceed the retention cap.
+    /// Move a batch out of the FIFO into `quarantine/`. Nothing already
+    /// there is evicted to make room (see `Config.maxQuarantinedBatches`).
     private func quarantine(id: String) throws {
         let source = fileURL(for: id)
         let dir = quarantineDirectory()
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-
-        // Make room, oldest first. A delete that fails stops the loop rather
-        // than being counted as room made — otherwise the cap silently
-        // stops holding.
-        var existing = quarantinedURLs()
-        while existing.count >= config.maxQuarantinedBatches, let oldest = existing.first {
-            guard (try? fileManager.removeItem(at: oldest)) != nil else { break }
-            existing.removeFirst()
-        }
 
         let size = (try? sizeOf(source)) ?? 0
         let destination = dir.appendingPathComponent(source.lastPathComponent)
@@ -531,7 +525,7 @@ public actor OfflineBuffer {
             return
         }
         // Drop counts for batches that are no longer queued — a delivered or
-        // evicted batch must not hand its failure history to a future id.
+        // quarantined batch must not hand its failure history to a future id.
         let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
         permanentFailures = decoded.filter { queued.contains($0.key) }
     }
