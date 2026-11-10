@@ -76,6 +76,10 @@ public actor OfflineBuffer {
 
     public struct Config: Sendable {
         public let maxSizeBytes: Int
+        /// The most one source's queued batches may take. A source the
+        /// gateway refuses keeps its batches, so without a share of its own
+        /// its backlog would fill the buffer and stop every other source.
+        public let maxSourceBytes: Int
         /// Alert threshold — warn the UI when the buffer grows past this.
         public let warningSizeBytes: Int
         /// How many permanent delivery failures a single batch may collect
@@ -112,9 +116,11 @@ public actor OfflineBuffer {
             warningSizeBytes: Int,
             quarantineAfterAttempts: Int = 5,
             quarantineGrace: TimeInterval = 6 * 60 * 60,
-            maxQuarantinedBatches: Int = 25
+            maxQuarantinedBatches: Int = 25,
+            maxSourceBytes: Int? = nil
         ) {
             self.maxSizeBytes = maxSizeBytes
+            self.maxSourceBytes = maxSourceBytes ?? maxSizeBytes / 4
             self.warningSizeBytes = warningSizeBytes
             self.quarantineAfterAttempts = quarantineAfterAttempts
             self.quarantineGrace = quarantineGrace
@@ -209,11 +215,12 @@ public actor OfflineBuffer {
     public struct Full: Error, Equatable {}
 
     /// Persist a batch to disk. Throws `Full`, and drops nothing, when the
-    /// batch would take the buffer past `maxSizeBytes`: every queued batch
-    /// is one its source's cursor has already moved past, so dropping one
-    /// to make room would lose its samples for good. A batch alone in an
-    /// empty buffer is always taken, or an oversized page would stall its
-    /// source forever.
+    /// batch would take the buffer past `maxSizeBytes` or its source past
+    /// `maxSourceBytes`: every queued batch is one its source's cursor has
+    /// already moved past, so dropping one to make room would lose its
+    /// samples for good. A source with nothing queued always gets its batch
+    /// in, however full the buffer: other sources' backlogs can't stop it,
+    /// and an oversized page can't stall its source forever.
     public func enqueue(_ batch: Batch) throws {
         try lifetime.withActive {
             try ProtectedStore.offlineBuffer.requireBackupExclusion(
@@ -221,7 +228,10 @@ public actor OfflineBuffer {
             )
             ensureCacheLoaded()
             let data = try encoder.encode(batch)
-            guard fileURLs.isEmpty || totalBytes + data.count <= config.maxSizeBytes else {
+            let own = bytesQueued(bySource: batch.sourceId)
+            guard own == 0
+                || (own + data.count <= config.maxSourceBytes && totalBytes + data.count <= config.maxSizeBytes)
+            else {
                 throw Full()
             }
 
@@ -726,6 +736,16 @@ extension OfflineBuffer {
                 let id = url.deletingPathExtension().lastPathComponent
                 return (source(ofBatch: id, at: url) ?? sourceId) == sourceId
             })
+        }
+    }
+
+    /// Bytes `sourceId`'s queued batches take, counting a batch that can't
+    /// be read as its own (as `pendingCount` does).
+    private func bytesQueued(bySource sourceId: String) -> Int {
+        fileURLs.reduce(0) { total, url in
+            let id = url.deletingPathExtension().lastPathComponent
+            guard (source(ofBatch: id, at: url) ?? sourceId) == sourceId else { return total }
+            return total + ((try? sizeOf(url)) ?? 0)
         }
     }
 
