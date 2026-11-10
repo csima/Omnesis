@@ -443,4 +443,46 @@ final class UploaderTests: XCTestCase {
         let remaining = try await buf.count()
         XCTAssertEqual(remaining, 1)
     }
+
+    /// The drain does what `DeliveryClassification` says for every status
+    /// in its table, so the rule and the foreground path cannot drift apart.
+    func testTheDrainActsOnEveryVerdictTheRuleGives() async throws {
+        for item in DeliveryClassificationTests.statusCases {
+            let label = "\(item.status) \(item.body)"
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("omnesis-uploader-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let buf = OfflineBuffer(
+                directory: dir,
+                config: OfflineBuffer.Config(
+                    maxSizeBytes: 1_000_000,
+                    warningSizeBytes: 500_000,
+                    quarantineAfterAttempts: 2,
+                    quarantineGrace: 0,
+                    maxQuarantinedBatches: 25
+                )
+            )
+            _ = try await enqueueOne(buf)
+            let uploader = try Uploader(gateway: gateway(status: item.status, body: item.body), buffer: buf)
+
+            switch item.verdict {
+            case .reauthorize:
+                do {
+                    _ = try await uploader.drain()
+                    XCTFail("\(label) must stop the drain")
+                } catch {}
+            case .blocked:
+                let stats = try await uploader.drain()
+                XCTAssertEqual(stats.blocked, ["apple-health:local"], label)
+            case .refuse, .retry:
+                _ = try await uploader.drain()
+                _ = try await uploader.drain()
+            }
+
+            let setAside = try await buf.quarantinedCount()
+            XCTAssertEqual(setAside, item.verdict == .refuse ? 1 : 0, label)
+            let remaining = try await buf.count()
+            XCTAssertEqual(remaining, item.verdict == .refuse ? 0 : 1, label)
+        }
+    }
 }
