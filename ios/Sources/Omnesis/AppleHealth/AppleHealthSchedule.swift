@@ -67,25 +67,37 @@ public struct AppleHealthPage<Page> {
 /// before its new sweep. However short the wakes, every type is reached
 /// within one sweep, and the history moves at least once per sweep.
 ///
+/// A sweep stays on a type until its read comes back short, but for at
+/// most `sweepPageLimit` pages (counted across wakes): a type that fills
+/// every page, because it gets that much new on every wake, would
+/// otherwise hold the sweep for good. The sweep then moves on with the
+/// type's anchor where its last page left it, and since that type has
+/// more, the next sweep starts after one backfill read instead of
+/// waiting for the next pass.
+///
 /// The complete read is never skipped or reset; the recent read only
 /// delivers some samples early. A sample both reads return is uploaded
 /// twice, which the gateway's upsert on the sample id absorbs. Once a
 /// type's complete read reaches its end, its recent read is dropped.
 public struct AppleHealthSchedule: Sendable {
     public static let defaultRecentWindow: TimeInterval = 7 * 24 * 60 * 60
+    public static let defaultSweepPageLimit = 4
 
     public let catalog: [String]
     public let pageLimit: Int
     public let recentWindow: TimeInterval
+    public let sweepPageLimit: Int
 
     public init(
         catalog: [String],
         pageLimit: Int,
-        recentWindow: TimeInterval = AppleHealthSchedule.defaultRecentWindow
+        recentWindow: TimeInterval = AppleHealthSchedule.defaultRecentWindow,
+        sweepPageLimit: Int = AppleHealthSchedule.defaultSweepPageLimit
     ) {
         self.catalog = catalog
         self.pageLimit = pageLimit
         self.recentWindow = recentWindow
+        self.sweepPageLimit = max(1, sweepPageLimit)
     }
 
     /// The cursor a new pass starts from: migrated if it predates the
@@ -162,11 +174,8 @@ public struct AppleHealthSchedule: Sendable {
         }
         cursor.caughtUp = caughtUp
 
-        if sweeping, reachedEnd, let index = cursor.sweepIndex {
-            cursor.sweepIndex = index + 1 < catalog.count ? index + 1 : nil
-            if cursor.sweepIndex == nil, backfillIndex(cursor) != nil {
-                cursor.historyTurn = .owed
-            }
+        if sweeping {
+            advanceSweep(&cursor, reachedEnd: reachedEnd)
         } else if !sweeping, case .complete = read {
             // The backfill had its read. A pass that started on it to pay
             // a debt goes back to the sweep.
@@ -180,6 +189,30 @@ public struct AppleHealthSchedule: Sendable {
             cursor.cycleIndex = 0
         }
         return cursor
+    }
+
+    /// Moves the sweep to the next type once this one reached its end or
+    /// used its pages. A sweep that cut a type off starts again after one
+    /// backfill read (or at once, with no history left).
+    private func advanceSweep(_ cursor: inout AppleHealthCursor, reachedEnd: Bool) {
+        guard let index = cursor.sweepIndex else { return }
+        let pages = (cursor.sweepPages ?? 0) + 1
+        let cutOff = !reachedEnd && pages >= sweepPageLimit
+        guard reachedEnd || cutOff else {
+            cursor.sweepPages = pages
+            return
+        }
+        cursor.sweepPages = nil
+        if cutOff { cursor.sweepCutOff = true }
+        cursor.sweepIndex = index + 1 < catalog.count ? index + 1 : nil
+        guard cursor.sweepIndex == nil else { return }
+        let again = cursor.sweepCutOff == true
+        cursor.sweepCutOff = nil
+        if backfillIndex(cursor) != nil {
+            cursor.historyTurn = again ? .taking : .owed
+        } else if again {
+            cursor.sweepIndex = 0
+        }
     }
 
     /// Runs reads until one yields something to upload or the pass is
