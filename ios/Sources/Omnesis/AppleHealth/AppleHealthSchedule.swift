@@ -178,6 +178,11 @@ public struct AppleHealthSchedule: Sendable {
         return AppleHealthPage(page: nil, cursor: cursor, hasMore: next(cursor) != nil)
     }
 
+    /// Whether any type's complete read has yet to reach its end.
+    public func hasHistoryPending(_ cursor: AppleHealthCursor) -> Bool {
+        backfillIndex(cursor.migrated(catalog: catalog)) != nil
+    }
+
     private func backfillIndex(_ cursor: AppleHealthCursor) -> Int? {
         guard !catalog.isEmpty else { return nil }
         let caughtUp = cursor.caughtUp ?? []

@@ -87,6 +87,8 @@ final class SyncCoordinator {
 
     /// Persistence key for `lastSyncAt` in UserDefaults.
     static let lastSyncAtKey = "omnesis.sync.lastSyncAt"
+    /// The source the Apple Health history task reads.
+    nonisolated static let appleHealthSourceId = "apple-health:local"
 
     @ObservationIgnored
     private(set) var core: CollectorCore?
@@ -188,6 +190,16 @@ final class SyncCoordinator {
             photosBackfillHandler: { [weak self] in
                 guard let handler = await MainActor.run(body: { self?.onPhotosBackfillRequested }) else { return }
                 await handler()
+            },
+            healthHistoryProbe: { [weak self] in
+                guard let core = await MainActor.run(body: { self?.core }) else { return false }
+                return await core.hasHistoryPending(sourceId: SyncCoordinator.appleHealthSourceId)
+            },
+            healthHistoryHandler: { [weak self] in
+                guard let core = await MainActor.run(body: { self?.core }) else { return false }
+                let pending = await core.readPendingHistory(sourceId: SyncCoordinator.appleHealthSourceId)
+                await self?.refreshBufferCount()
+                return pending
             }
         )
         #endif
@@ -492,6 +504,9 @@ final class SyncCoordinator {
         // Scheduled unconditionally — the handler itself no-ops when
         // Photos isn't enabled (see `onPhotosBackfillRequested`).
         bgCoordinator?.scheduleNextPhotosBackfill()
+        // Only while Apple Health has history left: the core drives the
+        // source only while it is on, and says no before pairing.
+        await bgCoordinator?.scheduleHealthHistoryIfPending()
         #endif
     }
 
