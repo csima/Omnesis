@@ -4,6 +4,7 @@
 import Foundation
 
 #if canImport(SwiftUI) && canImport(UIKit)
+import UIKit
 #if canImport(BackgroundTasks)
 import BackgroundTasks
 #endif
@@ -133,6 +134,11 @@ final class SyncCoordinator {
     @ObservationIgnored
     private let bufferFileManager: FileManager
 
+    /// The background upload queue batches are handed to, when the person
+    /// turns that on. `nil` where there is none (the macOS logic lane).
+    @ObservationIgnored
+    private let backgroundSession: BackgroundUploadSession?
+
     #if canImport(BackgroundTasks)
     @ObservationIgnored
     private(set) var bgCoordinator: BackgroundTaskCoordinator?
@@ -157,11 +163,16 @@ final class SyncCoordinator {
         bufferFileManager: FileManager = .default,
         gatewayFactory: @escaping (Pairing) -> GatewayClient = {
             GatewayClient(baseURL: $0.url, token: $0.token)
-        }
+        },
+        backgroundSession: BackgroundUploadSession? = SyncCoordinator.defaultBackgroundSession
     ) {
         self.bufferDirectoryProvider = bufferDirectoryProvider
         self.bufferFileManager = bufferFileManager
         self.gatewayFactory = gatewayFactory
+        self.backgroundSession = backgroundSession
+        // Reattach early, so results of uploads that finished while the app
+        // wasn't running are delivered (and held until an uploader exists).
+        backgroundSession?.activate()
 
         // Rehydrate `lastSyncAt` so the Status view shows "Last synced N ago"
         // after a cold launch instead of reverting to "Not synced yet".
@@ -229,6 +240,40 @@ final class SyncCoordinator {
         onPhotosBackfillRequested = handler
     }
 
+    // MARK: - Background uploads
+
+    nonisolated static var defaultBackgroundSession: BackgroundUploadSession? {
+        BackgroundUploadSession.shared
+    }
+
+    /// An uploader for a new pipeline, with the background queue's results
+    /// routed to it.
+    private func makeUploader(gateway: GatewayClient, buffer: OfflineBuffer) -> Uploader {
+        let uploader = Uploader(
+            gateway: gateway,
+            buffer: buffer,
+            budget: BackgroundTimeBudget(),
+            background: backgroundSession.map(Self.backgroundUploads(_:))
+        )
+        backgroundSession?.setHandler { [weak self, weak uploader] completion in
+            await uploader?.finishBackgroundUpload(completion)
+            await self?.refreshBufferCount()
+        }
+        return uploader
+    }
+
+    /// Hand-offs follow the person's setting, and only while the phone is
+    /// unlocked, so the outbox file is readable when the upload starts.
+    private nonisolated static func backgroundUploads(_ session: BackgroundUploadSession) -> BackgroundUploads {
+        BackgroundUploads(
+            transport: session,
+            isEnabled: { BackgroundUploadSettings.isEnabled(UserDefaults.standard) },
+            protectedDataAvailable: {
+                await MainActor.run { UIApplication.shared.isProtectedDataAvailable }
+            }
+        )
+    }
+
     // MARK: - Collector rebuild / teardown
 
     /// Build a fresh `CollectorCore` for the given pairing and source list.
@@ -246,6 +291,8 @@ final class SyncCoordinator {
         let identity = DeliveryIdentity(pairing: pairing)
         if let previousIdentity = deliveryIdentity, previousIdentity != identity {
             clearCollectorState(invalidateDelivery: true)
+            await backgroundSession?.cancelAll()
+            guard replacementRequestGeneration == requestGeneration else { return }
             let directory = bufferDirectoryProvider()
             do {
                 try bufferFileManager.removeItem(at: directory)
@@ -276,7 +323,7 @@ final class SyncCoordinator {
             createdPipeline = false
         } else {
             buffer = OfflineBuffer(directory: bufferDirectoryProvider(), fileManager: bufferFileManager)
-            uploader = Uploader(gateway: gateway, buffer: buffer, budget: BackgroundTimeBudget())
+            uploader = makeUploader(gateway: gateway, buffer: buffer)
             deliveryBuffer = buffer
             self.uploader = uploader
             createdPipeline = true
@@ -344,6 +391,7 @@ final class SyncCoordinator {
         await previousCore?.retireAndWait()
         guard replacementRequestGeneration == requestGeneration else { return }
         clearCollectorState(invalidateDelivery: true)
+        await backgroundSession?.cancelAll()
     }
 
     private func clearCollectorState(invalidateDelivery: Bool) {
@@ -351,6 +399,9 @@ final class SyncCoordinator {
         collectorGeneration += 1
         if invalidateDelivery {
             deliveryBuffer?.invalidate()
+            // Results of the old pairing's uploads wait for the next
+            // uploader, which finds no hand-off of theirs and ignores them.
+            backgroundSession?.setHandler(nil)
         }
         core = nil
         buffer = nil

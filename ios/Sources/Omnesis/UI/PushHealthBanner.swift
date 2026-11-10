@@ -297,7 +297,7 @@ private struct PushHealthPreview: View {
     )
 }
 
-// Every message a finished retry can leave, together — the nine strings are
+// Every message a finished retry can leave, together — the ten strings are
 // only ever seen one at a time in the app, and this is where their length
 // and wrapping can be compared.
 #Preview("Retry outcomes") {
@@ -307,7 +307,7 @@ private struct PushHealthPreview: View {
                 ForEach(
                     [
                         DrainOutcome.delivered, .refused, .paused, .blocked,
-                        .unreachable, .stalled, .busy, .idle, .failed,
+                        .unreachable, .stalled, .sending, .busy, .idle, .failed,
                     ],
                     id: \.self
                 ) { outcome in

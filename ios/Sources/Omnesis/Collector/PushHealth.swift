@@ -82,6 +82,8 @@ public enum PushHealth {
             "Couldn't reach Omnesis. It'll keep trying in the background."
         case .stalled:
             "Batches are still waiting after this retry. Omnesis will keep trying in the background."
+        case .sending:
+            "Batches are on their way. iOS will finish uploading them in the background."
         case .busy:
             "A sync is already running. Try again in a moment."
         case .idle:
@@ -98,7 +100,7 @@ public enum PushHealth {
     public static func retryIsTrouble(_ outcome: DrainOutcome) -> Bool {
         switch outcome {
         case .refused, .paused, .blocked, .unreachable, .stalled, .failed: true
-        case .delivered, .busy, .idle: false
+        case .delivered, .sending, .busy, .idle: false
         }
     }
 }
