@@ -22,11 +22,19 @@
  * Hono's `validator("json", ...)` handles malformed-JSON requests by
  * throwing `HTTPException(400, { message: "Malformed JSON in request body" })`,
  * which the gateway's central error handler renders as a 400.
+ *
+ * That catch also swallows a body that never finished arriving: a phone
+ * suspended mid-upload, a dropped link, a proxy abandoning a slow request.
+ * Those are not malformed payloads, and a client that reads the 400 as a
+ * verdict on its data would eventually discard it. `validateJson` therefore
+ * reads the whole body first and answers 408 `REQUEST_BODY_INCOMPLETE` when
+ * the read fails or ends short of `Content-Length`; only a complete body
+ * that does not parse is still a 400.
  */
 import { validator } from "hono/validator";
 import { toJsonPointer } from "@omnesis/config";
-import { ValidationError } from "./errors.js";
-import type { MiddlewareHandler } from "hono";
+import { RequestBodyIncompleteError, ValidationError } from "./errors.js";
+import type { Context, MiddlewareHandler } from "hono";
 import type { AppEnv } from "./routes/types.js";
 import type { ZodTypeAny, z } from "zod";
 
@@ -56,7 +64,7 @@ export function observeMalformedJson(
 }
 
 export function validateJson<S extends ZodTypeAny>(schema: S) {
-  return validator("json", (value, _c) => {
+  const validate = validator("json", (value, _c) => {
     const result = schema.safeParse(value);
     if (!result.success) {
       throw new ValidationError(
@@ -69,6 +77,46 @@ export function validateJson<S extends ZodTypeAny>(schema: S) {
     }
     return result.data as z.infer<S>;
   });
+  // The wrapper keeps the validator's own type, which is what carries the
+  // parsed body's type through to `c.req.valid("json")`.
+  const readThenValidate: typeof validate = async (c, next) => {
+    await requireCompleteJsonBody(c);
+    return validate(c, next);
+  };
+  return readThenValidate;
+}
+
+/** The content types Hono's JSON validator parses (its own `jsonRegex`). */
+const JSON_CONTENT_TYPE = /^application\/([a-z-.]+\+)?json(;\s*[a-zA-Z0-9-]+=([^;]+))*$/i;
+
+/**
+ * Read a JSON request's body to the end before the validator parses it, so a
+ * body cut off in transit is told apart from one that is malformed. Hono
+ * caches the bytes on the request, so the validator parses this same read.
+ * Requests the validator would not parse (no JSON content type) are left
+ * alone, keeping its "no body means {}" behaviour.
+ */
+async function requireCompleteJsonBody(c: Context): Promise<void> {
+  const contentType = c.req.header("content-type");
+  if (!contentType || !JSON_CONTENT_TYPE.test(contentType)) {
+    return;
+  }
+  const declared = Number(c.req.header("content-length"));
+  let received: number;
+  try {
+    received = (await c.req.arrayBuffer()).byteLength;
+  } catch {
+    throw new RequestBodyIncompleteError(
+      Number.isFinite(declared)
+        ? `Request body ended before its declared ${declared} bytes arrived`
+        : "Request body ended before it was complete",
+    );
+  }
+  if (Number.isFinite(declared) && received < declared) {
+    throw new RequestBodyIncompleteError(
+      `Request body ended after ${received} of its declared ${declared} bytes`,
+    );
+  }
 }
 
 /**

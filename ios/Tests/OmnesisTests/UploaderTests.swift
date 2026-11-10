@@ -334,6 +334,75 @@ final class UploaderTests: XCTestCase {
         }
     }
 
+    /// A gateway that predates `REQUEST_BODY_INCOMPLETE` reports a request
+    /// body that stopped arriving — the app suspended mid-upload — as a 400
+    /// "Malformed JSON". The app cannot produce malformed JSON, so that 400 is
+    /// a cut-off upload and must not count against the batch.
+    func testATruncatedUploadOnAnOlderGatewayIsNotAVerdictOnThePayload() async throws {
+        let buf = buffer()
+        _ = try await enqueueOne(buf)
+        let body = #"{"error":"Malformed JSON in request body","code":"BAD_REQUEST"}"#
+        let uploader = try Uploader(gateway: gateway(status: 400, body: body), buffer: buf)
+
+        var outcomes: [DrainOutcome] = []
+        for _ in 0 ..< 6 {
+            try await outcomes.append(DrainOutcome(uploader.drain()))
+        }
+
+        XCTAssertEqual(Set(outcomes), [.unreachable], "a cut-off upload is a transport failure")
+        let setAside = try await buf.quarantinedCount()
+        XCTAssertEqual(setAside, 0)
+        let remaining = try await buf.count()
+        XCTAssertEqual(remaining, 1)
+    }
+
+    /// The narrow match above must not widen into "every 400 is retryable":
+    /// a validation refusal, or any other 400 message, is still a verdict.
+    func testOtherBadRequestsStillCountAgainstTheBatch() async throws {
+        for body in [
+            #"{"error":"Validation failed","code":"VALIDATION_ERROR","detail":[]}"#,
+            #"{"error":"Malformed JSON in request body, and more","code":"BAD_REQUEST"}"#,
+            "",
+        ] {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("omnesis-uploader-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let buf = OfflineBuffer(
+                directory: dir,
+                config: OfflineBuffer.Config(
+                    maxSizeBytes: 1_000_000,
+                    warningSizeBytes: 500_000,
+                    quarantineAfterAttempts: 2,
+                    quarantineGrace: 0,
+                    maxQuarantinedBatches: 25
+                )
+            )
+            _ = try await enqueueOne(buf)
+            let uploader = try Uploader(gateway: gateway(status: 400, body: body), buffer: buf)
+
+            _ = try await uploader.drain()
+            _ = try await uploader.drain()
+
+            let setAside = try await buf.quarantinedCount()
+            XCTAssertEqual(setAside, 1, "a 400 with body \(body) is the gateway's verdict")
+        }
+    }
+
+    /// What a current gateway answers for the same cut-off body.
+    func testAnIncompleteBodyAnswerIsRetryable() async throws {
+        let buf = buffer()
+        _ = try await enqueueOne(buf)
+        let body = #"{"error":"Request body ended before it was complete","code":"REQUEST_BODY_INCOMPLETE"}"#
+        let uploader = try Uploader(gateway: gateway(status: 408, body: body), buffer: buf)
+
+        for _ in 0 ..< 6 {
+            _ = try await uploader.drain()
+        }
+
+        let setAside = try await buf.quarantinedCount()
+        XCTAssertEqual(setAside, 0)
+    }
+
     /// A 403 means the device's token is missing this source's write scope.
     /// The data delivers once the grant lands, so it must survive however
     /// long the operator takes to grant it.

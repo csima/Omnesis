@@ -114,6 +114,42 @@ describe("validateJson", () => {
     expect(res.status).toBe(400);
   });
 
+  test("a body that fails mid-read is a retryable 408, not a malformed 400", async () => {
+    const app = makeApp(z.object({ x: z.number() }));
+    const encoder = new TextEncoder();
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          controller.error(new Error("client went away"));
+          return;
+        }
+        sent = true;
+        controller.enqueue(encoder.encode('{"x":4'));
+      },
+    });
+    const res = await app.request(
+      new Request("http://localhost/echo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": "40" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+    );
+    expect(res.status).toBe(408);
+    expect(((await res.json()) as { code: string }).code).toBe("REQUEST_BODY_INCOMPLETE");
+  });
+
+  test("a complete body that does not parse is still a 400", async () => {
+    const app = makeApp(z.object({ x: z.number() }));
+    const res = await app.request("/echo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "6" },
+      body: '{"x":4',
+    });
+    expect(res.status).toBe(400);
+  });
+
   test("a malformed-body observer sees the original bytes and preserves the 400", async () => {
     const observed: string[] = [];
     const app = new Hono();
