@@ -35,9 +35,11 @@ import Foundation
 /// narrower than "it failed":
 ///
 ///   - A 4xx the gateway means as a verdict on the payload. Not every 4xx
-///     is: 401 and 403 are about the token, and `retryableStatuses` are
-///     explicit "ask again later" answers that a proxy in front of the
+///     is: 401 and 403 are about the token, and the retryable statuses
+///     are explicit "ask again later" answers that a proxy in front of the
 ///     gateway can emit under nothing worse than load or a slow uplink.
+///     `DeliveryClassification` holds the rule, so every delivery path
+///     reads a failure the same way.
 ///   - A `DecodingError` from the batch file is bytes on disk that do not
 ///     parse. Distinct from a *read* failure, which is routine while the
 ///     device is locked and stays transient.
@@ -147,30 +149,6 @@ public actor Uploader {
     /// upload in between, give up the drain pass. Keeps us from burning
     /// battery hammering an offline gateway.
     private let maxConsecutiveFailures = 3
-
-    /// 4xx codes that mean "later", not "no". They arrive from the gateway's
-    /// own backpressure and from anything sitting in front of it — a reverse
-    /// proxy timing out a slow request body on a weak uplink returns 408, a
-    /// rate limiter returns 429 — so treating them as a verdict on the
-    /// payload would put the largest batches, uploaded over the worst
-    /// connections, first in line to be discarded. A 409 also occurs while
-    /// source storage is being migrated; retain the original batch for retry.
-    private static let retryableStatuses: Set<Int> = [408, 409, 425, 429]
-
-    /// The message a gateway older than its `REQUEST_BODY_INCOMPLETE` answer
-    /// (408) gives a request body that ended early: its JSON check reads the
-    /// body and reports any failure to read it as malformed JSON. This app
-    /// serialises every batch with `JSONEncoder`, which cannot emit malformed
-    /// JSON, so that 400 means the bytes were cut off on the way — the app
-    /// suspended mid-upload, the link dropped, or a proxy gave up on a slow
-    /// body — and never that the batch is wrong. Matched exactly, on 400
-    /// only: any other 400 is still the gateway's verdict on the payload.
-    private static let truncatedBodyMessage = "Malformed JSON in request body"
-
-    private static func isCutOffInTransit(_ error: GatewayClient.Error) -> Bool {
-        guard case .serverError(400, _) = error else { return false }
-        return error.gatewayMessage == truncatedBodyMessage
-    }
 
     public struct Stats: Equatable, Sendable {
         public var uploaded: Int
@@ -412,10 +390,20 @@ public actor Uploader {
                 )
                 return .deliveredButRetained
             }
-        } catch GatewayClient.Error.unauthorized {
+        } catch {
+            return try classify(error, id: id, batchSourceId: batchSourceId)
+        }
+    }
+
+    /// What a failed delivery means for the batch, by the rule every
+    /// delivery path shares (`DeliveryClassification`). Throws only on 401.
+    private func classify(_ error: any Error, id: String, batchSourceId: String?) throws -> BatchResult {
+        let failure = DeliveryClassification.failure(from: error)
+        switch DeliveryClassification.verdict(for: failure) {
+        case .reauthorize:
             log.error("Gateway returned 401 during drain — needs re-pair")
             throw GatewayClient.Error.unauthorized
-        } catch GatewayClient.Error.forbidden {
+        case .blocked:
             // Unauthorized for THIS source only — the token is otherwise
             // valid. Leave the batch on disk (it delivers once the scope is
             // granted) and keep draining so other sources aren't stranded
@@ -429,42 +417,17 @@ public actor Uploader {
                 log.warning("Gateway returned 403 for an unreadable batch \(id, privacy: .public)")
             }
             return .sourceBlocked(sourceId: batchSourceId)
-        } catch let error as GatewayClient.Error where Self.isCutOffInTransit(error) {
-            // The body stopped arriving before the gateway could parse it — see
-            // `isCutOffInTransit`. Not a verdict on the batch.
-            log.notice("Batch \(id, privacy: .public) was cut off in transit; retrying next drain")
-            return .transientFailure
-        } catch GatewayClient.Error.serverError(let status, let body) where (400 ..< 500).contains(status) {
-            // Persistent client-side error — move on so the rest of the queue
-            // can still drain. Batch stays on disk; a future drain retries it
-            // (e.g. after the gateway schema catches up) until it runs out of
-            // budget.
+        case .refuse:
+            // Move on so the rest of the queue can still drain. The batch
+            // stays on disk; a future drain retries it (e.g. after the
+            // gateway schema catches up) until it runs out of budget.
             log.warning(
-                "Skipping batch \(id, privacy: .public) after \(status, privacy: .public): \(body, privacy: .private)"
-            )
-            return Self.retryableStatuses.contains(status) ? .transientFailure : .permanentlyRefused
-        } catch let error as DecodingError {
-            // The bytes were read and do not parse. Unlike a read failure —
-            // routine while the device is locked — no amount of retrying turns
-            // them back into a batch.
-            log.warning(
-                "Batch \(id, privacy: .public) is not decodable: \(String(describing: error), privacy: .private)"
+                "Batch \(id, privacy: .public) refused: \(String(describing: failure), privacy: .private)"
             )
             return .permanentlyRefused
-        } catch GatewayClient.Error.decoding(let detail) {
-            // The gateway answered something this app can't read. Transient,
-            // because the likeliest causes are: a captive portal returning an
-            // HTML login page with a 200, a proxy error page, or a gateway
-            // restarting behind one — all of which clear on their own. Only
-            // a genuine protocol mismatch would repeat, and paying for that
-            // with data is the worse trade.
-            log.warning(
-                "Batch \(id, privacy: .public) got an unreadable gateway response: \(detail, privacy: .private)"
-            )
-            return .transientFailure
-        } catch {
-            log.warning(
-                "Batch \(id, privacy: .public) undeliverable: \(String(describing: error), privacy: .private)"
+        case .retry:
+            log.notice(
+                "Batch \(id, privacy: .public) not delivered, retrying next drain: \(String(describing: failure), privacy: .private)"
             )
             return .transientFailure
         }
