@@ -19,10 +19,13 @@
  * Wrapping the tools, rather than hooking a backend's loop, reaches every
  * backend, including the external runtimes whose loops Omnesis cannot enter.
  *
- * Bounded and fail-open: a turn gets a few reviews, fewer revisions and at
- * most two refused citations, after which the agent may answer and must say
- * what it did not cover; a review that errors or outlasts its timeout passes
- * the result through untouched; and no reviewer model means no review.
+ * Every review's verdict stands until the next one: a rejection holds the
+ * citations with its note, and a pass releases them.
+ *
+ * Bounded and fail-open: a turn gets a few reviews and at most two refused
+ * citations, after which the agent may answer and must open by saying what it
+ * did not cover; a review that errors or outlasts its timeout passes the
+ * result through untouched; and no reviewer model means no review.
  */
 
 import { createLogger, type CompleteCapability, type ToolResult } from "@omnesis/core";
@@ -49,10 +52,8 @@ export const REVIEWED_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export interface RetrievalCriticLimits {
-  /** Reviews per turn. Retrieval past it is not reviewed. */
+  /** Reviews per turn. Retrieval past it is not reviewed, and the last verdict stands. */
   readonly reviewsPerTurn: number;
-  /** Revision notes per turn, so a reviewer can never keep a turn going. */
-  readonly revisionsPerTurn: number;
   /** Citations refused per turn while a rejection stands; past it the agent may answer. */
   readonly refusalsPerTurn: number;
   readonly timeoutMs: number;
@@ -60,7 +61,6 @@ export interface RetrievalCriticLimits {
 
 export const DEFAULT_RETRIEVAL_CRITIC_LIMITS: RetrievalCriticLimits = {
   reviewsPerTurn: 6,
-  revisionsPerTurn: 3,
   refusalsPerTurn: 2,
   timeoutMs: 20_000,
 };
@@ -69,13 +69,12 @@ export const DEFAULT_RETRIEVAL_CRITIC_LIMITS: RetrievalCriticLimits = {
 export class RetrievalCriticTurn {
   readonly retrievals: string[] = [];
   reviews = 0;
-  revisions = 0;
   refusals = 0;
   /** Calls in one model round run concurrently; one review at a time. */
   reviewing = false;
   /**
-   * The reviewer's standing rejection: the note from the latest review that
-   * found the retrieval insufficient, cleared when a later retrieval passes.
+   * The reviewer's standing rejection: the note of the latest review when it
+   * found the retrieval insufficient; null once a review passes.
    */
   pending: string | null = null;
 
@@ -242,14 +241,19 @@ export interface RetrievalCriticDeps {
   readonly limits?: RetrievalCriticLimits;
 }
 
-/** What a citation gets back while the reviewer's rejection stands. */
-export function refusedCitation(note: string): ToolResult {
+/**
+ * What a citation gets back while the reviewer's rejection stands. The last
+ * refusal says what happens next, so the answer that follows it can say what
+ * it does not cover.
+ */
+export function refusedCitation(note: string, last = false): ToolResult {
+  const next = last
+    ? "If that retrieval is not possible, your next citation will be recorded, and your answer must open by saying plainly what it does not cover and why."
+    : "Citations are accepted once a retrieval passes review.";
   return {
     kind: "error",
     code: "retrieval_review_pending",
-    message:
-      `Not recorded. The retrieval review found that what you have retrieved cannot answer the request yet: ${note} ` +
-      "Carry out that retrieval now. Citations are accepted once a retrieval passes review.",
+    message: `Not recorded. The retrieval review found that what you have retrieved cannot answer the request yet: ${note} Carry out that retrieval now. ${next}`,
   };
 }
 
@@ -265,7 +269,7 @@ function withCitationGate(handle: ToolHandle, deps: RetrievalCriticDeps): ToolHa
         log.info(
           `session ${ctx.sessionId} ${handle.name}: held for the retrieval review (${turn.refusals}/${limits.refusalsPerTurn})`,
         );
-        return refusedCitation(turn.pending);
+        return refusedCitation(turn.pending, turn.refusals >= limits.refusalsPerTurn);
       }
       return handle.invoke(args, ctx);
     },
@@ -309,19 +313,14 @@ export function withRetrievalCritic(handle: ToolHandle, deps: RetrievalCriticDep
           buildCriticPrompt(turn.request, earlier, latest),
           limits.timeoutMs,
         );
+        const progress = `session ${ctx.sessionId} ${handle.name}: review ${turn.reviews}/${limits.reviewsPerTurn}`;
         if (verdict.verdict === "adequate") {
-          if (turn.pending) log.info(`session ${ctx.sessionId} ${handle.name}: review passed`);
+          log.info(`${progress} passed${turn.pending ? ", citations released" : ""}`);
           turn.pending = null;
           return result;
         }
-        // Past the turn's revisions, a fresh rejection adds no note; an
-        // earlier one still stands until a retrieval passes.
-        if (turn.revisions >= limits.revisionsPerTurn) return result;
-        turn.revisions += 1;
         turn.pending = verdict.note;
-        log.info(
-          `session ${ctx.sessionId} ${handle.name}: revise (${turn.revisions}/${limits.revisionsPerTurn})`,
-        );
+        log.info(`${progress} revise`);
         return withReview(result, verdict.note);
       } catch (err) {
         log.warn(

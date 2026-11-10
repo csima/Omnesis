@@ -215,10 +215,10 @@
           is told what is missing. The verdict binds: until a later retrieval passes review, the
           agent cannot record the sources its answer cites, so it has to carry out the retrieval it
           was told about first. If its citations are still refused after two attempts, it may
-          answer, and the answer opens by saying what it does not cover. A turn gets at most six
-          reviews and three such notes, and a review that fails or takes longer than 20 seconds
-          changes nothing. Spoken answers are not reviewed. The reviews are billed to the agent's
-          model and appear as <code>retrieval-critic</code> in spend.
+          answer, and the answer opens by saying what it does not cover. Each review replaces the
+          verdict before it. A turn gets at most six reviews, and a review that fails or takes
+          longer than 20 seconds changes nothing. Spoken answers are not reviewed. The reviews are
+          billed to the agent's model and appear as <code>retrieval-critic</code> in spend.
         </p>
         <p>
           For a deliberate, fully orchestrated research pass, type <code>/</code> in the composer
