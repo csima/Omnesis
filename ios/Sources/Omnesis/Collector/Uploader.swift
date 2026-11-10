@@ -157,6 +157,21 @@ public actor Uploader {
     /// source storage is being migrated; retain the original batch for retry.
     private static let retryableStatuses: Set<Int> = [408, 409, 425, 429]
 
+    /// The message a gateway older than its `REQUEST_BODY_INCOMPLETE` answer
+    /// (408) gives a request body that ended early: its JSON check reads the
+    /// body and reports any failure to read it as malformed JSON. This app
+    /// serialises every batch with `JSONEncoder`, which cannot emit malformed
+    /// JSON, so that 400 means the bytes were cut off on the way — the app
+    /// suspended mid-upload, the link dropped, or a proxy gave up on a slow
+    /// body — and never that the batch is wrong. Matched exactly, on 400
+    /// only: any other 400 is still the gateway's verdict on the payload.
+    private static let truncatedBodyMessage = "Malformed JSON in request body"
+
+    private static func isCutOffInTransit(_ error: GatewayClient.Error) -> Bool {
+        guard case .serverError(400, _) = error else { return false }
+        return error.gatewayMessage == truncatedBodyMessage
+    }
+
     public struct Stats: Equatable, Sendable {
         public var uploaded: Int
         public var failed: Int
@@ -414,6 +429,11 @@ public actor Uploader {
                 log.warning("Gateway returned 403 for an unreadable batch \(id, privacy: .public)")
             }
             return .sourceBlocked(sourceId: batchSourceId)
+        } catch let error as GatewayClient.Error where Self.isCutOffInTransit(error) {
+            // The body stopped arriving before the gateway could parse it — see
+            // `isCutOffInTransit`. Not a verdict on the batch.
+            log.notice("Batch \(id, privacy: .public) was cut off in transit; retrying next drain")
+            return .transientFailure
         } catch GatewayClient.Error.serverError(let status, let body) where (400 ..< 500).contains(status) {
             // Persistent client-side error — move on so the rest of the queue
             // can still drain. Batch stays on disk; a future drain retries it
