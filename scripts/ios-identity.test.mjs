@@ -535,6 +535,17 @@ describe("hosted iOS simulator preparation", () => {
       expect(setup).toBeLessThan(steps.findIndex((step) => step.name?.startsWith("lane [")));
       expect(workflow.jobs[job].env?.[variable]).toBeUndefined();
     }
+    // A booted phone can be missing from Xcode's destinations for a while;
+    // xcodebuild then exits 70 before compiling anything.
+    const steps = workflow.jobs["build-and-test"].steps;
+    const discover = steps.findIndex((step) =>
+      step.run?.includes("scripts/ci/wait-ios-destination.mjs"),
+    );
+    expect(discover).toBeGreaterThan(
+      steps.findIndex((step) => step.run?.includes("scripts/ci/resolve-ios-packages.sh")),
+    );
+    expect(discover).toBeLessThan(steps.findIndex((step) => step.name?.startsWith("lane [")));
+    expect(steps[discover].run).toContain('"$IOS_DESTINATION"');
     const journeys = parse(read(".github/workflows/mobile-journeys.yml")).jobs.ios.steps;
     expect(journeys.find((step) => step.name === "Prepare iPhone simulator").run).toContain(
       "OMNESIS_JOURNEY_IOS_UDID=$udid",
