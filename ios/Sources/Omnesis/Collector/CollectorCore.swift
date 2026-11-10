@@ -208,15 +208,32 @@ public actor CollectorCore {
         return summary
     }
 
+    /// Whether a source still has history to read.
+    public enum HistoryStatus: Sendable, Equatable {
+        case pending
+        /// Nothing left, or nothing this core reads.
+        case finished
+        /// The saved cursor couldn't be read (the gateway out of reach, a
+        /// server error). Never taken for `finished`.
+        case unknown
+
+        /// Whether a scheduled history run is still wanted: unless the
+        /// history is known to be finished, it is.
+        public var wantsHistoryRun: Bool {
+            self != .finished
+        }
+    }
+
     /// Whether `sourceId` still has history to read, by its last saved
-    /// cursor. False for a source this core doesn't drive, and when the
-    /// cursor can't be read.
-    public func hasHistoryPending(sourceId: String) async -> Bool {
-        guard let source = sources.first(where: { $0.id == sourceId }) else { return false }
+    /// cursor. `finished` for a source this core doesn't drive; `unknown`
+    /// when the cursor can't be read.
+    public func historyStatus(sourceId: String) async -> HistoryStatus {
+        guard let source = sources.first(where: { $0.id == sourceId }) else { return .finished }
         do {
-            return try await source.hasHistoryPending(cursor: cursorStore.load(for: sourceId))
+            let cursor = try await cursorStore.load(for: sourceId)
+            return source.hasHistoryPending(cursor: cursor) ? .pending : .finished
         } catch {
-            return false
+            return .unknown
         }
     }
 
@@ -225,14 +242,14 @@ public actor CollectorCore {
     /// nothing (the phone locked, the gateway out of reach — a pass only
     /// ends empty-handed with history pending when it can't read it), or
     /// the task is cancelled, which stops the pass at a page boundary.
-    /// Returns whether history is still pending.
-    public func readPendingHistory(sourceId: String, maxPasses: Int = 50) async -> Bool {
+    /// Returns where the history stands then.
+    public func readPendingHistory(sourceId: String, maxPasses: Int = 50) async -> HistoryStatus {
         for _ in 0 ..< maxPasses {
-            guard acceptingSyncs, !Task.isCancelled, await hasHistoryPending(sourceId: sourceId) else { break }
+            guard acceptingSyncs, !Task.isCancelled, await historyStatus(sourceId: sourceId) == .pending else { break }
             let summary = await sync(sourceId: sourceId, awaitingFollowUp: true)
             guard let summary, summary.error == nil, summary.batches > 0 else { break }
         }
-        return await hasHistoryPending(sourceId: sourceId)
+        return await historyStatus(sourceId: sourceId)
     }
 
     /// Drain the offline buffer without pulling new data. Useful after
