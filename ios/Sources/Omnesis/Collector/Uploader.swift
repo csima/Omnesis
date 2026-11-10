@@ -167,12 +167,7 @@ public actor Uploader {
         var consecutiveFailures = 0
         // sourceId → reason for any source the gateway rejected this pass.
         var rejections = pass.rejections
-        // Sources the gateway refused with 403 this pass.
-        var blocked: Set<String> = []
-        // Sources with a batch that stays queued after a failed attempt this
-        // pass. Their later batches wait for the next pass, so none lands
-        // ahead of it.
-        var fenced: Set<String> = []
+        var holds = SourceHolds()
         var stoppedForTime = false
         var handedOff = 0
         var inBackground = 0
@@ -197,12 +192,7 @@ public actor Uploader {
                 break drainPass
             }
             let effect = try await deliver(
-                id: id,
-                blockedSources: blocked,
-                waitingSources: order.waiting,
-                fencedSources: fenced,
-                gateway: gateway,
-                handOff: pass.handOff
+                id: id, holds: holds, waitingSources: order.waiting, gateway: gateway, handOff: pass.handOff
             ).effect
             uploaded += effect.uploaded
             handedOff += effect.handedOff
@@ -213,12 +203,7 @@ public actor Uploader {
             if let rejection = effect.rejection {
                 rejections[rejection.sourceId] = rejection.reason
             }
-            if let sourceId = effect.blockedSourceId {
-                blocked.insert(sourceId)
-            }
-            if let sourceId = effect.fencedSourceId {
-                fenced.insert(sourceId)
-            }
+            holds.note(effect)
             if effect.isPermanentFailure, await notePermanentFailure(id: id) {
                 quarantined += 1
             }
@@ -244,107 +229,19 @@ public actor Uploader {
             rejected: rejections
                 .map { PushRejection(sourceId: $0.key, reason: $0.value) }
                 .sorted { $0.sourceId < $1.sourceId },
-            blocked: blocked.sorted(),
+            blocked: holds.blocked.sorted(),
             stoppedForTime: stoppedForTime,
             handedOff: handedOff,
             inBackground: inBackground
         )
     }
 
-    private struct BatchEffect {
-        var uploaded = 0
-        var handedOff = 0
-        var heldBack = 0
-        var failed = 0
-        var skipped = 0
-        var resetsConsecutiveFailures = false
-        var isPermanentFailure = false
-        var rejection: PushRejection?
-        var blockedSourceId: String?
-        /// A source that now has a batch in the background queue.
-        var waitingSourceId: String?
-        /// A source whose batch stays queued after failing this pass.
-        var fencedSourceId: String?
-    }
-
-    /// What one batch amounted to. Each result projects a small, declarative
-    /// effect that the drain loop folds into its pass-wide state.
-    private enum BatchResult {
-        case uploaded
-        /// Given to the background upload queue; its result arrives later.
-        case handedOff(sourceId: String)
-        /// An earlier batch of the same source is still in the background
-        /// queue, so this one waits for it.
-        case heldBehindBackground(sourceId: String)
-        /// Delivered, but the queued file could not be deleted afterwards.
-        case deliveredButRetained
-        /// The gateway declined the source itself (removed / paused).
-        case sourceRejected(sourceId: String, reason: String)
-        /// 403 — this device's token lacks the source's write scope. The
-        /// source id is absent when the batch file could not be read.
-        case sourceBlocked(sourceId: String?)
-        /// Repeating cannot change the result; counts against the batch's
-        /// quarantine budget. The source id is absent when the batch file
-        /// could not be read.
-        case permanentlyRefused(sourceId: String?)
-        /// The world may fix this on its own; never costs the batch data.
-        case transientFailure(sourceId: String?)
-        /// An earlier batch of the same source failed this pass and is still
-        /// queued, so this one was not attempted.
-        case heldBehindFailure
-        /// Replicated deletion was deliberately refused to this non-holder.
-        case replicaDeletionDeferred
-        /// The file went away between listing and loading it.
-        case vanished
-        /// An earlier batch of the same source was refused with 403 this
-        /// pass, so this one was not attempted.
-        case skippedBlockedSource
-
-        var effect: BatchEffect {
-            switch self {
-            case .uploaded:
-                BatchEffect(uploaded: 1, resetsConsecutiveFailures: true)
-            case .handedOff(let sourceId):
-                BatchEffect(handedOff: 1, resetsConsecutiveFailures: true, waitingSourceId: sourceId)
-            case .heldBehindBackground(let sourceId):
-                BatchEffect(heldBack: 1, waitingSourceId: sourceId)
-            case .deliveredButRetained:
-                BatchEffect(uploaded: 1, resetsConsecutiveFailures: true, isPermanentFailure: true)
-            case .sourceRejected(let sourceId, let reason):
-                BatchEffect(
-                    resetsConsecutiveFailures: true,
-                    rejection: PushRejection(sourceId: sourceId, reason: reason)
-                )
-            case .sourceBlocked(let sourceId):
-                BatchEffect(skipped: 1, resetsConsecutiveFailures: true, blockedSourceId: sourceId)
-            case .permanentlyRefused(let sourceId):
-                BatchEffect(
-                    skipped: 1, resetsConsecutiveFailures: true, isPermanentFailure: true, fencedSourceId: sourceId
-                )
-            case .transientFailure(let sourceId):
-                BatchEffect(failed: 1, fencedSourceId: sourceId)
-            case .heldBehindFailure:
-                // Waiting, not failing: the failure is the earlier batch's.
-                BatchEffect()
-            case .replicaDeletionDeferred:
-                // Another healthy replica owns deletion authority. Retaining
-                // the batch is expected coordination, not a failure.
-                BatchEffect(resetsConsecutiveFailures: true)
-            case .vanished:
-                BatchEffect()
-            case .skippedBlockedSource:
-                BatchEffect(skipped: 1)
-            }
-        }
-    }
-
     /// Attempt one batch. Throws only on 401 — the token itself is dead, so
     /// there is no point continuing the pass.
     private func deliver(
         id: String,
-        blockedSources: Set<String>,
+        holds: SourceHolds,
         waitingSources: Set<String>,
-        fencedSources: Set<String>,
         gateway: GatewayClient,
         handOff: Bool
     ) async throws
@@ -364,7 +261,7 @@ public actor Uploader {
             // sends analytics before documents — so a source whose analytics
             // rows are accepted but whose documents are refused would re-send
             // those rows on every batch.
-            if blockedSources.contains(batch.sourceId) {
+            if holds.blocked.contains(batch.sourceId) {
                 return .skippedBlockedSource
             }
             if waitingSources.contains(batch.sourceId) {
@@ -373,7 +270,7 @@ public actor Uploader {
             // A batch sent past an earlier one of its source that failed would
             // land first: a deletion before the insert it follows, a newer row
             // before an older one.
-            if fencedSources.contains(batch.sourceId) {
+            if holds.fenced.contains(batch.sourceId) {
                 return .heldBehindFailure
             }
             if handOff, !backgroundBlocked.contains(batch.sourceId),

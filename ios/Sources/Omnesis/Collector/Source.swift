@@ -347,11 +347,11 @@ public struct Batch: Codable, Equatable, Sendable {
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 
-    /// Derive an id like `20260418T145023123-a1b2c3d4` that sorts
-    /// lexicographically in the order batches were produced: each id is
-    /// at least a millisecond after the one before it in this process, so
-    /// two batches made within one millisecond, or across a clock step
-    /// back, still go in the order they were made.
+    /// Derive an id like `20260418T145023123-a1b2c3d4` that carries the
+    /// time the batch was made: each id is at least a millisecond after
+    /// the one before it in this process. That holds within one process
+    /// only, so the queue's order comes from `OfflineBuffer`'s sequence,
+    /// never from these ids.
     public static func makeId() -> String {
         makeId(millis: IdClock.shared.next())
     }

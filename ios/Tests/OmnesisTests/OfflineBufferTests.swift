@@ -50,6 +50,45 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    /// The queue keeps the order batches went in, on disk, not the order
+    /// their ids sort in: a batch queued after a relaunch, by a clock that
+    /// stepped back, still goes after every batch queued before it.
+    func testOrderSurvivesARelaunchAndAClockStepBack() async throws {
+        let made = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = makeBatch(id: Batch.makeId(now: made))
+        try await OfflineBuffer(directory: directory).enqueue(first)
+
+        let relaunched = OfflineBuffer(directory: directory)
+        let second = makeBatch(id: Batch.makeId(now: made.addingTimeInterval(-60)))
+        try await relaunched.enqueue(second)
+        let third = makeBatch(id: Batch.makeId(now: made.addingTimeInterval(-30)))
+        try await relaunched.enqueue(third)
+
+        let queued = try await relaunched.listIds()
+        XCTAssertEqual(queued, [first.id, second.id, third.id])
+        let again = try await OfflineBuffer(directory: directory).listIds()
+        XCTAssertEqual(again, [first.id, second.id, third.id], "read back the same after another relaunch")
+    }
+
+    /// Batches queued before sequences keep their place ahead of every
+    /// batch queued since.
+    func testBatchesFromBeforeSequencesGoFirst() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacy = makeBatch(id: Batch.makeId(now: Date(timeIntervalSince1970: 1_800_000_000)))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(legacy).write(to: directory.appendingPathComponent("\(legacy.id).json"))
+        let buf = OfflineBuffer(directory: directory)
+        let queued = makeBatch(id: Batch.makeId(now: Date(timeIntervalSince1970: 1_700_000_000)))
+        try await buf.enqueue(queued)
+
+        let ids = try await buf.listIds()
+        XCTAssertEqual(ids, [legacy.id, queued.id])
+        try await buf.remove(id: legacy.id)
+        let left = try await buf.listIds()
+        XCTAssertEqual(left, [queued.id])
+    }
+
     func testEnqueueFailsClosedWhenBackupExclusionCannotBeApplied() async throws {
         let buffer = OfflineBuffer(directory: directory)
         try FileManager.default.removeItem(at: directory)
@@ -388,7 +427,7 @@ final class OfflineBufferTests: XCTestCase {
         let kept = try FileManager.default.contentsOfDirectory(
             at: directory.appendingPathComponent("quarantine"), includingPropertiesForKeys: nil
         )
-        .map { $0.deletingPathExtension().lastPathComponent }
+        .map(QueuedBatchFile.batchId(of:))
         .sorted()
         XCTAssertEqual(kept, Array(ids.prefix(2)), "the first two stay set aside")
         let queued = try await buf.listIds()
@@ -405,7 +444,7 @@ final class OfflineBufferTests: XCTestCase {
         try await bufA.enqueue(makeBatch(id: id))
         _ = try await bufA.recordPermanentFailure(id: id)
         // Delete the batch behind the buffer's back, leaving the sidecar entry.
-        try FileManager.default.removeItem(at: directory.appendingPathComponent("\(id).json"))
+        try FileManager.default.removeItem(at: queuedBatchFile(id, in: directory))
 
         let bufB = OfflineBuffer(directory: directory, config: config)
         try await bufB.enqueue(makeBatch(id: id))
@@ -459,4 +498,10 @@ final class OfflineBufferTests: XCTestCase {
             last = id
         }
     }
+}
+
+/// The file queued batch `id` is in.
+func queuedBatchFile(_ id: String, in directory: URL) throws -> URL {
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+    return try XCTUnwrap(files.first { $0.pathExtension == "json" && QueuedBatchFile.batchId(of: $0) == id })
 }

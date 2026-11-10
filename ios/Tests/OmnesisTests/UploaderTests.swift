@@ -161,7 +161,7 @@ final class UploaderTests: XCTestCase {
             deletedIds: ["sample-removed"],
             createdAt: Date()
         ))
-        let file = directory.appendingPathComponent("\(id).json")
+        let file = try queuedBatchFile(id, in: directory)
         let encoded = try Data(contentsOf: file)
         var legacyPayload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any]
