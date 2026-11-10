@@ -251,6 +251,13 @@ public protocol OmnesisSource: Sendable {
     /// as soon as they have no more data for the current cycle.
     func sync(cursor: SyncCursor?) async throws -> SyncResult
 
+    /// The cursor a pass starts from, given the one last saved. Called once
+    /// per pass before the first `sync`; the result is saved with the
+    /// first page. Sources that plan each pass (Apple Health sweeps every
+    /// type for recent samples before resuming its backfill) reset that
+    /// plan here; the default keeps the cursor as it is.
+    func cursorForNewPass(_ cursor: SyncCursor?) -> SyncCursor?
+
     /// Called only after a page's upload payload is durably buffered, before
     /// its cursor advances. Source-local delivery marks must not advance in
     /// `sync` itself: a buffer failure must leave that page replayable.
@@ -259,6 +266,10 @@ public protocol OmnesisSource: Sendable {
 
 extension OmnesisSource {
     public func didBuffer(_: SyncResult) async throws {}
+
+    public func cursorForNewPass(_ cursor: SyncCursor?) -> SyncCursor? {
+        cursor
+    }
 
     public var multiDeviceMode: SourceMultiDeviceMode {
         .exclusive

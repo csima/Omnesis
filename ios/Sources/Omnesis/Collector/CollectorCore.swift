@@ -339,7 +339,7 @@ public actor CollectorCore {
                 try await prepareSource?(source.id, source.multiDeviceMode)
                 preparedSourceIds.insert(source.id)
             }
-            var cursor = try await cursorStore.load(for: source.id, refresh: true)
+            var cursor = try await source.cursorForNewPass(cursorStore.load(for: source.id, refresh: true))
             // Cap to avoid runaway loops while a malformed source keeps
             // claiming hasMore=true.
             let maxPages = 200
