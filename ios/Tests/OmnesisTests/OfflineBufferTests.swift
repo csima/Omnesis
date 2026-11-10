@@ -104,6 +104,33 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(peeked?.id, "20260418T100000000-aaaa")
     }
 
+    /// An app container's path reaches the buffer as `/var/…` while a
+    /// directory listing returns `/private/var/…`. A buffer reloaded from
+    /// disk after a relaunch must still drop what it delivers, or the count
+    /// keeps naming batches that are long gone.
+    func testRemovalAfterReloadThroughASymlinkedPath() async throws {
+        // A symlinked ancestor, as `/var` is on iOS.
+        let real = directory.appendingPathComponent("real", isDirectory: true)
+        let link = directory.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: real.path)
+        let bufferDirectory = link.appendingPathComponent("buffer", isDirectory: true)
+        let batch = makeBatch()
+        try await OfflineBuffer(directory: bufferDirectory).enqueue(batch)
+
+        let relaunched = OfflineBuffer(directory: bufferDirectory)
+        let before = try await relaunched.count()
+        XCTAssertEqual(before, 1)
+        try await relaunched.remove(id: batch.id)
+
+        let count = try await relaunched.count()
+        XCTAssertEqual(count, 0)
+        let ids = try await relaunched.listIds()
+        XCTAssertEqual(ids, [])
+        let bytes = try await relaunched.totalSizeBytes()
+        XCTAssertEqual(bytes, 0)
+    }
+
     func testLoadingFilesRemovedByAnotherOwnerHealsCachedHealthState() async throws {
         let ids = [agedId(10 * 60 * 60), agedId(9 * 60 * 60)]
         let current = OfflineBuffer(directory: directory)
