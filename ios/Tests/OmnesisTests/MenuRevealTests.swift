@@ -311,6 +311,20 @@ final class MenuRevealTests: XCTestCase {
         XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1366), 340)
     }
 
+    /// Docked on the inner display on its side, the measured width came back
+    /// as 867 and 867.0000000000002 in turn, each lay-out moving it to the
+    /// other, until the watchdog killed the app. A sliver like that is not a
+    /// resize; a real one still is.
+    func testWidthIgnoresLayoutRoundingButTakesAResize() {
+        let measured: CGFloat = 867
+        let nudged = measured.nextUp.nextUp
+        XCTAssertEqual(MenuReveal.settledWidth(current: measured, measured: nudged), measured)
+        XCTAssertEqual(MenuReveal.settledWidth(current: nudged, measured: measured), nudged)
+        XCTAssertEqual(MenuReveal.settledWidth(current: 0, measured: measured), measured)
+        XCTAssertEqual(MenuReveal.settledWidth(current: measured, measured: 466), 466)
+        XCTAssertEqual(MenuReveal.settledWidth(current: measured, measured: 867.5), 867.5)
+    }
+
     /// At an accessibility text size the sidebar needs more room: the upright
     /// inner display keeps the drawer, so the section keeps its full width,
     /// and on its side the sidebar is wider.
