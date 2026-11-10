@@ -157,7 +157,8 @@ public actor Uploader {
         }
         draining = true
         defer { draining = false }
-        let pass = try await startBackgroundPass()
+        let ids = try await buffer.listIds()
+        let pass = try await startBackgroundPass(ids: ids)
 
         var uploaded = 0
         var failed = 0
@@ -178,9 +179,8 @@ public actor Uploader {
         var order = BackgroundOrder(pass: pass)
         let gateway = gatewayRoute.current()
 
-        let ids = try await buffer.listIds()
         drainPass: for (index, id) in ids.enumerated() {
-            switch order.place(of: id) {
+            switch order.place(of: id, at: index) {
             case .send: break
             case .withSystem:
                 inBackground += 1
@@ -559,12 +559,15 @@ extension Uploader {
     private struct BackgroundPass {
         /// Source rejections background results reported since the last pass.
         let rejections: [String: String]
-        /// Batches handed off and still with their task; `nil` when that
-        /// record can't be read.
-        let marks: [String: BackgroundUploadMark]?
-        /// With no record to read: the earliest batch the system still
-        /// holds a task for. It and every later batch wait.
-        let holdFrom: String?
+        /// Batches the system holds a task for, with their source: from the
+        /// record of hand-offs, and from the tasks themselves whatever the
+        /// record says.
+        let outstanding: [String: String]
+        /// Where in the queue the batches stop being sendable: the first a
+        /// task is out for whose source can't be read, or the start when a
+        /// task is out for a batch no longer queued. It and every later
+        /// batch wait.
+        let holdFrom: Int?
         let handOff: Bool
     }
 
@@ -592,12 +595,12 @@ extension Uploader {
             self.pass = pass
         }
 
-        mutating func place(of id: String) -> BackgroundPlace {
-            if let mark = pass.marks?[id] {
-                waiting.insert(mark.sourceId)
+        mutating func place(of id: String, at index: Int) -> BackgroundPlace {
+            if let holdFrom = pass.holdFrom, index >= holdFrom { return .holdRest }
+            if let sourceId = pass.outstanding[id] {
+                waiting.insert(sourceId)
                 return .withSystem
             }
-            if let holdFrom = pass.holdFrom, id >= holdFrom { return .holdRest }
             return .send
         }
 
@@ -608,10 +611,11 @@ extension Uploader {
         }
     }
 
-    /// What background uploads bring to a drain pass: results recorded
-    /// since the last one, the batches still with their task, and whether
-    /// this pass hands batches off. Throws the 401 a background upload got.
-    private func startBackgroundPass() async throws -> BackgroundPass {
+    /// What background uploads bring to a drain pass over `ids`: results
+    /// recorded since the last one, the batches still with their task, and
+    /// whether this pass hands batches off. Throws the 401 a background
+    /// upload got.
+    private func startBackgroundPass(ids: [String]) async throws -> BackgroundPass {
         if backgroundUnauthorized {
             backgroundUnauthorized = false
             log.error("Gateway returned 401 to a background upload — needs re-pair")
@@ -620,12 +624,28 @@ extension Uploader {
         let live = await reconcileBackgroundUploads()
         let rejections = backgroundRejections
         backgroundRejections = [:]
-        // Hand-offs need the record of them; while it can't be read, none
-        // are made, and the tasks' own tags say which batches are out.
+        // Hand-offs need the record of them; while it can't be read or
+        // decoded, none are made.
         let marks = await background == nil ? [:] : (try? buffer.backgroundUploadMarks())
-        let holdFrom = marks == nil ? live.compactMap { BackgroundUploadTag($0)?.batchId }.min() : nil
+        var outstanding = (marks ?? [:]).mapValues(\.sourceId)
+        var holdFrom: Int?
+        // The tasks' own tags say which batches are out, whatever the record
+        // says: a record lost or written over must not send a batch again,
+        // or the rest of its source, while its task can still land.
+        let position = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        for tag in live.compactMap(BackgroundUploadTag.init) where outstanding[tag.batchId] == nil {
+            guard let index = position[tag.batchId] else {
+                holdFrom = 0
+                continue
+            }
+            if let sourceId = try? await buffer.load(id: tag.batchId)?.sourceId {
+                outstanding[tag.batchId] = sourceId
+            } else {
+                holdFrom = min(holdFrom ?? index, index)
+            }
+        }
         let handOff = await shouldHandOff() && marks != nil
-        return BackgroundPass(rejections: rejections, marks: marks, holdFrom: holdFrom, handOff: handOff)
+        return BackgroundPass(rejections: rejections, outstanding: outstanding, holdFrom: holdFrom, handOff: handOff)
     }
 
     /// Hand batches off this pass only when the person turned it on and the

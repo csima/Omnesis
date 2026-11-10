@@ -722,6 +722,65 @@ final class BackgroundUploadOrderTests: BackgroundUploadTestCase {
         XCTAssertNotNil(left)
     }
 
+    /// A record that reads but doesn't decode says nothing about which
+    /// batches are out, and one that decodes can still miss a task the
+    /// system holds: either way the live task keeps its batch, and the
+    /// rest of its source, from being sent again.
+    func testALiveTaskHoldsItsSourceWhateverTheRecordSays() async throws {
+        for record in ["not a record", "{}"] {
+            for unlocked in [true, false] {
+                try await assertLiveTaskHoldsItsSource(record: record, unlocked: unlocked)
+            }
+        }
+    }
+
+    /// An unrecognised record is kept while a task is out and started over
+    /// once none is: hand-offs then resume.
+    func testAnUnrecognisedRecordStartsOverOnceNoTaskIsOut() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let buf = buffer()
+        try await buf.enqueue(rowsBatch())
+        _ = try await uploader(buf, gateway: gateway(session), transport: transport, switches: BackgroundSwitches()).drain()
+        let lost = try XCTUnwrap(transport.started.first?.tag)
+        try Data("not a record".utf8).write(to: directory.appendingPathComponent("background-uploads.state"))
+        transport.end(lost)
+
+        let relaunched = buffer()
+        let stats = try await uploader(relaunched, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+            .drain()
+
+        XCTAssertEqual(stats.handedOff, 1)
+        XCTAssertEqual(transport.started.count, 2)
+        let marks = try await relaunched.backgroundUploadMarks()
+        XCTAssertEqual(marks.values.map(\.tag), transport.started.last.map { [$0.tag] })
+    }
+
+    private func assertLiveTaskHoldsItsSource(record: String, unlocked: Bool) async throws {
+        try? FileManager.default.removeItem(at: directory)
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let first = buffer()
+        try await first.enqueue(rowsBatch())
+        _ = try await uploader(first, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+            .drain()
+        let deletion = batch(deletedIds: ["r1"])
+        try await first.enqueue(deletion)
+        try Data(record.utf8).write(to: directory.appendingPathComponent("background-uploads.state"))
+
+        let relaunched = buffer()
+        let switches = BackgroundSwitches()
+        switches.unlocked = unlocked
+        let stats = try await uploader(relaunched, gateway: gateway(session), transport: transport, switches: switches)
+            .drain()
+
+        XCTAssertTrue(session.calls.isEmpty, "\(record), unlocked \(unlocked): \(session.calls.map(\.url))")
+        XCTAssertEqual(transport.started.count, 1, "\(record), unlocked \(unlocked): the insert is not handed off twice")
+        XCTAssertEqual(stats.inBackground, 2, record)
+        let left = try await relaunched.load(id: deletion.id)
+        XCTAssertNotNil(left, record)
+    }
+
     /// Without the record of hand-offs, the tasks' own tags still say
     /// which batch is out; it and everything after it wait.
     func testWithAnUnreadableRecordLaterBatchesWait() async throws {
