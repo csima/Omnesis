@@ -2,11 +2,11 @@
 // Copyright (c) 2026 Adrien Conrath
 
 /**
- * The retrieval critic end to end: a conversation
- * turn's retrieval is shown to a reviewer before the agent answers, and a
- * reviewer that judges it insufficient reaches the agent as a note on the
- * tool result it reads next, in the same turn. The agent's corrected retrieval
- * is reviewed again; a result judged sufficient carries no note.
+ * The retrieval critic end to end: a conversation turn's retrieval is judged
+ * by a reviewer before the agent answers, and a reviewer that judges it
+ * insufficient reaches the agent as a note on the tool result it reads next,
+ * in the same turn. The verdict binds: the agent's citations are refused until
+ * a later retrieval passes review, and accepted once one has.
  *
  * The case is the one the critic was built for: "the top discussions" over
  * every workspace, answered from a few relevance-search hits.
@@ -33,6 +33,11 @@ const QUESTION = "What were the top discussions across all my workspaces today?"
 const REVIEWER_PROMPT = "You review an assistant's retrieval";
 const NOTE =
   "Five relevance hits are a sample, not a count: count today's messages per workspace first.";
+const CITE = {
+  kind: "tool" as const,
+  name: "annotate_many",
+  args: { annotations: [{ documentId: "doc_1" }] },
+};
 
 interface ConversationRecordLike {
   messages?: Array<{ role: string; parts?: Array<Record<string, unknown>> }>;
@@ -60,6 +65,7 @@ describe("the retrieval critic", () => {
             : { kind: "text", text: '{"verdict":"adequate"}' };
         }
         agentRequests.push([...messages]);
+        // Sample, try to cite, recount after the refusal, cite again, answer.
         const toolTurns = messages.filter((m) => m.role === "tool").length;
         if (toolTurns === 0) {
           return {
@@ -68,13 +74,15 @@ describe("the retrieval critic", () => {
             args: { queries: [{ query: "discussion" }] },
           };
         }
-        if (toolTurns === 1) {
+        if (toolTurns === 1) return CITE;
+        if (toolTurns === 2) {
           return {
             kind: "tool",
             name: "search_many",
             args: { queries: [{ query: "messages today" }] },
           };
         }
+        if (toolTurns === 3) return CITE;
         return { kind: "text", text: "Here is what I found." };
       },
     });
@@ -94,7 +102,7 @@ describe("the retrieval critic", () => {
     await model?.close();
   });
 
-  test("a reviewer's note reaches the agent mid-turn and is kept on the result", async () => {
+  test("a reviewer's rejection reaches the agent and holds its citations until it is fixed", async () => {
     const { sessionId } = await harness.gatewayJson<{ sessionId: string }>("/agent/sessions", {
       method: "POST",
       body: "{}",
@@ -108,12 +116,16 @@ describe("the retrieval critic", () => {
     // The second look knows what the first retrieval already returned.
     expect(reviewerPrompts[1]).toContain('1. search_many({"queries":[{"query":"discussion"}]})');
 
-    // The note rode on the first result the agent read, before it retrieved
-    // again; the corrected retrieval carried none.
+    // The note led the first result; citing on that retrieval was refused
+    // with the note; the corrected retrieval passed and carried none; and the
+    // citation after it was no longer held.
     const toolMessages = agentRequests.at(-1)!.filter((m) => m.role === "tool");
-    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages).toHaveLength(4);
     expect(toolMessages[0]!.content).toContain(NOTE);
-    expect(toolMessages[1]!.content).not.toContain('"review"');
+    expect(toolMessages[1]!.content).toContain("retrieval_review_pending");
+    expect(toolMessages[1]!.content).toContain(NOTE);
+    expect(toolMessages[2]!.content).not.toContain('"review"');
+    expect(toolMessages[3]!.content).not.toContain("retrieval_review_pending");
 
     // The persisted transcript keeps the note on the result it was attached to.
     const record = await harness.gatewayJson<ConversationRecordLike>(
@@ -123,7 +135,7 @@ describe("the retrieval critic", () => {
       .flatMap((m) => m.parts ?? [])
       .filter((part) => part.kind === "tool_result")
       .map((part) => (part.result as { review?: { note?: string } } | undefined)?.review?.note);
-    expect(reviews).toEqual([NOTE, undefined]);
+    expect(reviews).toEqual([NOTE, undefined, undefined, undefined]);
   });
 });
 
