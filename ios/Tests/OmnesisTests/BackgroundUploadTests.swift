@@ -629,3 +629,87 @@ final class BackgroundUploadResultTests: BackgroundUploadTestCase {
         XCTAssertEqual(remaining, 1)
     }
 }
+
+/// Delivery stays in order per source. The system finishes background
+/// tasks in no particular order, so while a batch of a source is with it,
+/// that source's later batches wait: a deletion sent ahead of the insert
+/// it follows would be undone when the insert lands.
+final class BackgroundUploadOrderTests: BackgroundUploadTestCase {
+    func testADeletionWaitsForTheBackgroundInsertBeforeIt() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let buf = buffer()
+        let up = try uploader(buf, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+        try await buf.enqueue(rowsBatch())
+        _ = try await up.drain()
+        let insert = try XCTUnwrap(transport.started.first?.tag)
+
+        let deletion = batch(deletedIds: ["r1"])
+        try await buf.enqueue(deletion)
+        let held = try await up.drain()
+
+        XCTAssertTrue(session.calls.isEmpty, "nothing sent while the insert is with the system: \(session.calls)")
+        XCTAssertEqual(held.inBackground, 2)
+        XCTAssertEqual(held.handedOff, 0)
+        XCTAssertEqual(DrainOutcome(held), .sending, "waiting behind a background upload is not stalled")
+
+        await complete(up, transport: transport, tag: insert, status: 200, body: #"{"ingested":1}"#)
+        let after = try await up.drain()
+
+        // A deletion starts by asking for the replica lease.
+        XCTAssertTrue(
+            session.calls.contains { $0.url.hasSuffix("/lease") },
+            "the deletion goes once the insert has landed: \(session.calls)"
+        )
+        XCTAssertEqual(after.inBackground, 0)
+    }
+
+    /// Two inserts of one source are no more ordered by the system than an
+    /// insert and a deletion: one at a time.
+    func testOneBatchOfASourceIsWithTheSystemAtATime() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let buf = buffer()
+        let up = try uploader(buf, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+        try await buf.enqueue(rowsBatch())
+        try await buf.enqueue(batch(records: [["id": .string("r1"), "label": .string("beta")]]))
+
+        let first = try await up.drain()
+
+        XCTAssertEqual(first.handedOff, 1)
+        XCTAssertEqual(first.inBackground, 1, "the second waits")
+        XCTAssertEqual(transport.started.count, 1)
+        XCTAssertEqual(ingestCalls(session), 0)
+
+        let tag = try XCTUnwrap(transport.started.first?.tag)
+        await complete(up, transport: transport, tag: tag, status: 200, body: #"{"ingested":1}"#)
+        let second = try await up.drain()
+
+        XCTAssertEqual(second.handedOff, 1)
+        XCTAssertEqual(transport.started.count, 2)
+    }
+
+    /// Without the record of hand-offs, the tasks' own tags still say
+    /// which batch is out; it and everything after it wait.
+    func testWithAnUnreadableRecordLaterBatchesWait() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let first = buffer()
+        try await first.enqueue(rowsBatch())
+        _ = try await uploader(first, gateway: gateway(session), transport: transport, switches: BackgroundSwitches()).drain()
+        let deletion = batch(deletedIds: ["r1"])
+        try await first.enqueue(deletion)
+
+        let record = directory.appendingPathComponent("background-uploads.state")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: record.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: record.path) }
+        let relaunched = buffer()
+        let stats = try await uploader(relaunched, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+            .drain()
+
+        XCTAssertTrue(session.calls.isEmpty, "\(session.calls)")
+        XCTAssertEqual(stats.inBackground, 2)
+        let left = try await relaunched.load(id: deletion.id)
+        XCTAssertNotNil(left)
+    }
+}
