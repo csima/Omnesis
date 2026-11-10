@@ -639,11 +639,24 @@ extension OfflineBuffer {
     /// every outbox file no live task reads. A batch whose result was lost
     /// goes back to the ordinary queue; sending it again is safe because
     /// ingest is an idempotent upsert. Returns how many marks were cleared.
+    ///
+    /// A record that doesn't decode is started over once no live task is
+    /// for a queued batch — there is then nothing it could have told — and
+    /// throws until then.
     @discardableResult
     public func reconcileBackgroundUploads(liveTags: Set<String>) throws -> Int {
         try lifetime.withActive {
             ensureCacheLoaded()
-            let marks = try loadBackgroundMarks()
+            let marks: [String: BackgroundUploadMark]
+            do {
+                marks = try loadBackgroundMarks()
+            } catch let error as UnrecognisedBackgroundRecord {
+                let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
+                let out = liveTags.contains { BackgroundUploadTag($0).map { queued.contains($0.batchId) } ?? false }
+                if out { throw error }
+                try persistBackgroundMarks([:])
+                marks = [:]
+            }
             let kept = marks.filter { liveTags.contains($0.value.tag) }
             if kept.count != marks.count {
                 try persistBackgroundMarks(kept)
@@ -668,15 +681,23 @@ extension OfflineBuffer {
         directory.appendingPathComponent("background-uploads.state")
     }
 
+    /// The record of hand-offs exists but doesn't decode.
+    struct UnrecognisedBackgroundRecord: Error {}
+
     /// The marks, read once and pruned to batches still queued. A missing
-    /// sidecar is "none"; an unrecognised one is also "none", which only
-    /// costs a repeat upload. One that exists but can't be read throws.
+    /// sidecar is "none". One that can't be read, or reads but doesn't
+    /// decode, throws: it says nothing about which batches are out, and
+    /// taking it for "none" would send a batch again while its task lives.
     private func loadBackgroundMarks() throws -> [String: BackgroundUploadMark] {
         if let backgroundMarks { return backgroundMarks }
         var marks: [String: BackgroundUploadMark] = [:]
         do {
             let data = try Data(contentsOf: backgroundMarksFileURL())
-            marks = (try? JSONDecoder().decode([String: BackgroundUploadMark].self, from: data)) ?? [:]
+            do {
+                marks = try JSONDecoder().decode([String: BackgroundUploadMark].self, from: data)
+            } catch {
+                throw UnrecognisedBackgroundRecord()
+            }
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             // Nothing handed off yet.
         }
