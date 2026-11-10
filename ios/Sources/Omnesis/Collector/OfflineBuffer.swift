@@ -541,8 +541,14 @@ public actor OfflineBuffer {
         let contents = (try? fileManager.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.fileSizeKey]
         )) ?? []
+        // Rebuilt from `directory` rather than kept as listed: the listing
+        // resolves symlinks (an app container's `/var/…` comes back as
+        // `/private/var/…`), and every later lookup — `remove`, quarantine —
+        // finds its entry by comparing against `fileURL(for:)`. A mismatch
+        // left delivered batches counted as queued after every relaunch.
         let urls = contents
             .filter { $0.pathExtension == "json" }
+            .map { fileURL(for: $0.deletingPathExtension().lastPathComponent) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         fileURLs = urls
         totalBytes = urls.reduce(0) { acc, url in
