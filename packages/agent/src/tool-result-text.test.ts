@@ -227,33 +227,3 @@ describe("model tool-result presentation", () => {
     });
   });
 });
-
-describe("a reviewer's note on a tool result", () => {
-  it("leads the serialized result, ahead of every hit", () => {
-    const result: ToolResult = {
-      kind: "search.batch",
-      items: [
-        {
-          kind: "search.results",
-          query: "discussion",
-          durationMs: 3,
-          results: [{ documentId: "d1", sourceType: "slack", sourceId: "slack:T1" }],
-        },
-      ],
-      review: { verdict: "revise", note: "Count messages per channel first." },
-    };
-    const text = serializeToolResultForModel(result);
-    expect(
-      text.startsWith('{"review":{"verdict":"revise","note":"Count messages per channel first."}'),
-    ).toBe(true);
-    expect(JSON.parse(text)).toMatchObject({
-      kind: "search.batch",
-      items: [{ query: "discussion" }],
-    });
-  });
-
-  it("leaves a result without one as it was", () => {
-    const result: ToolResult = { kind: "error", code: "x", message: "y" };
-    expect(serializeToolResultForModel(result)).toBe(JSON.stringify(result));
-  });
-});

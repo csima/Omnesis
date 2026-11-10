@@ -207,18 +207,17 @@
           every conclusion is correct.
         </p>
         <p>
-          Before it answers a typed question, the agent's retrieval is reviewed. Each time a search,
-          SQL query, date query or message count returns, the agent's model is asked separately
-          whether what has been retrieved so far can support a complete answer to the question as
-          asked. When it cannot, for example a handful of search hits standing in for “the top
-          discussions” across every workspace, or a filter the question did not ask for, the agent
-          is told what is missing. The verdict binds: until a later retrieval passes review, the
-          agent cannot record the sources its answer cites, so it has to carry out the retrieval it
-          was told about first. If its citations are still refused after two attempts, it may
-          answer, and the answer opens by saying what it does not cover. Each review replaces the
-          verdict before it. A turn gets at most six reviews, and a review that fails or takes
-          longer than 20 seconds changes nothing. Spoken answers are not reviewed. The reviews are
-          billed to the agent's model and appear as <code>retrieval-critic</code> in spend.
+          Before it answers a typed question, the agent's retrieval is reviewed. When the agent
+          records the sources its answer cites, the agent's model is asked separately whether
+          everything retrieved in that turn can support a complete answer to the question as asked.
+          When it cannot, for example a handful of search hits standing in for “the top discussions”
+          across every workspace, or a filter the question did not ask for, the citation is refused
+          and the agent is told what is missing and how to retrieve it. Once it has retrieved more,
+          its next citation is judged again; if its citations are still refused after two attempts,
+          it may answer, and the answer opens by saying what it does not cover. A turn gets at most
+          four reviews, and a review that fails or takes longer than 20 seconds changes nothing.
+          Spoken answers are not reviewed. The reviews are billed to the agent's model and appear as
+          <code>retrieval-critic</code> in spend.
         </p>
         <p>
           For a deliberate, fully orchestrated research pass, type <code>/</code> in the composer
