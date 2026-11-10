@@ -157,6 +157,12 @@ public actor OfflineBuffer {
     /// yet. Toggled inside `ensureCacheLoaded()`.
     private var cacheLoaded: Bool = false
 
+    /// Batches handed to the background upload queue, keyed by batch id.
+    /// `nil` until the sidecar is read; it stays `nil` while the sidecar
+    /// can't be read (a locked phone), so "unreadable" is never taken for
+    /// "nothing handed off".
+    private var backgroundMarks: [String: BackgroundUploadMark]?
+
     public init(
         directory: URL,
         fileManager: FileManager = .default,
@@ -478,6 +484,7 @@ public actor OfflineBuffer {
     }()
 
     private func forgetFailures(id: String) {
+        forgetBackgroundMark(id: id)
         guard permanentFailures.removeValue(forKey: id) != nil else { return }
         persistFailures()
     }
@@ -562,5 +569,138 @@ public actor OfflineBuffer {
     private func sizeOf(_ url: URL) throws -> Int {
         let values = try url.resourceValues(forKeys: [.fileSizeKey])
         return values.fileSize ?? 0
+    }
+}
+
+// MARK: - Background uploads
+
+extension OfflineBuffer {
+    /// Batches handed to the background upload queue, by id. Throws while
+    /// the record of them can't be read.
+    public func backgroundUploadMarks() throws -> [String: BackgroundUploadMark] {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            return try loadBackgroundMarks()
+        }
+    }
+
+    /// Write `body` as the outbox file for `tag` and mark its batch as
+    /// handed off, before the task is started. Returns the file to upload.
+    /// The file carries this store's own protection class.
+    public func prepareBackgroundUpload(_ body: Data, tag: BackgroundUploadTag, sourceId: String) throws -> URL {
+        try lifetime.withActive {
+            try ProtectedStore.offlineBuffer.requireBackupExclusion(
+                to: directory, fileManager: fileManager
+            )
+            ensureCacheLoaded()
+            var marks = try loadBackgroundMarks()
+            guard fileURLs.contains(fileURL(for: tag.batchId)) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            try fileManager.createDirectory(at: outboxDirectory(), withIntermediateDirectories: true)
+            let url = outboxDirectory().appendingPathComponent(tag.outboxFileName)
+            try body.write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
+            marks[tag.batchId] = BackgroundUploadMark(tag: tag.description, sourceId: sourceId)
+            do {
+                try persistBackgroundMarks(marks)
+            } catch {
+                try? fileManager.removeItem(at: url)
+                throw error
+            }
+            return url
+        }
+    }
+
+    /// Clear the mark of `tag`'s batch if it still names `tag`, and delete
+    /// `tag`'s outbox file either way. Returns whether the mark matched —
+    /// false for a task from before a re-pair or one a later hand-off
+    /// superseded. Throws while the record can't be read.
+    @discardableResult
+    public func finishBackgroundUpload(tag: BackgroundUploadTag) throws -> Bool {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            try? fileManager.removeItem(at: outboxDirectory().appendingPathComponent(tag.outboxFileName))
+            var marks = try loadBackgroundMarks()
+            guard marks[tag.batchId]?.tag == tag.description else { return false }
+            marks.removeValue(forKey: tag.batchId)
+            try persistBackgroundMarks(marks)
+            return true
+        }
+    }
+
+    /// Forget every hand-off whose task the system no longer holds, and
+    /// every outbox file no live task reads. A batch whose result was lost
+    /// goes back to the ordinary queue; sending it again is safe because
+    /// ingest is an idempotent upsert. Returns how many marks were cleared.
+    @discardableResult
+    public func reconcileBackgroundUploads(liveTags: Set<String>) throws -> Int {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            let marks = try loadBackgroundMarks()
+            let kept = marks.filter { liveTags.contains($0.value.tag) }
+            if kept.count != marks.count {
+                try persistBackgroundMarks(kept)
+            }
+            let liveFiles = Set(liveTags.compactMap { BackgroundUploadTag($0)?.outboxFileName })
+            let files = (try? fileManager.contentsOfDirectory(
+                at: outboxDirectory(), includingPropertiesForKeys: nil
+            )) ?? []
+            for file in files where !liveFiles.contains(file.lastPathComponent) {
+                try? fileManager.removeItem(at: file)
+            }
+            return marks.count - kept.count
+        }
+    }
+
+    private func outboxDirectory() -> URL {
+        directory.appendingPathComponent("outbox", isDirectory: true)
+    }
+
+    /// Sidecar holding `backgroundMarks`; not `.json`, like the attempts one.
+    private func backgroundMarksFileURL() -> URL {
+        directory.appendingPathComponent("background-uploads.state")
+    }
+
+    /// The marks, read once and pruned to batches still queued. A missing
+    /// sidecar is "none"; an unrecognised one is also "none", which only
+    /// costs a repeat upload. One that exists but can't be read throws.
+    private func loadBackgroundMarks() throws -> [String: BackgroundUploadMark] {
+        if let backgroundMarks { return backgroundMarks }
+        var marks: [String: BackgroundUploadMark] = [:]
+        do {
+            let data = try Data(contentsOf: backgroundMarksFileURL())
+            marks = (try? JSONDecoder().decode([String: BackgroundUploadMark].self, from: data)) ?? [:]
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            // Nothing handed off yet.
+        }
+        let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
+        let pruned = marks.filter { queued.contains($0.key) }
+        backgroundMarks = pruned
+        return pruned
+    }
+
+    private func persistBackgroundMarks(_ marks: [String: BackgroundUploadMark]) throws {
+        let url = backgroundMarksFileURL()
+        if marks.isEmpty {
+            do {
+                try fileManager.removeItem(at: url)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                // Already none.
+            }
+        } else {
+            try ProtectedStore.offlineBuffer.requireBackupExclusion(to: directory, fileManager: fileManager)
+            try JSONEncoder().encode(marks).write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
+        }
+        backgroundMarks = marks
+    }
+
+    /// A batch that left the queue takes its mark with it. Best-effort: a
+    /// mark that can't be cleared now is pruned on the next read, which
+    /// drops marks for batches no longer queued.
+    private func forgetBackgroundMark(id: String) {
+        guard var marks = backgroundMarks, marks.removeValue(forKey: id) != nil else { return }
+        if (try? persistBackgroundMarks(marks)) == nil {
+            backgroundMarks = nil
+        }
     }
 }

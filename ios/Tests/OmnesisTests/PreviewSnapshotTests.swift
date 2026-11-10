@@ -1357,7 +1357,7 @@ final class PreviewSnapshotTests: XCTestCase {
                         ForEach(
                             [
                                 DrainOutcome.delivered, .refused, .paused, .blocked,
-                                .unreachable, .stalled, .busy, .idle, .failed,
+                                .unreachable, .stalled, .sending, .busy, .idle, .failed,
                             ],
                             id: \.self
                         ) { outcome in
