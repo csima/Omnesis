@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.imeNestedScroll
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -94,7 +95,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.currentStateAsState
-import dev.omnesis.android.designsystem.layout.topChrome
 import dev.omnesis.android.designsystem.theme.OmTheme
 import dev.omnesis.android.designsystem.theme.OmnesisTheme
 import dev.omnesis.android.sources.SourceCatalog
@@ -451,7 +451,7 @@ fun AgentContent(
                 Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopStart)
-                    .windowInsetsPadding(WindowInsets.topChrome)
+                    .windowInsetsPadding(WindowInsets.statusBars)
                     .padding(start = OmTheme.spacing.sm, end = 10.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
