@@ -47,6 +47,48 @@ extension ExecutionBudget {
     }
 }
 
+/// The time iOS has left this process, read from the system's countdown
+/// (`UIApplication.backgroundTimeRemaining` in the app).
+///
+/// That countdown is the background-task assertion work runs under after
+/// the app leaves the foreground or in a short wake; in the foreground it
+/// reads effectively unbounded, which is reported as no limit. A
+/// `BGProcessingTask` is different: Apple documents the countdown only for
+/// tasks begun from the foreground, and in a processing task it may read
+/// short or zero while the task still has minutes. So work run in
+/// `ProcessingTaskTime.run` ignores it and goes by the task's own expiry,
+/// which cancels the work: no limit until then, nothing left after.
+public struct SystemTimeBudget: ExecutionBudget {
+    /// Anything longer than this is iOS's "no limit" rather than a countdown.
+    static let unbounded: TimeInterval = 10000
+
+    private let countdown: @Sendable () async -> TimeInterval
+
+    public init(countdown: @escaping @Sendable () async -> TimeInterval) {
+        self.countdown = countdown
+    }
+
+    public func remainingTime() async -> TimeInterval? {
+        if ProcessingTaskTime.isActive {
+            return Task.isCancelled ? 0 : nil
+        }
+        let remaining = await countdown()
+        return remaining > Self.unbounded ? nil : remaining
+    }
+}
+
+/// Marks work as running for a `BGProcessingTask`, whose time ends when the
+/// task's expiration handler cancels it, not by the system's countdown.
+public enum ProcessingTaskTime {
+    @TaskLocal static var isActive = false
+
+    public static func run<T: Sendable>(_ work: @Sendable () async -> T) async -> T {
+        await $isActive.withValue(true) {
+            await work()
+        }
+    }
+}
+
 /// Runs the work a background wake triggered, returning when it has finished
 /// or when the wake's time is about to run out — whichever comes first.
 ///

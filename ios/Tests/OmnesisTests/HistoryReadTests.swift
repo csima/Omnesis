@@ -198,7 +198,8 @@ final class HistoryReadTests: XCTestCase {
         _ source: HistorySource,
         session: CollectorCoreTests.MockSession,
         recorder: LifecycleRecorder? = nil,
-        cursorReads: CursorReads = CursorReads()
+        cursorReads: CursorReads = CursorReads(),
+        budget: (any ExecutionBudget)? = nil
     ) throws
         -> (CollectorCore, OfflineBuffer) {
         let gateway = try gateway(session, cursorReads: cursorReads)
@@ -207,8 +208,9 @@ final class HistoryReadTests: XCTestCase {
             gateway: gateway,
             buffer: buffer,
             cursorStore: CursorStore(gateway: gateway),
-            uploader: Uploader(gateway: gateway, buffer: buffer),
+            uploader: Uploader(gateway: gateway, buffer: buffer, budget: budget),
             sources: [source],
+            budget: budget,
             onLifecycle: { await recorder?.record($0) }
         )
         return (core, buffer)
@@ -279,6 +281,55 @@ final class HistoryReadTests: XCTestCase {
         XCTAssertTrue(CollectorCore.HistoryStatus.pending.wantsHistoryRun)
         XCTAssertTrue(CollectorCore.HistoryStatus.unknown.wantsHistoryRun)
         XCTAssertFalse(CollectorCore.HistoryStatus.finished.wantsHistoryRun)
+    }
+
+    // MARK: - A processing task's time
+
+    /// In a processing task the system countdown may read zero while the
+    /// task still has minutes; the read goes by the task's own expiry.
+    func testAProcessingTaskIgnoresTheSystemCountdown() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let source = HistorySource(total: 3)
+        let zero = SystemTimeBudget { 0 }
+        let (core, buffer) = try core(source, session: session, budget: zero)
+
+        let status = await ProcessingTaskTime.run {
+            await core.readPendingHistory(sourceId: source.id)
+        }
+
+        XCTAssertEqual(status, .finished)
+        XCTAssertEqual(source.callCount, 3)
+        let queued = try await buffer.count()
+        XCTAssertEqual(queued, 0, "every page delivered")
+    }
+
+    /// Outside one, the countdown still rules: a short wake at zero reads
+    /// nothing.
+    func testAShortWakeStillGoesByTheCountdown() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let source = HistorySource(total: 3)
+        let (core, _) = try core(source, session: session, budget: SystemTimeBudget { 0 })
+
+        _ = await core.readPendingHistory(sourceId: source.id)
+
+        XCTAssertEqual(source.callCount, 0)
+    }
+
+    func testAnExpiredProcessingTaskHasNoTimeLeft() async {
+        let budget = SystemTimeBudget { .greatestFiniteMagnitude }
+        let open = await ProcessingTaskTime.run { await budget.remainingTime() }
+        XCTAssertNil(open)
+
+        let expired = Task {
+            await ProcessingTaskTime.run {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return await budget.remainingTime()
+            }
+        }
+        let left = await expired.value
+        XCTAssertEqual(left, 0)
+        let outside = await SystemTimeBudget { 12 }.remainingTime()
+        XCTAssertEqual(outside, 12)
     }
 
     /// iOS expiring the task stops the read before its next page. The

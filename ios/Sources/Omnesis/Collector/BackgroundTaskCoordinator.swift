@@ -265,7 +265,7 @@ public final class BackgroundTaskCoordinator {
 
         let handler = photosBackfillHandler
         let work = Task {
-            await handler()
+            await ProcessingTaskTime.run { await handler() }
         }
         task.expirationHandler = { work.cancel() }
 
@@ -285,8 +285,10 @@ public final class BackgroundTaskCoordinator {
         scheduleHealthHistory()
 
         let handler = healthHistoryHandler
+        // Its time is the task's: `expirationHandler` ends it, not the
+        // countdown short wakes go by.
         let work = Task {
-            await handler()
+            await ProcessingTaskTime.run { await handler() }
         }
         task.expirationHandler = { work.cancel() }
 
