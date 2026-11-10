@@ -3,8 +3,9 @@
 
 /**
  * What every one-shot Anthropic Messages call in the gateway shares: no
- * extended thinking, a sampling temperature sent only while the model accepts
- * it, and the reply's text read from every text block.
+ * extended thinking, in whichever form the model accepts, a sampling
+ * temperature sent only while the model accepts it, and the reply's text read
+ * from every text block.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -14,6 +15,42 @@ import Anthropic from "@anthropic-ai/sdk";
  * that thinks by default would spend that budget thinking and return no text.
  */
 export const NO_THINKING: Anthropic.ThinkingConfigDisabled = { type: "disabled" };
+
+/**
+ * How newer models are told not to think on a call: they refuse
+ * `{ type: "disabled" }` with a 400 that names this mode, which thinks only
+ * between tool calls — never, on a one-shot call that has none.
+ */
+export const BETWEEN_TOOLS_THINKING: Anthropic.ThinkingConfigBetweenTools = {
+  type: "between_tools",
+};
+
+/**
+ * The thinking setting a one-shot call sends: `disabled` until the model
+ * refuses it in favour of `between_tools`, which is then retried and sent from
+ * then on through this instance.
+ */
+export class AnthropicThinking {
+  private config: Anthropic.ThinkingConfigParam = NO_THINKING;
+
+  async send<T>(send: (thinking: Anthropic.ThinkingConfigParam) => Promise<T>): Promise<T> {
+    const sent = this.config;
+    try {
+      return await send(sent);
+    } catch (err) {
+      if (sent.type !== "disabled" || !asksForBetweenTools(err)) throw err;
+      this.config = BETWEEN_TOOLS_THINKING;
+      return send(this.config);
+    }
+  }
+}
+
+/** A 400 whose message names `between_tools`, the thinking mode the model takes instead. */
+function asksForBetweenTools(err: unknown): boolean {
+  return (
+    err instanceof Anthropic.APIError && err.status === 400 && /\bbetween_tools\b/.test(err.message)
+  );
+}
 
 /**
  * Newer models reject the sampling temperature outright with a 400; the first

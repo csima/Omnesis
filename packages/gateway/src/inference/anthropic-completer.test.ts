@@ -91,6 +91,42 @@ describe("AnthropicCompleter", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
+  test("a model that refuses disabled thinking is retried with between_tools, and keeps it", async () => {
+    mockCreate.mockClear();
+    mockCreate.mockImplementationOnce(() =>
+      Promise.reject(
+        new MockAPIError(
+          400,
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"thinking.type `disabled` is not supported for this model; use `between_tools`."}}',
+        ),
+      ),
+    );
+    const provider = new AnthropicCompleter("claude-sonnet-5-5", "test-key");
+
+    await expect(provider.complete("first")).resolves.toBe("expanded keywords here");
+    await provider.complete("second");
+
+    const thinking = mockCreate.mock.calls.map(
+      (call) => (call[0] as { thinking?: unknown }).thinking,
+    );
+    expect(thinking).toEqual([
+      { type: "disabled" },
+      { type: "between_tools" },
+      { type: "between_tools" },
+    ]);
+  });
+
+  test("other 400s are not retried with another thinking mode", async () => {
+    mockCreate.mockClear();
+    mockCreate.mockImplementationOnce(() =>
+      Promise.reject(new MockAPIError(400, "400 messages: at least one message is required")),
+    );
+    const provider = new AnthropicCompleter("claude-sonnet-5-5", "test-key");
+
+    await expect(provider.complete("prompt")).rejects.toThrow("at least one message");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
   test("name is 'anthropic'", () => {
     const provider = new AnthropicCompleter("claude-haiku-4-5-20251001", "test-key");
     expect(provider.name).toBe("anthropic");
