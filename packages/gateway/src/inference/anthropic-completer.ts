@@ -8,7 +8,13 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { AnthropicTemperature, AnthropicThinking, responseText } from "./anthropic-messages.js";
+import {
+  AnthropicOneShot,
+  AnthropicTemperature,
+  applyShape,
+  responseText,
+  type OneShotCapabilities,
+} from "./anthropic-messages.js";
 import type { CompleteCapability } from "@omnesis/core";
 
 export class AnthropicCompleter implements CompleteCapability {
@@ -16,11 +22,13 @@ export class AnthropicCompleter implements CompleteCapability {
   readonly modelId: string;
   private client: Anthropic;
   private readonly temperature = new AnthropicTemperature();
-  private readonly thinking = new AnthropicThinking();
+  private readonly oneShot: AnthropicOneShot;
 
-  constructor(modelId: string, apiKey: string) {
+  /** `capabilities`: what the Models API reports the model accepts, when the catalog has it. */
+  constructor(modelId: string, apiKey: string, capabilities?: OneShotCapabilities) {
     this.modelId = modelId;
     this.client = new Anthropic({ apiKey });
+    this.oneShot = new AnthropicOneShot(capabilities);
   }
 
   async complete(
@@ -40,14 +48,13 @@ export class AnthropicCompleter implements CompleteCapability {
       ...(opts?.stop && opts.stop.length > 0 ? { stop_sequences: [...opts.stop].slice(0, 4) } : {}),
       messages: [{ role: "user" as const, content: prompt }],
     };
-    const response = await this.thinking.send((thinking) =>
-      this.temperature.send(opts?.temperature ?? 0.3, (temperature) =>
-        this.client.messages.create(
-          temperature === undefined
-            ? { ...request, thinking }
-            : { ...request, thinking, temperature },
-        ),
-      ),
+    const response = await this.oneShot.send((shape) =>
+      this.temperature.send(opts?.temperature ?? 0.3, (temperature) => {
+        const shaped = applyShape(request, shape);
+        return this.client.messages.create(
+          temperature === undefined ? shaped : { ...shaped, temperature },
+        );
+      }),
     );
 
     return responseText(response);
