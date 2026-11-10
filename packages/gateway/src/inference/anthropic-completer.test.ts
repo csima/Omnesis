@@ -202,6 +202,25 @@ describe("AnthropicCompleter", () => {
     });
   });
 
+  test("completeWithUsage() reports the tokens the call cost, cached input included", async () => {
+    mockCreate.mockImplementationOnce(() =>
+      Promise.resolve({
+        content: [{ type: "text" as const, text: "ok" }],
+        usage: {
+          input_tokens: 100,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 5,
+          output_tokens: 7,
+        },
+      } as never),
+    );
+    const provider = new AnthropicCompleter("claude-sonnet-5-5", "test-key");
+    await expect(provider.completeWithUsage("prompt")).resolves.toEqual({
+      text: "ok",
+      usage: { promptTokens: 125, completionTokens: 7 },
+    });
+  });
+
   test("name is 'anthropic'", () => {
     const provider = new AnthropicCompleter("claude-haiku-4-5-20251001", "test-key");
     expect(provider.name).toBe("anthropic");
