@@ -169,6 +169,43 @@ final class AppleHealthScheduleTests: XCTestCase {
         XCTAssertFalse(result.uploaded.contains { $0.hasPrefix("TypeB-") })
     }
 
+    // MARK: - Every type gets a turn
+
+    /// TypeA has something new before every wake, and every wake has time
+    /// for one page. Each page goes to TypeA if every pass starts its sweep
+    /// over; resuming the sweep and owing the history a page gets every
+    /// type, and the history, a turn within one sweep.
+    func testABusyFirstTypeDoesNotStarveTheOthersOrTheHistory() async throws {
+        let store = store(old: 30, recent: 2)
+        let schedule = schedule()
+        var cursor = AppleHealthCursor()
+        var firstWake: [String: Int] = [:]
+        var uploaded = Set<String>()
+        for wakeIndex in 0 ..< 100 {
+            store.insert("TypeA", id: "TypeA-w\(wakeIndex)", start: now)
+            let result = try await wake(schedule, store, cursor: cursor, pages: 1)
+            for id in result.uploaded where !uploaded.contains(id) {
+                uploaded.insert(id)
+                firstWake[id] = firstWake[id] ?? wakeIndex
+            }
+            cursor = result.cursor
+        }
+
+        XCTAssertEqual(firstWake["TypeB-new-0"], 1, "TypeB's recent samples on the second wake")
+        XCTAssertEqual(firstWake["TypeC-new-0"], 2, "TypeC's on the third")
+        XCTAssertEqual(firstWake["TypeA-old-0"], 3, "and the history on the fourth")
+        let history = store.allIds().filter { $0.contains("-old-") }
+        XCTAssertEqual(history.subtracting(uploaded), [], "the whole history arrives")
+        XCTAssertEqual(cursor.caughtUp, Set(types))
+    }
+
+    /// A cursor saved mid-sweep resumes at its type rather than the first.
+    func testAPassResumesTheSweepWhereTheLastOneStopped() {
+        var cursor = AppleHealthCursor(caughtUp: Set(types), sweepIndex: 2)
+        cursor = schedule().beginningPass(cursor, now: now)
+        XCTAssertEqual(schedule().next(cursor)?.identifier, "TypeC")
+    }
+
     // MARK: - Nothing is skipped
 
     func testEverySampleArrivesAcrossShortWakesWithInsertionsBetween() async throws {
@@ -269,14 +306,15 @@ final class AppleHealthScheduleTests: XCTestCase {
             caughtUp: ["TypeA"],
             recentAnchorsByIdentifier: ["TypeB": "b"],
             recentSince: "2026-11-03T00:00:00.000Z",
-            sweepIndex: 1
+            sweepIndex: 1,
+            historyTurn: .owed
         )
         XCTAssertEqual(AppleHealthCursor.decode(from: cursor.encode()), cursor)
     }
 }
 
-/// The collector lets a source reset its plan once at the start of each
-/// pass, which is how every Apple Health wake begins with a fresh sweep.
+/// The collector lets a source set up its plan once at the start of each
+/// pass, which is how every Apple Health wake resumes or starts its sweep.
 final class CollectorPassStartTests: XCTestCase {
     final class PassSource: OmnesisSource, @unchecked Sendable {
         let id = "mock:pass"

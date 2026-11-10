@@ -21,8 +21,13 @@ import Foundation
 ///     anchored read per type still in backfill, limited to samples that
 ///     start on or after `recentSince`, so recent data arrives before the
 ///     history does. Dropped for a type once its complete read catches up.
-///   - `sweepIndex` — position in this pass's recent sweep; `nil` once
-///     the sweep is done and the pass has moved on to the backfill.
+///   - `sweepIndex` — position in the recent sweep; `nil` once the sweep
+///     is done and the pass has moved on to the backfill. Kept across
+///     passes, so a sweep that a short wake cut off resumes where it
+///     stopped instead of starting over at the first type.
+///   - `historyTurn` — the history backfill is owed a page (`owed`), or is
+///     taking it at the start of this pass (`taking`), so a run of short
+///     wakes that each end inside a sweep still moves the history on.
 ///
 /// The cursor is persisted server-side via `/sync-state/:sourceId`
 /// (see `CursorStore`). Anchors survive app reinstalls if the gateway
@@ -36,6 +41,16 @@ public struct AppleHealthCursor: Sendable, Equatable {
     public var recentAnchorsByIdentifier: [String: String]
     public var recentSince: String?
     public var sweepIndex: Int?
+    public var historyTurn: HistoryTurn?
+
+    /// See `AppleHealthSchedule`.
+    public enum HistoryTurn: String, Sendable {
+        /// A sweep ended with history pending and no backfill read since.
+        case owed
+        /// This pass started on the backfill to pay what was owed; a new
+        /// sweep starts after its first backfill read.
+        case taking
+    }
 
     public init(
         cycleIndex: Int = 0,
@@ -44,7 +59,8 @@ public struct AppleHealthCursor: Sendable, Equatable {
         caughtUp: Set<String>? = nil,
         recentAnchorsByIdentifier: [String: String] = [:],
         recentSince: String? = nil,
-        sweepIndex: Int? = nil
+        sweepIndex: Int? = nil,
+        historyTurn: HistoryTurn? = nil
     ) {
         self.cycleIndex = cycleIndex
         self.anchorsByIdentifier = anchorsByIdentifier
@@ -53,6 +69,7 @@ public struct AppleHealthCursor: Sendable, Equatable {
         self.recentAnchorsByIdentifier = recentAnchorsByIdentifier
         self.recentSince = recentSince
         self.sweepIndex = sweepIndex
+        self.historyTurn = historyTurn
     }
 
     // MARK: - SyncCursor bridging
@@ -89,6 +106,11 @@ public struct AppleHealthCursor: Sendable, Equatable {
             sweepIndex = Int(value)
         }
 
+        var historyTurn: HistoryTurn?
+        if case .string(let value) = cursor["historyTurn"] {
+            historyTurn = HistoryTurn(rawValue: value)
+        }
+
         return AppleHealthCursor(
             cycleIndex: cycleIndex,
             anchorsByIdentifier: strings(cursor["anchorsByIdentifier"]),
@@ -96,7 +118,8 @@ public struct AppleHealthCursor: Sendable, Equatable {
             caughtUp: caughtUp,
             recentAnchorsByIdentifier: strings(cursor["recentAnchorsByIdentifier"]),
             recentSince: recentSince,
-            sweepIndex: sweepIndex
+            sweepIndex: sweepIndex,
+            historyTurn: historyTurn
         )
     }
 
@@ -132,6 +155,9 @@ public struct AppleHealthCursor: Sendable, Equatable {
         }
         if let sweepIndex {
             dict["sweepIndex"] = .int(Int64(sweepIndex))
+        }
+        if let historyTurn {
+            dict["historyTurn"] = .string(historyTurn.rawValue)
         }
         return dict
     }

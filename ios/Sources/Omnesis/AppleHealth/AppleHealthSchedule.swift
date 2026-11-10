@@ -58,6 +58,15 @@ public struct AppleHealthPage<Page> {
 /// 2. Backfill: the complete read of each type not yet caught up, one
 ///    type at a time from `cycleIndex`, as the old rotation did.
 ///
+/// A wake can end anywhere in this, so neither step starts over each pass.
+/// The sweep resumes at the type it stopped on (`sweepIndex` is kept), so
+/// a type with something new on every wake takes its page and then waits
+/// for every other type's turn. And a sweep that ends with history still
+/// pending owes the backfill a page (`historyTurn`): if the wake ends
+/// before the backfill reads, the next pass starts with one backfill read
+/// before its new sweep. However short the wakes, every type is reached
+/// within one sweep, and the history moves at least once per sweep.
+///
 /// The complete read is never skipped or reset; the recent read only
 /// delivers some samples early. A sample both reads return is uploaded
 /// twice, which the gateway's upsert on the sample id absorbs. Once a
@@ -80,10 +89,20 @@ public struct AppleHealthSchedule: Sendable {
     }
 
     /// The cursor a new pass starts from: migrated if it predates the
-    /// recent read, with the sweep set back to the first type.
+    /// recent read; resuming a sweep a short wake cut off; else paying the
+    /// backfill a page it is owed, or starting a new sweep.
     public func beginningPass(_ cursor: AppleHealthCursor, now: Date) -> AppleHealthCursor {
         var cursor = cursor.migrated(catalog: catalog)
-        cursor.sweepIndex = catalog.isEmpty ? nil : 0
+        let historyPending = backfillIndex(cursor) != nil
+        if !historyPending { cursor.historyTurn = nil }
+        if let index = cursor.sweepIndex, catalog.indices.contains(index) {
+            // Resume where the last pass stopped.
+        } else if cursor.historyTurn != nil {
+            cursor.sweepIndex = nil
+            cursor.historyTurn = .taking
+        } else {
+            cursor.sweepIndex = catalog.isEmpty ? nil : 0
+        }
         if cursor.recentSince == nil {
             cursor.recentSince = Self.format(now.addingTimeInterval(-recentWindow))
         }
@@ -145,6 +164,16 @@ public struct AppleHealthSchedule: Sendable {
 
         if sweeping, reachedEnd, let index = cursor.sweepIndex {
             cursor.sweepIndex = index + 1 < catalog.count ? index + 1 : nil
+            if cursor.sweepIndex == nil, backfillIndex(cursor) != nil {
+                cursor.historyTurn = .owed
+            }
+        } else if !sweeping, case .complete = read {
+            // The backfill had its read. A pass that started on it to pay
+            // a debt goes back to the sweep.
+            if cursor.historyTurn == .taking, !catalog.isEmpty {
+                cursor.sweepIndex = 0
+            }
+            cursor.historyTurn = nil
         }
         if next(cursor) == nil {
             cursor.lastCycleCompletedAt = Self.format(now)
