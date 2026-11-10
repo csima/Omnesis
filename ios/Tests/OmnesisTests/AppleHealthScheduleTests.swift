@@ -199,6 +199,45 @@ final class AppleHealthScheduleTests: XCTestCase {
         XCTAssertEqual(cursor.caughtUp, Set(types))
     }
 
+    /// Every read returns a full page, so no type's read ever reaches its
+    /// end, and every wake has time for one page. A sweep that waits for a
+    /// short page stays on TypeA for good: 1,000 reads of TypeA, none of
+    /// TypeB or TypeC, and the history never runs. A bound on one type's
+    /// pages in a sweep moves the sweep on and keeps the history's turn.
+    func testFullPagesOnEveryWakeDoNotHoldTheSweepOnOneType() async throws {
+        let store = store(old: 300, recent: 0)
+        let schedule = schedule()
+        var cursor = AppleHealthCursor()
+        var sweepReads: [String: Int] = [:]
+        var historyReads = 0
+        for wakeIndex in 0 ..< 1000 {
+            for type in types {
+                for index in 0 ..< schedule.pageLimit {
+                    store.insert(type, id: "\(type)-w\(wakeIndex)-\(index)", start: now)
+                }
+            }
+            var pass = schedule.beginningPass(cursor, now: now)
+            let next = try await schedule.nextPage(from: pass, now: now) { request in
+                switch request {
+                case .recent: sweepReads[request.identifier, default: 0] += 1
+                case .complete: historyReads += 1
+                }
+                let result = store.read(request, limit: schedule.pageLimit)
+                return (result.ids, result.outcome)
+            }
+            pass = next.cursor
+            cursor = pass
+        }
+
+        let perSweep = types.count * schedule.sweepPageLimit + 1
+        for type in types {
+            XCTAssertGreaterThanOrEqual(
+                sweepReads[type, default: 0], 1000 / perSweep * schedule.sweepPageLimit, "\(type)'s turns"
+            )
+        }
+        XCTAssertGreaterThanOrEqual(historyReads, 1000 / perSweep, "the history moves once per sweep")
+    }
+
     /// A cursor saved mid-sweep resumes at its type rather than the first.
     func testAPassResumesTheSweepWhereTheLastOneStopped() {
         var cursor = AppleHealthCursor(caughtUp: Set(types), sweepIndex: 2)
@@ -307,7 +346,9 @@ final class AppleHealthScheduleTests: XCTestCase {
             recentAnchorsByIdentifier: ["TypeB": "b"],
             recentSince: "2026-11-03T00:00:00.000Z",
             sweepIndex: 1,
-            historyTurn: .owed
+            historyTurn: .owed,
+            sweepPages: 2,
+            sweepCutOff: true
         )
         XCTAssertEqual(AppleHealthCursor.decode(from: cursor.encode()), cursor)
     }

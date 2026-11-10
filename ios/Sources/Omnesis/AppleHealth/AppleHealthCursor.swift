@@ -42,6 +42,10 @@ public struct AppleHealthCursor: Sendable, Equatable {
     public var recentSince: String?
     public var sweepIndex: Int?
     public var historyTurn: HistoryTurn?
+    /// Pages the current sweep type has had without reaching its end.
+    public var sweepPages: Int?
+    /// The sweep moved on from a type that still had more to read.
+    public var sweepCutOff: Bool?
 
     /// See `AppleHealthSchedule`.
     public enum HistoryTurn: String, Sendable {
@@ -60,7 +64,9 @@ public struct AppleHealthCursor: Sendable, Equatable {
         recentAnchorsByIdentifier: [String: String] = [:],
         recentSince: String? = nil,
         sweepIndex: Int? = nil,
-        historyTurn: HistoryTurn? = nil
+        historyTurn: HistoryTurn? = nil,
+        sweepPages: Int? = nil,
+        sweepCutOff: Bool? = nil
     ) {
         self.cycleIndex = cycleIndex
         self.anchorsByIdentifier = anchorsByIdentifier
@@ -70,6 +76,8 @@ public struct AppleHealthCursor: Sendable, Equatable {
         self.recentSince = recentSince
         self.sweepIndex = sweepIndex
         self.historyTurn = historyTurn
+        self.sweepPages = sweepPages
+        self.sweepCutOff = sweepCutOff
     }
 
     // MARK: - SyncCursor bridging
@@ -111,6 +119,16 @@ public struct AppleHealthCursor: Sendable, Equatable {
             historyTurn = HistoryTurn(rawValue: value)
         }
 
+        var sweepPages: Int?
+        if case .int(let value) = cursor["sweepPages"] {
+            sweepPages = Int(value)
+        }
+
+        var sweepCutOff: Bool?
+        if case .bool(let value) = cursor["sweepCutOff"] {
+            sweepCutOff = value
+        }
+
         return AppleHealthCursor(
             cycleIndex: cycleIndex,
             anchorsByIdentifier: strings(cursor["anchorsByIdentifier"]),
@@ -119,7 +137,9 @@ public struct AppleHealthCursor: Sendable, Equatable {
             recentAnchorsByIdentifier: strings(cursor["recentAnchorsByIdentifier"]),
             recentSince: recentSince,
             sweepIndex: sweepIndex,
-            historyTurn: historyTurn
+            historyTurn: historyTurn,
+            sweepPages: sweepPages,
+            sweepCutOff: sweepCutOff
         )
     }
 
@@ -158,6 +178,12 @@ public struct AppleHealthCursor: Sendable, Equatable {
         }
         if let historyTurn {
             dict["historyTurn"] = .string(historyTurn.rawValue)
+        }
+        if let sweepPages {
+            dict["sweepPages"] = .int(Int64(sweepPages))
+        }
+        if let sweepCutOff {
+            dict["sweepCutOff"] = .bool(sweepCutOff)
         }
         return dict
     }
