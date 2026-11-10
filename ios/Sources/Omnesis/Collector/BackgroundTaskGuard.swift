@@ -75,4 +75,24 @@ public enum BackgroundTaskGuard {
         return result
     }
 }
+
+/// The time iOS has left this process, read from
+/// `UIApplication.backgroundTimeRemaining`.
+///
+/// That value is effectively unbounded (`.greatestFiniteMagnitude`) in the
+/// foreground and in a processing task, which this reports as no limit. In a
+/// background wake it counts down the background-task assertion the work runs
+/// under, and reaches zero once the assertion expires.
+@available(iOS 17.0, *)
+public struct BackgroundTimeBudget: ExecutionBudget {
+    /// Anything longer than this is iOS's "no limit" rather than a countdown.
+    private static let unbounded: TimeInterval = 10000
+
+    public init() {}
+
+    public func remainingTime() async -> TimeInterval? {
+        let remaining = await MainActor.run { UIApplication.shared.backgroundTimeRemaining }
+        return remaining > Self.unbounded ? nil : remaining
+    }
+}
 #endif

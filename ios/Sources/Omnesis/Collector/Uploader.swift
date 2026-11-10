@@ -139,6 +139,7 @@ public actor Uploader {
 
     private nonisolated let gatewayRoute: GatewayRoute
     private let buffer: OfflineBuffer
+    private let budget: (any ExecutionBudget)?
     private let log = AppLog.make(category: "collector.uploader")
     private var draining = false
 
@@ -175,11 +176,16 @@ public actor Uploader {
         /// still refused. The device's token is missing `write:<source-type>`;
         /// the data stays buffered and delivers once the scope is granted.
         public var blocked: [String]?
+        /// True when the pass stopped short of the buffer's end because too
+        /// little background time was left to start another upload. What it
+        /// left stays queued for the next drain.
+        public var stoppedForTime = false
     }
 
-    public init(gateway: GatewayClient, buffer: OfflineBuffer) {
+    public init(gateway: GatewayClient, buffer: OfflineBuffer, budget: (any ExecutionBudget)? = nil) {
         gatewayRoute = GatewayRoute(gateway: gateway)
         self.buffer = buffer
+        self.budget = budget
     }
 
     /// Route future drain passes to updated pairing credentials without
@@ -212,10 +218,18 @@ public actor Uploader {
         var rejections: [String: String] = [:]
         // Sources the gateway refused with 403 this pass.
         var blocked: Set<String> = []
+        var stoppedForTime = false
         let gateway = gatewayRoute.current()
 
         let ids = try await buffer.listIds()
         drainPass: for id in ids {
+            // An upload that iOS suspends halfway is sent again in full on the
+            // next wake, so one that can't finish only spends the time left.
+            guard await budget?.allows(ExecutionMargin.upload) ?? true else {
+                stoppedForTime = true
+                log.notice("Stopping drain: too little background time left for another upload")
+                break drainPass
+            }
             let effect = try await deliver(id: id, blockedSources: blocked, gateway: gateway).effect
             uploaded += effect.uploaded
             failed += effect.failed
@@ -257,7 +271,8 @@ public actor Uploader {
             skipped: skipped,
             remaining: remaining,
             rejected: rejected,
-            blocked: blocked.sorted()
+            blocked: blocked.sorted(),
+            stoppedForTime: stoppedForTime
         )
     }
 

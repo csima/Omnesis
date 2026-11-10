@@ -117,6 +117,7 @@ public actor CollectorCore {
     private let onLifecycle: LifecycleHandler?
     private let log = AppLog.make(category: "collector.core")
     private let prepareSource: (@Sendable (String, SourceMultiDeviceMode) async throws -> Void)?
+    private let budget: (any ExecutionBudget)?
     private var preparedSourceIds: Set<String> = []
 
     private var inFlight: Set<String> = []
@@ -124,6 +125,9 @@ public actor CollectorCore {
     /// source is already running. Dropping that wake can strand data that
     /// arrived after the active pass took its input snapshot.
     private var pendingReruns: Set<String> = []
+    /// Callers of `sync(sourceId:awaitingFollowUp: true)` that found the
+    /// source already syncing, waiting for the pass that covers their request.
+    private var followUpWaiters: [String: [CheckedContinuation<SyncSummary?, Never>]] = [:]
     private var directDrains = 0
     private var lastSyncAt: [String: Date] = [:]
     private var acceptingSyncs = true
@@ -136,6 +140,7 @@ public actor CollectorCore {
         uploader: Uploader,
         sources: [any OmnesisSource],
         prepareSource: (@Sendable (String, SourceMultiDeviceMode) async throws -> Void)? = nil,
+        budget: (any ExecutionBudget)? = nil,
         onProgress: ProgressHandler? = nil,
         onLifecycle: LifecycleHandler? = nil
     ) {
@@ -145,6 +150,7 @@ public actor CollectorCore {
         self.uploader = uploader
         self.sources = sources
         self.prepareSource = prepareSource
+        self.budget = budget
         self.onProgress = onProgress
         self.onLifecycle = onLifecycle
     }
@@ -170,11 +176,24 @@ public actor CollectorCore {
 
     /// Sync a single source by id — used by HealthKit observer callbacks
     /// to target a specific sample type efficiently.
-    public func sync(sourceId: String) async -> SyncSummary? {
+    ///
+    /// A call that finds the source already syncing queues one follow-up pass,
+    /// which the running sync performs before it returns. By default the call
+    /// returns at once; with `awaitingFollowUp` it returns when that pass is
+    /// done, which is what a background wake needs before it reports itself
+    /// handled — the data that woke it may have arrived after the running
+    /// pass read its page.
+    public func sync(sourceId: String, awaitingFollowUp: Bool = false) async -> SyncSummary? {
         guard acceptingSyncs else { return nil }
         guard let source = sources.first(where: { $0.id == sourceId }) else {
             log.warning("No registered source with id \(sourceId, privacy: .private)")
             return nil
+        }
+        if awaitingFollowUp, inFlight.contains(source.id) {
+            pendingReruns.insert(source.id)
+            return await withCheckedContinuation { continuation in
+                followUpWaiters[source.id, default: []].append(continuation)
+            }
         }
         let summary = await syncOne(source: source)
         await emitProgress(nil)
@@ -241,8 +260,6 @@ public actor CollectorCore {
 
     // MARK: - Internals
 
-    // Sync state, cursor, buffer, and lifecycle publication must remain one ordered operation.
-    // swiftlint:disable:next function_body_length
     private func syncOne(source: any OmnesisSource) async -> SyncSummary {
         guard acceptingSyncs else {
             return await SyncSummary(
@@ -269,24 +286,39 @@ public actor CollectorCore {
             )
         }
         inFlight.insert(source.id)
-        defer {
-            inFlight.remove(source.id)
-            let rerunRequested = pendingReruns.remove(source.id) != nil
-            let shouldRerun = acceptingSyncs && !Task.isCancelled && rerunRequested
-            if shouldRerun {
-                Task { [weak self] in
-                    _ = await self?.sync(sourceId: source.id)
-                }
-            }
-            resumeQuiescenceWaitersIfReady()
+        var summary = await runPass(source: source)
+        // Wakes that arrived while the pass ran coalesce into one more pass,
+        // run here rather than in a task of its own so it stays inside
+        // whatever is keeping this one alive (a background-task assertion, an
+        // unanswered HealthKit wake). Expiration cancels the caller, and a
+        // wake with too little time left leaves the samples for the next one.
+        while pendingReruns.remove(source.id) != nil,
+              acceptingSyncs,
+              !Task.isCancelled,
+              await budget?.allows(ExecutionMargin.page) ?? true {
+            summary = await runPass(source: source)
         }
+        pendingReruns.remove(source.id)
+        inFlight.remove(source.id)
+        let waiters = followUpWaiters.removeValue(forKey: source.id) ?? []
+        waiters.forEach { $0.resume(returning: summary) }
+        resumeQuiescenceWaitersIfReady()
+        return summary
+    }
 
+    // One pass over a source: pages until it has nothing more, the page cap,
+    // or the time left runs short, then a drain. Sync state, cursor, buffer,
+    // and lifecycle publication must remain one ordered operation.
+    // swiftlint:disable:next function_body_length
+    private func runPass(source: any OmnesisSource) async -> SyncSummary {
         var batchesWritten = 0
         var batchesDropped = 0
         var recordsProduced = 0
         var itemsProcessed = 0
         var errorMessage: String?
         var wasCancelled = false
+        var pages = 0
+        var outOfTime = false
         let startedAt = Date()
 
         await emitProgress(Progress(
@@ -308,11 +340,20 @@ public actor CollectorCore {
                 preparedSourceIds.insert(source.id)
             }
             var cursor = try await cursorStore.load(for: source.id, refresh: true)
-            var pages = 0
             // Cap to avoid runaway loops while a malformed source keeps
             // claiming hasMore=true.
             let maxPages = 200
             while pages < maxPages {
+                // A page cut off by suspension is redone from the same cursor
+                // on the next wake; not starting it saves the wake's time for
+                // the drain below. Everything before it is buffered and saved.
+                guard await budget?.allows(ExecutionMargin.page) ?? true else {
+                    outOfTime = true
+                    log.notice(
+                        "Pausing \(source.id, privacy: .private) after \(pages, privacy: .public) pages: too little background time left"
+                    )
+                    break
+                }
                 let result = try await source.sync(cursor: cursor)
                 pages += 1
 
@@ -412,7 +453,8 @@ public actor CollectorCore {
                 displayName: source.displayName,
                 message: errorMessage
             ))
-        } else if wasCancelled {
+        } else if wasCancelled || (outOfTime && pages == 0) {
+            // Nothing happened this pass that a status should claim.
             await emitLifecycle(.idle(sourceId: source.id, displayName: source.displayName))
         } else {
             await emitLifecycle(.completed(
