@@ -120,6 +120,17 @@ enum MenuReveal {
         width >= (largeText ? largeTextDockMinimumWidth : dockMinimumWidth)
     }
 
+    /// The container width to lay out with, given the one in use and a new
+    /// measurement. A change under half a point is layout rounding, not a
+    /// resize, and is ignored: the sidebar's width and the app's padding are
+    /// fractions of this width, so taking such a change lays the app out
+    /// again, which moves the measurement back by the same sliver, and the
+    /// two never settle. A backgrounded app hit this while the system
+    /// snapshotted it docked, until the watchdog killed it.
+    static func settledWidth(current: CGFloat, measured: CGFloat) -> CGFloat {
+        abs(measured - current) < 0.5 ? current : measured
+    }
+
     static func sidebarWidth(forContainerWidth width: CGFloat, largeText: Bool = false) -> CGFloat {
         let lower = largeText ? largeTextSidebarMinimumWidth : sidebarMinimumWidth
         let upper = largeText ? largeTextSidebarMaximumWidth : sidebarMaximumWidth
