@@ -186,6 +186,15 @@ final class GatewayLiveE2ETests: XCTestCase {
     /// request it builds is one the gateway takes, the system finishes it,
     /// and its result settles the batch — removed from the buffer, mark
     /// and outbox file gone, and the row queryable on the gateway.
+    ///
+    /// What it does not prove: certificate pinning, and behaviour on a
+    /// locked phone. The scratch gateway's certificate is self-signed, so
+    /// trust goes to `AcceptAnyCertDelegate` rather than the shared
+    /// session's pinning delegate, and the phone is taken as always
+    /// unlocked (`protectedDataAvailable` is `true`). The locked case is
+    /// covered by unit tests against a fake queue; the background
+    /// session's routing of trust challenges to the pinning delegate has no
+    /// test at all.
     func testBackgroundUploadDeliversABatch() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("omnesis-e2e-background-\(UUID().uuidString)")
