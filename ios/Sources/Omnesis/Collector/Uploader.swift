@@ -168,6 +168,10 @@ public actor Uploader {
         var rejections = pass.rejections
         // Sources the gateway refused with 403 this pass.
         var blocked: Set<String> = []
+        // Sources with a batch that stays queued after a failed attempt this
+        // pass. Their later batches wait for the next pass, so none lands
+        // ahead of it.
+        var fenced: Set<String> = []
         var stoppedForTime = false
         var handedOff = 0
         var inBackground = 0
@@ -193,7 +197,12 @@ public actor Uploader {
                 break drainPass
             }
             let effect = try await deliver(
-                id: id, blockedSources: blocked, waitingSources: order.waiting, gateway: gateway, handOff: pass.handOff
+                id: id,
+                blockedSources: blocked,
+                waitingSources: order.waiting,
+                fencedSources: fenced,
+                gateway: gateway,
+                handOff: pass.handOff
             ).effect
             uploaded += effect.uploaded
             handedOff += effect.handedOff
@@ -206,6 +215,9 @@ public actor Uploader {
             }
             if let sourceId = effect.blockedSourceId {
                 blocked.insert(sourceId)
+            }
+            if let sourceId = effect.fencedSourceId {
+                fenced.insert(sourceId)
             }
             if effect.isPermanentFailure, await notePermanentFailure(id: id) {
                 quarantined += 1
@@ -251,6 +263,8 @@ public actor Uploader {
         var blockedSourceId: String?
         /// A source that now has a batch in the background queue.
         var waitingSourceId: String?
+        /// A source whose batch stays queued after failing this pass.
+        var fencedSourceId: String?
     }
 
     /// What one batch amounted to. Each result projects a small, declarative
@@ -270,10 +284,14 @@ public actor Uploader {
         /// source id is absent when the batch file could not be read.
         case sourceBlocked(sourceId: String?)
         /// Repeating cannot change the result; counts against the batch's
-        /// quarantine budget.
-        case permanentlyRefused
+        /// quarantine budget. The source id is absent when the batch file
+        /// could not be read.
+        case permanentlyRefused(sourceId: String?)
         /// The world may fix this on its own; never costs the batch data.
-        case transientFailure
+        case transientFailure(sourceId: String?)
+        /// An earlier batch of the same source failed this pass and is still
+        /// queued, so this one was not attempted.
+        case heldBehindFailure
         /// Replicated deletion was deliberately refused to this non-holder.
         case replicaDeletionDeferred
         /// The file went away between listing and loading it.
@@ -299,10 +317,15 @@ public actor Uploader {
                 )
             case .sourceBlocked(let sourceId):
                 BatchEffect(skipped: 1, resetsConsecutiveFailures: true, blockedSourceId: sourceId)
-            case .permanentlyRefused:
-                BatchEffect(skipped: 1, resetsConsecutiveFailures: true, isPermanentFailure: true)
-            case .transientFailure:
-                BatchEffect(failed: 1)
+            case .permanentlyRefused(let sourceId):
+                BatchEffect(
+                    skipped: 1, resetsConsecutiveFailures: true, isPermanentFailure: true, fencedSourceId: sourceId
+                )
+            case .transientFailure(let sourceId):
+                BatchEffect(failed: 1, fencedSourceId: sourceId)
+            case .heldBehindFailure:
+                // Waiting, not failing: the failure is the earlier batch's.
+                BatchEffect()
             case .replicaDeletionDeferred:
                 // Another healthy replica owns deletion authority. Retaining
                 // the batch is expected coordination, not a failure.
@@ -321,6 +344,7 @@ public actor Uploader {
         id: String,
         blockedSources: Set<String>,
         waitingSources: Set<String>,
+        fencedSources: Set<String>,
         gateway: GatewayClient,
         handOff: Bool
     ) async throws
@@ -345,6 +369,12 @@ public actor Uploader {
             }
             if waitingSources.contains(batch.sourceId) {
                 return .heldBehindBackground(sourceId: batch.sourceId)
+            }
+            // A batch sent past an earlier one of its source that failed would
+            // land first: a deletion before the insert it follows, a newer row
+            // before an older one.
+            if fencedSources.contains(batch.sourceId) {
+                return .heldBehindFailure
             }
             if handOff, !backgroundBlocked.contains(batch.sourceId),
                let endpoint = BackgroundUploadEndpoint(batch: batch),
@@ -418,12 +448,12 @@ public actor Uploader {
             log.warning(
                 "Batch \(id, privacy: .public) refused: \(String(describing: failure), privacy: .private)"
             )
-            return .permanentlyRefused
+            return .permanentlyRefused(sourceId: batchSourceId)
         case .retry:
             log.notice(
                 "Batch \(id, privacy: .public) not delivered, retrying next drain: \(String(describing: failure), privacy: .private)"
             )
-            return .transientFailure
+            return .transientFailure(sourceId: batchSourceId)
         }
     }
 
