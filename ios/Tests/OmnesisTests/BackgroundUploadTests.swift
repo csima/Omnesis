@@ -119,6 +119,10 @@ class BackgroundUploadTestCase: XCTestCase {
         session.calls.filter { $0.url.hasSuffix("/analytics/ingest") || $0.url.hasSuffix("/documents") }.count
     }
 
+    func json(_ body: Data?) throws -> NSDictionary {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(body)) as? NSDictionary)
+    }
+
     func outboxFiles() -> [String] {
         let outbox = directory.appendingPathComponent("outbox")
         return (try? FileManager.default.contentsOfDirectory(atPath: outbox.path)) ?? []
@@ -194,8 +198,7 @@ final class BackgroundSwitches: @unchecked Sendable {
 }
 
 /// Handing one-request batches to the system's background upload queue:
-/// which batches go, that what goes is byte for byte the foreground
-/// request, and that a handed-off batch is left to its task.
+/// which batches go, that what goes is the foreground request, and that a handed-off batch is left to its task.
 final class BackgroundUploadTests: BackgroundUploadTestCase {
     // MARK: - Which batches go
 
@@ -290,7 +293,9 @@ final class BackgroundUploadTests: BackgroundUploadTestCase {
         XCTAssertEqual(DrainOutcome(stats), .sending)
         XCTAssertEqual(ingestCalls(session), 0)
         let started = try XCTUnwrap(transport.started.first)
-        XCTAssertEqual(started.body, sent.body)
+        // The same JSON, not the same bytes: key order isn't stable from one
+        // encode of a dictionary to the next.
+        XCTAssertEqual(try json(started.body), try json(sent.body))
         XCTAssertEqual(started.request.url?.absoluteString, sent.url)
         XCTAssertEqual(started.request.httpMethod, "POST")
         XCTAssertEqual(started.request.value(forHTTPHeaderField: "Authorization"), "Bearer omn_test")
