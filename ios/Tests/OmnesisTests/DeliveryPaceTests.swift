@@ -334,6 +334,36 @@ final class DeliveryPaceTests: XCTestCase {
         XCTAssertEqual(gateway.ingestedRows, (1 ... 6).map { "\(source.id)#\($0)" })
     }
 
+    /// A source whose batches the gateway refuses fills a small buffer
+    /// before its own backlog bound stops it. The room it took must not be
+    /// the room every other source needs: with one global limit the healthy
+    /// source re-read its first page on every pass and delivered nothing.
+    func testAStuckSourceCannotTakeTheRoomOtherSourcesNeed() async throws {
+        let clock = WakeClock()
+        let gateway = Gateway(clock: clock, uploadCost: 0)
+        gateway.ingestStatus = { $0 == "mock:stuck" ? 403 : 200 }
+        let stuck = BackfillSource(id: "mock:stuck", total: 50, clock: clock, pageCost: 0)
+        let source = BackfillSource(total: 6, clock: clock, pageCost: 0)
+        // Room for about three batches, under the backlog bound.
+        let (core, buffer) = try collector(gateway, sources: [stuck, source], clock: clock, bufferBytes: 1000)
+
+        clock.startWake(nil)
+        for _ in 0 ..< 20 {
+            _ = await core.sync(sourceId: stuck.id)
+            _ = await core.sync(sourceId: source.id)
+        }
+
+        let delivered = try XCTUnwrap(gateway.savedAnchors(source.id).last, "the healthy source moved")
+        XCTAssertGreaterThanOrEqual(delivered, 6)
+        XCTAssertEqual(gateway.ingestedRows, (1 ... delivered).map { "\(source.id)#\($0)" })
+        let queued = try await queuedRows(buffer)
+        XCTAssertEqual(
+            queued.sorted(),
+            gateway.savedAnchors(stuck.id).map { "\(stuck.id)#\($0)" }.sorted(),
+            "the stuck source's saved anchors all still have their rows"
+        )
+    }
+
     /// A page that doesn't fit in the buffer is not buffered and its anchor
     /// is not saved; nothing already queued is dropped for it.
     func testAPageThatDoesNotFitLeavesItsAnchorAndDropsNothing() async throws {
