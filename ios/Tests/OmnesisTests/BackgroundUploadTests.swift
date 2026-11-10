@@ -689,6 +689,39 @@ final class BackgroundUploadOrderTests: BackgroundUploadTestCase {
         XCTAssertEqual(transport.started.count, 2)
     }
 
+    /// A batch whose task was lost goes back to the foreground; if that
+    /// retry fails, it still comes before the rest of its source, so
+    /// nothing later of that source is sent in the same pass.
+    func testAFailedRetryOfALostTaskHoldsTheSourcesLaterBatches() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let switches = BackgroundSwitches()
+        let buf = buffer()
+        let up = try uploader(buf, gateway: gateway(session), transport: transport, switches: switches)
+        try await buf.enqueue(rowsBatch())
+        _ = try await up.drain()
+        try transport.end(XCTUnwrap(transport.started.first?.tag))
+        let deletion = batch(deletedIds: ["r1"])
+        try await buf.enqueue(deletion)
+        // Locked, so the insert retries in the foreground, where only it fails.
+        switches.unlocked = false
+        session.responder = { req in
+            let insert = req.httpBody.map { String(decoding: $0, as: UTF8.self).contains("alpha") } ?? false
+            let status = req.url?.path.hasSuffix("/lease") == true ? 404 : insert ? 503 : 200
+            let http = HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (Data(#"{"ingested":1}"#.utf8), http)
+        }
+
+        let stats = try await up.drain()
+
+        XCTAssertEqual(ingestCalls(session), 1, "only the insert was tried: \(session.calls.map(\.url))")
+        XCTAssertFalse(session.calls.contains { $0.url.hasSuffix("/lease") }, "the deletion waited")
+        XCTAssertEqual(stats.failed, 1)
+        XCTAssertEqual(stats.uploaded, 0)
+        let left = try await buf.load(id: deletion.id)
+        XCTAssertNotNil(left)
+    }
+
     /// Without the record of hand-offs, the tasks' own tags still say
     /// which batch is out; it and everything after it wait.
     func testWithAnUnreadableRecordLaterBatchesWait() async throws {
