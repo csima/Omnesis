@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -29,7 +30,6 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import dev.omnesis.android.designsystem.layout.topChrome
 import dev.omnesis.android.designsystem.theme.OmTheme
 
 /**
@@ -60,10 +60,10 @@ fun AgentTranscriptSkeleton(modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
-            // Sit below the system bars at the top, then clear the floating menu /
-            // new-conversation buttons (which use the same top-chrome insets in AgentScreen) —
-            // inset-aware so the first bar never slides behind them on a tall notch.
-            .windowInsetsPadding(WindowInsets.topChrome)
+            // Sit below the status bar, then clear the floating menu / new-conversation buttons
+            // (which are themselves status-bar-inset in AgentScreen) — inset-aware so the first
+            // bar never slides behind them on a tall notch.
+            .windowInsetsPadding(WindowInsets.statusBars)
             .padding(horizontal = 12.dp)
             .padding(top = 56.dp)
             .semantics { contentDescription = "Loading conversation" },

@@ -10,14 +10,13 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
@@ -58,7 +57,6 @@ import dev.omnesis.android.ui.common.NotificationSetupIssue
 import dev.omnesis.android.ui.common.showsNotificationIssueGlobally
 import dev.omnesis.android.ui.common.NotificationWarningDismissal
 import dev.omnesis.android.ui.common.notificationSetupIssue
-import dev.omnesis.android.designsystem.layout.topChrome
 import dev.omnesis.android.designsystem.theme.OmSpacing
 import dev.omnesis.android.ui.capture.CaptureScreen
 import dev.omnesis.android.ui.capture.CaptureSurface
@@ -987,7 +985,7 @@ fun HomeScaffold(
         // newest request waiting on the owner everywhere but inside the wizard that decides
         // it; the health warning stays bounded here because its detailed list is in Settings.
         if (currentRoute != PHONE_SETUP_ROUTE_PATTERN) Column(
-            modifier = Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.topChrome).padding(
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(
                 start = OmSpacing.md,
                 top = 56.dp,
                 end = OmSpacing.md,
