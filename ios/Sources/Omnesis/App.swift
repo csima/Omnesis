@@ -71,6 +71,8 @@ public struct OmnesisApp: App {
                 RealtimeScrollDemoSurface()
             } else if Self.settingsPreview {
                 settingsPreviewRoot
+            } else if Self.homeAttentionPreview {
+                homeAttentionPreviewRoot
             } else if Self.accessAuthorizationPreview {
                 accessAuthorizationPreviewRoot
             } else if Self.agentReadingAnchorPreview {
@@ -176,6 +178,26 @@ public struct OmnesisApp: App {
 
     static var settingsPreview: Bool {
         ProcessInfo.processInfo.environment["DEMO_SETTINGS_PREVIEW"] == "1"
+    }
+
+    /// `DEMO_HOME_PREVIEW=attention` boots the whole home shell over a
+    /// preview store with phone sources needing attention, so the top banner
+    /// can be checked against each section's own top controls in a real
+    /// process, on any display.
+    static var homeAttentionPreview: Bool {
+        ProcessInfo.processInfo.environment["DEMO_HOME_PREVIEW"] == "attention"
+    }
+
+    private var homeAttentionPreviewRoot: some View {
+        let store = AppStore.preview(
+            sources: PreviewMocks.sources,
+            statusSnapshot: PreviewMocks.statusSnapshot,
+            sourcePermissionHealth: PreviewMocks.sourcePermissionHealth
+        )
+        return HomeView()
+            .environment(store)
+            .environment(store.notificationRouter)
+            .environment(\.appearanceStore, store.appearance)
     }
 
     static var accessAuthorizationPreview: Bool {
