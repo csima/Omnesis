@@ -111,14 +111,17 @@ describe("describeRetrieval", () => {
           ["B", 30],
           ["C", 20],
           ["D", 10],
+          ["E", 5],
+          ["F", 2],
         ],
-        rowCount: 4,
+        rowCount: 6,
         truncated: true,
       },
     );
-    expect(line).toContain("4 row(s), truncated");
+    expect(line).toContain("6 row(s), truncated");
     expect(line).toContain("columns workspace, n");
-    expect(line).not.toContain('"D"');
+    expect(line).toContain('"E"');
+    expect(line).not.toContain('"F"');
   });
 });
 
@@ -143,166 +146,147 @@ describe("parseVerdict", () => {
 });
 
 describe("buildCriticPrompt", () => {
-  it("carries the request, the earlier retrieval and the latest", () => {
-    const prompt = buildCriticPrompt(
-      "Top discussion on Slack today",
-      ["first call"],
+  it("carries the request and the whole retrieval, oldest first", () => {
+    const prompt = buildCriticPrompt("Top discussion on Slack today", [
+      "first call",
       "second call",
-    );
+    ]);
     expect(prompt).toContain("Top discussion on Slack today");
-    expect(prompt).toContain("1. first call");
-    expect(prompt).toContain("Latest retrieval:\nsecond call");
+    expect(prompt).toContain("1. first call\n2. second call");
   });
 });
 
+const ADEQUATE = '{"verdict":"adequate"}';
+const cited: ToolResult = { kind: "annotate.batch", items: [] };
+const counted: ToolResult = {
+  kind: "sql.rows",
+  sql: "select workspace, count(*) from messages group by workspace",
+  columns: ["workspace", "n"],
+  rows: [["A", 40]],
+  rowCount: 1,
+};
+
+/** One turn's tools, all reviewed by the same model. */
+function tools(completer: CompleteCapability | null, turn: RetrievalCriticTurn | null) {
+  const wrap = (handle: ToolHandle) => critic(handle, completer, turn);
+  return {
+    search: wrap(tool("search_many", slackHits)),
+    sql: wrap(tool("run_sql", counted)),
+    cite: wrap(tool("annotate_many", cited)),
+  };
+}
+
 describe("withRetrievalCritic", () => {
-  it("leaves tools that do not retrieve alone", () => {
+  it("leaves tools that neither retrieve nor cite alone", () => {
     const handle = tool("plan", slackHits);
     expect(critic(handle, reviewer(REVISE))).toBe(handle);
   });
 
-  it("attaches the reviewer's note when the retrieval cannot answer the request", async () => {
+  it("keeps every retrieval for the judge and returns its result unchanged, unreviewed", async () => {
     const model = reviewer(REVISE);
-    const result = await critic(tool("search_documents", slackHits), model).invoke(
-      { query: "x" },
-      ctx,
-    );
-    expect(result).toMatchObject({
-      kind: "search.results",
-      review: { verdict: "revise", note: "Count messages per workspace with run_sql first." },
-    });
-    expect(model.prompts[0]).toContain("Top discussion on Slack today");
-  });
-
-  it("returns an adequate result unchanged", async () => {
-    const result = await critic(
-      tool("search_documents", slackHits),
-      reviewer('{"verdict":"adequate"}'),
-    ).invoke({}, ctx);
-    expect(result).toBe(slackHits);
-  });
-
-  it("does nothing when the session has no turn under review", async () => {
-    const model = reviewer(REVISE);
-    const result = await critic(tool("search_documents", slackHits), model, null).invoke({}, ctx);
-    expect(result).toBe(slackHits);
+    const turn = new RetrievalCriticTurn("q");
+    const { search, sql } = tools(model, turn);
+    expect(await search.invoke({ queries: [{ query: "a" }] }, ctx)).toBe(slackHits);
+    expect(await sql.invoke({}, ctx)).toBe(counted);
+    expect(turn.retrievals).toHaveLength(2);
     expect(model.prompts).toHaveLength(0);
   });
 
-  it("fails open with no reviewer, a failing reviewer or a slow one", async () => {
-    const handle = tool("search_documents", slackHits);
-    expect(await critic(handle, null).invoke({}, ctx)).toBe(slackHits);
-    const failing = reviewer(() => Promise.reject(new Error("503")));
-    expect(await critic(handle, failing).invoke({}, ctx)).toBe(slackHits);
-    const slow = reviewer(() => new Promise((resolve) => setTimeout(() => resolve(REVISE), 200)));
-    expect(await critic(handle, slow, new RetrievalCriticTurn("q"), 20).invoke({}, ctx)).toBe(
-      slackHits,
-    );
+  it("judges the whole retrieval when the answer cites, and refuses with the note", async () => {
+    const model = reviewer(REVISE);
+    const turn = new RetrievalCriticTurn("Top discussion on Slack today");
+    const { search, cite } = tools(model, turn);
+    await search.invoke({ queries: [{ query: "discussion" }] }, ctx);
+    const refused = await cite.invoke({}, ctx);
+    expect(refused).toMatchObject({ kind: "error", code: "retrieval_review_pending" });
+    expect((refused as { message: string }).message).toContain("Count messages per workspace");
+    expect(model.prompts).toHaveLength(1);
+    expect(model.prompts[0]).toContain("Top discussion on Slack today");
+    expect(model.prompts[0]).toContain('1. search_many({"queries":[{"query":"discussion"}]})');
   });
 
-  it("shows later reviews what was already retrieved this turn", async () => {
-    const model = reviewer('{"verdict":"adequate"}');
-    const turn = new RetrievalCriticTurn("Top discussion on Slack today");
-    await critic(tool("search_documents", slackHits), model, turn).invoke({ query: "a" }, ctx);
-    await critic(
-      tool("run_sql", { kind: "error", code: "bad", message: "no" }),
-      model,
-      turn,
-    ).invoke({}, ctx);
-    await critic(tool("search_documents", slackHits), model, turn).invoke({ query: "b" }, ctx);
-    expect(turn.retrievals).toHaveLength(3);
-    expect(model.prompts).toHaveLength(2);
+  it("records the citation once a later retrieval passes, judging everything retrieved", async () => {
+    const verdicts = [REVISE, ADEQUATE];
+    const model = reviewer(async () => verdicts.shift()!);
+    const turn = new RetrievalCriticTurn("q");
+    const { search, sql, cite } = tools(model, turn);
+    await search.invoke({}, ctx);
+    expect(await cite.invoke({}, ctx)).toMatchObject({ code: "retrieval_review_pending" });
+    await sql.invoke({}, ctx);
+    expect(await cite.invoke({}, ctx)).toBe(cited);
+    expect(model.prompts[1]).toContain("1. search_many");
     expect(model.prompts[1]).toContain("2. run_sql");
   });
 
-  it("stops reviewing once the turn's reviews are spent, keeping the last verdict", async () => {
+  it("does not review again without new retrieval", async () => {
+    const model = reviewer(ADEQUATE);
+    const turn = new RetrievalCriticTurn("q");
+    const { search, cite } = tools(model, turn);
+    await search.invoke({}, ctx);
+    expect(await cite.invoke({}, ctx)).toBe(cited);
+    expect(await cite.invoke({}, ctx)).toBe(cited);
+    expect(model.prompts).toHaveLength(1);
+  });
+
+  it("lets the answer through after the turn's refusals, saying it must open with the gaps", async () => {
     const model = reviewer(REVISE);
     const turn = new RetrievalCriticTurn("q");
-    const handle = critic(tool("search_documents", slackHits), model, turn);
-    const results = [];
-    for (let i = 0; i < 6; i += 1) results.push(await handle.invoke({}, ctx));
-    expect(results.filter((r) => "review" in r && r.review)).toHaveLength(4);
-    expect(model.prompts).toHaveLength(4);
-    expect(turn.pending).toBe("Count messages per workspace with run_sql first.");
+    const { search, cite } = tools(model, turn);
+    await search.invoke({}, ctx);
+    const first = (await cite.invoke({}, ctx)) as { code: string; message: string };
+    expect(first.code).toBe("retrieval_review_pending");
+    expect(first.message).not.toContain("does not cover");
+    await search.invoke({}, ctx);
+    const last = (await cite.invoke({}, ctx)) as { code: string; message: string };
+    expect(last.code).toBe("retrieval_review_pending");
+    expect(last.message).toContain("must open by saying plainly what it does not cover");
+    await search.invoke({}, ctx);
+    expect(await cite.invoke({}, ctx)).toBe(cited);
+    expect(model.prompts).toHaveLength(2);
   });
 
-  it("lets every review's verdict replace the last, so a later pass releases citations", async () => {
-    const verdicts = [REVISE, REVISE, REVISE, '{"verdict":"adequate"}'];
-    const model = reviewer(async () => verdicts.shift()!);
+  it("keeps the last verdict once the turn's reviews are spent", async () => {
+    const model = reviewer(REVISE);
     const turn = new RetrievalCriticTurn("q");
-    const handle = critic(tool("run_sql", slackHits), model, turn);
-    for (let i = 0; i < 3; i += 1) await handle.invoke({}, ctx);
-    expect(turn.pending).not.toBeNull();
-    await handle.invoke({}, ctx);
-    expect(turn.pending).toBeNull();
+    const many = critic(tool("annotate", cited), model, turn);
+    const search = critic(tool("search_many", slackHits), model, turn);
+    turn.reviews = 4;
+    turn.verdict = { verdict: "revise", note: "stale" };
+    await search.invoke({}, ctx);
+    const refused = (await many.invoke({}, ctx)) as { message: string };
+    expect(refused.message).toContain("stale");
+    expect(model.prompts).toHaveLength(0);
   });
 
-  it("reviews one call at a time when a round runs several at once", async () => {
+  it("shares one review between citations made in the same round", async () => {
     let release: (value: string) => void = () => {};
     const model = reviewer(() => new Promise<string>((resolve) => (release = resolve)));
     const turn = new RetrievalCriticTurn("q");
-    const handle = critic(tool("search_documents", slackHits), model, turn);
-    const first = handle.invoke({ query: "a" }, ctx);
+    const { search, cite } = tools(model, turn);
+    await search.invoke({}, ctx);
+    const first = cite.invoke({}, ctx);
+    const second = cite.invoke({}, ctx);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const second = await handle.invoke({ query: "b" }, ctx);
-    expect(second).toBe(slackHits);
-    release(REVISE);
-    expect(await first).toMatchObject({ review: { verdict: "revise" } });
+    release(ADEQUATE);
+    expect(await first).toBe(cited);
+    expect(await second).toBe(cited);
     expect(model.prompts).toHaveLength(1);
-    expect(turn.retrievals).toHaveLength(2);
   });
 
-  describe("a standing rejection holds the answer's citations", () => {
-    const cited: ToolResult = { kind: "annotate.batch", items: [] };
-
-    it("refuses a citation while the rejection stands, naming the retrieval to do", async () => {
-      const turn = new RetrievalCriticTurn("Top discussion on Slack today");
-      await critic(tool("search_many", slackHits), reviewer(REVISE), turn).invoke({}, ctx);
-      const cite = critic(tool("annotate_many", cited), reviewer(REVISE), turn);
-      const refused = await cite.invoke({}, ctx);
-      expect(refused).toMatchObject({ kind: "error", code: "retrieval_review_pending" });
-      expect((refused as { message: string }).message).toContain("Count messages per workspace");
-    });
-
-    it("accepts citations once a later retrieval passes review", async () => {
-      const turn = new RetrievalCriticTurn("Top discussion on Slack today");
-      await critic(tool("search_many", slackHits), reviewer(REVISE), turn).invoke({}, ctx);
-      const counted: ToolResult = {
-        kind: "sql.rows",
-        sql: "select 1",
-        columns: ["workspace", "n"],
-        rows: [["A", 40]],
-        rowCount: 1,
-      };
-      await critic(tool("run_sql", counted), reviewer('{"verdict":"adequate"}'), turn).invoke(
-        {},
-        ctx,
-      );
-      expect(turn.pending).toBeNull();
-      expect(await critic(tool("annotate_many", cited), null, turn).invoke({}, ctx)).toBe(cited);
-    });
-
-    it("lets the answer through after the turn's refusals, so a wrong verdict cannot trap it", async () => {
-      const turn = new RetrievalCriticTurn("q");
-      await critic(tool("search_many", slackHits), reviewer(REVISE), turn).invoke({}, ctx);
-      const cite = critic(tool("cite_record", cited), null, turn);
-      const first = (await cite.invoke({}, ctx)) as { code: string; message: string };
-      expect(first.code).toBe("retrieval_review_pending");
-      expect(first.message).not.toContain("does not cover");
-      const last = (await cite.invoke({}, ctx)) as { code: string; message: string };
-      expect(last.code).toBe("retrieval_review_pending");
-      expect(last.message).toContain("must open by saying plainly what it does not cover");
-      expect(await cite.invoke({}, ctx)).toBe(cited);
-    });
-
-    it("never holds a citation when nothing was rejected", async () => {
-      const turn = new RetrievalCriticTurn("q");
-      await critic(tool("search_many", slackHits), reviewer('{"verdict":"adequate"}'), turn).invoke(
-        {},
-        ctx,
-      );
-      expect(await critic(tool("annotate", cited), null, turn).invoke({}, ctx)).toBe(cited);
-      expect(await critic(tool("annotate", cited), null, null).invoke({}, ctx)).toBe(cited);
-    });
+  it("records a citation with no retrieval to judge, no turn, or no working reviewer", async () => {
+    const turn = new RetrievalCriticTurn("q");
+    expect(await tools(reviewer(REVISE), turn).cite.invoke({}, ctx)).toBe(cited);
+    expect(await tools(reviewer(REVISE), null).cite.invoke({}, ctx)).toBe(cited);
+    const failing = reviewer(() => Promise.reject(new Error("503")));
+    const t1 = new RetrievalCriticTurn("q");
+    await tools(failing, t1).search.invoke({}, ctx);
+    expect(await tools(failing, t1).cite.invoke({}, ctx)).toBe(cited);
+    const slow = reviewer(() => new Promise((resolve) => setTimeout(() => resolve(REVISE), 200)));
+    const t2 = new RetrievalCriticTurn("q");
+    await critic(tool("search_many", slackHits), slow, t2, 20).invoke({}, ctx);
+    expect(await critic(tool("annotate_many", cited), slow, t2, 20).invoke({}, ctx)).toBe(cited);
+    const t3 = new RetrievalCriticTurn("q");
+    await tools(null, t3).search.invoke({}, ctx);
+    expect(await tools(null, t3).cite.invoke({}, ctx)).toBe(cited);
   });
 });

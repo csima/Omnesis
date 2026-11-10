@@ -77,13 +77,6 @@ function resolvedZone(timeZone: string | undefined): string | undefined {
 }
 
 function project(result: ToolResult): unknown {
-  // A reviewer's note leads the result rather than trailing dozens of hits:
-  // it says what the rest cannot answer, and has to be read before them.
-  if ("review" in result && result.review) {
-    const { review, ...rest } = result;
-    const projected = project(rest as ToolResult);
-    return { review, ...(projected as object) };
-  }
   if (result.kind === "search.batch") {
     return { ...result, items: result.items.map(project) };
   }

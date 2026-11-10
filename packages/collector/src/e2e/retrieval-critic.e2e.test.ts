@@ -2,11 +2,11 @@
 // Copyright (c) 2026 Adrien Conrath
 
 /**
- * The retrieval critic end to end: a conversation turn's retrieval is judged
- * by a reviewer before the agent answers, and a reviewer that judges it
- * insufficient reaches the agent as a note on the tool result it reads next,
- * in the same turn. The verdict binds: the agent's citations are refused until
- * a later retrieval passes review, and accepted once one has.
+ * The retrieval critic end to end: when a conversation turn records its
+ * answer's sources, a reviewer judges the turn's whole retrieval against the
+ * request. A rejection refuses the citation with the reviewer's note, in the
+ * same turn; once the agent has retrieved more, its next citation is judged
+ * again against everything it retrieved, and a pass records it.
  *
  * The case is the one the critic was built for: "the top discussions" over
  * every workspace, answered from a few relevance-search hits.
@@ -30,7 +30,7 @@ import {
 const MODEL_ID = "retrieval-critic-scripted-v1";
 const TURN_TIMEOUT_MS = 90_000;
 const QUESTION = "What were the top discussions across all my workspaces today?";
-const REVIEWER_PROMPT = "You review an assistant's retrieval";
+const REVIEWER_PROMPT = "You judge an assistant's retrieval";
 const NOTE =
   "Five relevance hits are a sample, not a count: count today's messages per workspace first.";
 const CITE = {
@@ -59,7 +59,7 @@ describe("the retrieval critic", () => {
         if (reviewing) {
           const prompt = messages.map((m) => m.content ?? "").join("\n");
           reviewerPrompts.push(prompt);
-          // The first look sees the sampled search; the second, the recount.
+          // The first judgement sees the sampled search; the second, the recount too.
           return reviewerPrompts.length === 1
             ? { kind: "text", text: JSON.stringify({ verdict: "revise", note: NOTE }) }
             : { kind: "text", text: '{"verdict":"adequate"}' };
@@ -102,40 +102,43 @@ describe("the retrieval critic", () => {
     await model?.close();
   });
 
-  test("a reviewer's rejection reaches the agent and holds its citations until it is fixed", async () => {
+  test("a rejected retrieval holds the answer's citations until a recount passes", async () => {
     const { sessionId } = await harness.gatewayJson<{ sessionId: string }>("/agent/sessions", {
       method: "POST",
       body: "{}",
     });
     await sendTurn(harness, sessionId, QUESTION);
 
-    // The reviewer saw the request and the retrieval it was judging.
+    // Each judgement came at a citation, saw the request, and saw every
+    // retrieval made by then.
     expect(reviewerPrompts).toHaveLength(2);
     expect(reviewerPrompts[0]).toContain(QUESTION);
-    expect(reviewerPrompts[0]).toContain('search_many({"queries":[{"query":"discussion"}]})');
-    // The second look knows what the first retrieval already returned.
+    expect(reviewerPrompts[0]).toContain('1. search_many({"queries":[{"query":"discussion"}]})');
+    expect(reviewerPrompts[0]).not.toContain("messages today");
     expect(reviewerPrompts[1]).toContain('1. search_many({"queries":[{"query":"discussion"}]})');
+    expect(reviewerPrompts[1]).toContain(
+      '2. search_many({"queries":[{"query":"messages today"}]})',
+    );
 
-    // The note led the first result; citing on that retrieval was refused
-    // with the note; the corrected retrieval passed and carried none; and the
-    // citation after it was no longer held.
+    // Retrieval results came back as they were; the first citation was
+    // refused with the note, and the one after the recount was not.
     const toolMessages = agentRequests.at(-1)!.filter((m) => m.role === "tool");
     expect(toolMessages).toHaveLength(4);
-    expect(toolMessages[0]!.content).toContain(NOTE);
+    expect(toolMessages[0]!.content).not.toContain(NOTE);
     expect(toolMessages[1]!.content).toContain("retrieval_review_pending");
     expect(toolMessages[1]!.content).toContain(NOTE);
-    expect(toolMessages[2]!.content).not.toContain('"review"');
+    expect(toolMessages[2]!.content).not.toContain(NOTE);
     expect(toolMessages[3]!.content).not.toContain("retrieval_review_pending");
 
-    // The persisted transcript keeps the note on the result it was attached to.
+    // The persisted transcript keeps the refusal on the citation it answered.
     const record = await harness.gatewayJson<ConversationRecordLike>(
       `/agent/conversations/${sessionId}`,
     );
-    const reviews = (record.messages ?? [])
+    const refusals = (record.messages ?? [])
       .flatMap((m) => m.parts ?? [])
       .filter((part) => part.kind === "tool_result")
-      .map((part) => (part.result as { review?: { note?: string } } | undefined)?.review?.note);
-    expect(reviews).toEqual([NOTE, undefined, undefined, undefined]);
+      .map((part) => JSON.stringify(part.result ?? null).includes("retrieval_review_pending"));
+    expect(refusals).toEqual([false, true, false, false]);
   });
 });
 
