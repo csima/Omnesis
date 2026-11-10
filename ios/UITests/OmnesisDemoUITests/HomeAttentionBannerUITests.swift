@@ -19,7 +19,7 @@ final class HomeAttentionBannerUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testMenuButtonOpensTheMenuUnderTheBannerOnEverySection() throws {
+    func testMenuButtonOpensTheMenuUnderTheBannerOnEverySection() {
         for tab in ["agent", "search", "sources", "people", "tasks"] {
             let app = XCUIApplication()
             app.launchEnvironment["DEMO_HOME_PREVIEW"] = "attention"
