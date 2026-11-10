@@ -4,9 +4,9 @@
 import Foundation
 
 /// Persistent FIFO queue of pending `Batch`es. Each batch is one JSON
-/// file on disk, named by its id (which sorts lexicographically in
-/// creation order), so we can read batches in order without keeping
-/// any index in memory.
+/// file on disk, named by the sequence it was queued at and its id
+/// (`<sequence>_<id>.json`), so the order survives relaunches and clock
+/// changes without any index beyond the directory itself.
 ///
 /// Survives app kills, iOS suspensions, and device reboots. The actual
 /// HealthKit data stays in HealthKit's local database — this buffer
@@ -156,7 +156,18 @@ public actor OfflineBuffer {
     /// Populated lazily by `ensureCacheLoaded()`; updated in-place on
     /// every mutation. Disk is still the source of truth for the
     /// initial scan + on cache miss in `remove(id:)` / `load(id:)`.
+    ///
+    /// The order is the order batches were queued, kept in their file
+    /// names (`<sequence>_<id>.json`), never the clock their ids carry:
+    /// that resets with each process and steps back with the system clock.
     private var fileURLs: [URL] = []
+
+    /// The file of each queued batch, by id.
+    private var urlsById: [String: URL] = [:]
+
+    /// The highest sequence a queued batch carries; the next one queued
+    /// gets one more.
+    private var lastSequence: UInt64 = 0
 
     /// Running total of all queued file sizes in bytes. Kept in lockstep
     /// with `fileURLs` so `totalSizeBytes()` is O(1).
@@ -237,19 +248,20 @@ public actor OfflineBuffer {
                 throw Full()
             }
 
-            let url = fileURL(for: batch.id)
-            try data.write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
-            // FIFO order is by filename, and `Batch.makeId` is monotonic, so
-            // a fresh batch sorts after every existing one — appending keeps
-            // the cache in sorted order without a re-sort. Defensive guard:
-            // if for some reason a non-monotonic id arrives (e.g. tests
-            // injecting a hand-crafted earlier id), insert in sort position.
-            if let last = fileURLs.last, last.lastPathComponent > url.lastPathComponent {
-                let idx = fileURLs.firstIndex(where: { $0.lastPathComponent > url.lastPathComponent }) ?? fileURLs.count
-                fileURLs.insert(url, at: idx)
-            } else {
-                fileURLs.append(url)
+            // A batch queued again under its id keeps its place.
+            if let queued = urlsById[batch.id] {
+                let size = (try? sizeOf(queued)) ?? 0
+                try data.write(to: queued, options: ProtectedStore.offlineBuffer.writingOptions)
+                totalBytes += data.count - size
+                batchSources[batch.id] = batch.sourceId
+                return
             }
+            let sequence = lastSequence + 1
+            let url = directory.appendingPathComponent(QueuedBatchFile.name(sequence: sequence, id: batch.id))
+            try data.write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
+            lastSequence = sequence
+            fileURLs.append(url)
+            urlsById[batch.id] = url
             totalBytes += data.count
             batchSources[batch.id] = batch.sourceId
         }
@@ -272,7 +284,7 @@ public actor OfflineBuffer {
     public func listIds() throws -> [String] {
         try lifetime.withActive {
             ensureCacheLoaded()
-            return fileURLs.map { $0.deletingPathExtension().lastPathComponent }
+            return fileURLs.map(QueuedBatchFile.batchId(of:))
         }
     }
 
@@ -309,9 +321,7 @@ public actor OfflineBuffer {
                 pruneMissingFile(url, id: id)
                 return
             }
-            if let idx = fileURLs.firstIndex(of: url) {
-                fileURLs.remove(at: idx)
-            }
+            dropFromQueue(url, id: id)
             totalBytes = max(0, totalBytes - size)
             forgetFailures(id: id)
         }
@@ -344,14 +354,14 @@ public actor OfflineBuffer {
     /// decide whether to submit an "as soon as possible" drain when the
     /// app backgrounds with stale data still pending.
     ///
-    /// Relies on the filename timestamp prefix (`YYYYMMDDHHMMSSmmm-`) —
+    /// Relies on the batch id's timestamp prefix (`YYYYMMDDHHMMSSmmm-`) —
     /// avoids a filesystem stat per file, which would read the whole
     /// buffer directory every wake-up.
     public func oldestBatchAge() throws -> TimeInterval? {
         try lifetime.withActive {
             ensureCacheLoaded()
             guard let url = fileURLs.first else { return nil }
-            return age(ofFileNamed: url.deletingPathExtension().lastPathComponent)
+            return age(ofFileNamed: QueuedBatchFile.batchId(of: url))
         }
     }
 
@@ -414,9 +424,7 @@ public actor OfflineBuffer {
             ensureCacheLoaded()
             return HealthSnapshot(
                 bufferedBatches: fileURLs.count,
-                oldestBufferedAge: fileURLs.first.flatMap {
-                    age(ofFileNamed: $0.deletingPathExtension().lastPathComponent)
-                },
+                oldestBufferedAge: fileURLs.first.flatMap { age(ofFileNamed: QueuedBatchFile.batchId(of: $0)) },
                 quarantinedBatches: quarantinedURLs().count
             )
         }
@@ -451,9 +459,7 @@ public actor OfflineBuffer {
         let destination = dir.appendingPathComponent(source.lastPathComponent)
         try? fileManager.removeItem(at: destination)
         try fileManager.moveItem(at: source, to: destination)
-        if let idx = fileURLs.firstIndex(of: source) {
-            fileURLs.remove(at: idx)
-        }
+        dropFromQueue(source, id: id)
         totalBytes = max(0, totalBytes - size)
         forgetFailures(id: id)
     }
@@ -472,7 +478,7 @@ public actor OfflineBuffer {
         directory.appendingPathComponent("quarantine", isDirectory: true)
     }
 
-    /// Age of a batch from its filename timestamp prefix
+    /// Age of a batch from its id's timestamp prefix
     /// ("yyyyMMdd'T'HHmmssSSS-<8-hex>" → the first 18 chars). Matches
     /// `Batch.makeId` — keep them in lockstep.
     private func age(ofFileNamed name: String) -> TimeInterval? {
@@ -526,12 +532,19 @@ public actor OfflineBuffer {
         }
         // Drop counts for batches that are no longer queued — a delivered or
         // quarantined batch must not hand its failure history to a future id.
-        let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
+        let queued = Set(fileURLs.map(QueuedBatchFile.batchId(of:)))
         permanentFailures = decoded.filter { queued.contains($0.key) }
     }
 
+    /// The queued file of batch `id`; for one not queued, where a file
+    /// from before sequences would be.
     private func fileURL(for id: String) -> URL {
-        directory.appendingPathComponent("\(id).json")
+        urlsById[id] ?? directory.appendingPathComponent("\(id).json")
+    }
+
+    private func dropFromQueue(_ url: URL, id: String) {
+        fileURLs.removeAll { $0 == url }
+        if urlsById[id] == url { urlsById[id] = nil }
     }
 
     /// Reconcile an entry another owner removed from disk. Normal app
@@ -540,6 +553,7 @@ public actor OfflineBuffer {
     private func pruneMissingFile(_ url: URL, id: String) {
         if let idx = fileURLs.firstIndex(of: url) {
             fileURLs.remove(at: idx)
+            if urlsById[id] == url { urlsById[id] = nil }
             totalBytes = fileURLs.reduce(0) { total, fileURL in
                 total + ((try? sizeOf(fileURL)) ?? 0)
             }
@@ -560,11 +574,21 @@ public actor OfflineBuffer {
         // `/private/var/…`), and every later lookup — `remove`, quarantine —
         // finds its entry by comparing against `fileURL(for:)`. A mismatch
         // left delivered batches counted as queued after every relaunch.
-        let urls = contents
+        // Files from before sequences go first, in the order of their names.
+        let queued = contents
             .filter { $0.pathExtension == "json" }
-            .map { fileURL(for: $0.deletingPathExtension().lastPathComponent) }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .map { (parsed: QueuedBatchFile.parse($0.lastPathComponent), name: $0.lastPathComponent) }
+            .sorted { lhs, rhs in
+                let left = lhs.parsed.sequence.map { (1, $0) } ?? (0, 0)
+                let right = rhs.parsed.sequence.map { (1, $0) } ?? (0, 0)
+                return left != right ? left < right : lhs.name < rhs.name
+            }
+        let urls = queued.map { directory.appendingPathComponent($0.name) }
         fileURLs = urls
+        urlsById = Dictionary(
+            zip(queued.map(\.parsed.id), urls), uniquingKeysWith: { _, later in later }
+        )
+        lastSequence = queued.compactMap(\.parsed.sequence).max() ?? 0
         totalBytes = urls.reduce(0) { acc, url in
             acc + ((try? sizeOf(url)) ?? 0)
         }
@@ -651,7 +675,7 @@ extension OfflineBuffer {
             do {
                 marks = try loadBackgroundMarks()
             } catch let error as UnrecognisedBackgroundRecord {
-                let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
+                let queued = Set(fileURLs.map(QueuedBatchFile.batchId(of:)))
                 let out = liveTags.contains { BackgroundUploadTag($0).map { queued.contains($0.batchId) } ?? false }
                 if out { throw error }
                 try persistBackgroundMarks([:])
@@ -701,7 +725,7 @@ extension OfflineBuffer {
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             // Nothing handed off yet.
         }
-        let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
+        let queued = Set(fileURLs.map(QueuedBatchFile.batchId(of:)))
         let pruned = marks.filter { queued.contains($0.key) }
         backgroundMarks = pruned
         return pruned
@@ -748,7 +772,7 @@ extension OfflineBuffer {
         try lifetime.withActive {
             ensureCacheLoaded()
             return fileURLs.count(where: { url in
-                let id = url.deletingPathExtension().lastPathComponent
+                let id = QueuedBatchFile.batchId(of: url)
                 return (source(ofBatch: id, at: url) ?? sourceId) == sourceId
             })
         }
@@ -758,7 +782,7 @@ extension OfflineBuffer {
     /// be read as its own (as `pendingCount` does).
     private func bytesQueued(bySource sourceId: String) -> Int {
         fileURLs.reduce(0) { total, url in
-            let id = url.deletingPathExtension().lastPathComponent
+            let id = QueuedBatchFile.batchId(of: url)
             guard (source(ofBatch: id, at: url) ?? sourceId) == sourceId else { return total }
             return total + ((try? sizeOf(url)) ?? 0)
         }
