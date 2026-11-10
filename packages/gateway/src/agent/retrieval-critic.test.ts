@@ -8,6 +8,7 @@ import {
   buildCriticPrompt,
   describeRetrieval,
   parseVerdict,
+  refusedCitation,
   withRetrievalCritic,
 } from "./retrieval-critic.js";
 import type { ToolContext, ToolHandle } from "@omnesis/agent";
@@ -242,7 +243,42 @@ describe("withRetrievalCritic", () => {
     expect(last.message).toContain("must open by saying plainly what it does not cover");
     await search.invoke({}, ctx);
     expect(await cite.invoke({}, ctx)).toBe(cited);
-    expect(model.prompts).toHaveLength(2);
+    // The retrieval since the last refusal was still judged.
+    expect(model.prompts).toHaveLength(3);
+  });
+
+  it("past the refusals, a retrieval that now passes is recorded as passing", async () => {
+    const verdicts = [REVISE, REVISE, ADEQUATE];
+    const model = reviewer(async () => verdicts.shift()!);
+    const turn = new RetrievalCriticTurn("q");
+    const { search, sql, cite } = tools(model, turn);
+    await search.invoke({}, ctx);
+    await cite.invoke({}, ctx);
+    await search.invoke({}, ctx);
+    await cite.invoke({}, ctx);
+    await sql.invoke({}, ctx);
+    expect(await cite.invoke({}, ctx)).toBe(cited);
+    expect(turn.verdict).toEqual({ verdict: "adequate" });
+  });
+
+  it("tells the agent the user has seen nothing yet", async () => {
+    const refused = refusedCitation("Count first.") as { message: string };
+    expect(refused.message).toContain("do not describe it as a correction");
+  });
+
+  it("shows the judge which documents were read", () => {
+    const line = describeRetrieval("fetch_many", { ids: ["d0", "d1"] }, {
+      kind: "document.batch",
+      items: [
+        {
+          kind: "document",
+          ref: { documentId: "d0", sourceType: "slack", sourceId: "slack:T1" },
+          document: { title: "Release thread", content: "…" },
+        },
+        { kind: "error", code: "document_not_found", message: "gone" },
+      ],
+    } as ToolResult);
+    expect(line).toContain("1 document(s) read (slack 1), 1 not readable");
   });
 
   it("keeps the last verdict once the turn's reviews are spent", async () => {
