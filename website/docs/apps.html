@@ -718,6 +718,12 @@ Expires in 599s. Scopes: admin, read, push:claim, write:apple-health, write:acti
           is healthy. Background App Refresh is reported separately for every iOS source that
           depends on it.
         </p>
+        <p>
+          Reading a phone's whole Apple Health history can take many syncs, because iOS gives the
+          app only a few seconds each time it wakes it in the background. Each sync first brings
+          every data type's last seven days up to date and then spends the time left on older
+          history, so recent data appears within a sync or two while the history fills in behind it.
+        </p>
         <p>On Android:</p>
         <div class="table-wrap">
           <table>
