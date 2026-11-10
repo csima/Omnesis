@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -78,6 +77,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.omnesis.android.designsystem.components.OmSpinner
+import dev.omnesis.android.designsystem.layout.topChrome
 import dev.omnesis.android.designsystem.theme.OmSpacing
 import dev.omnesis.android.designsystem.theme.OmTheme
 import dev.omnesis.android.transport.dto.ConversationSummary
@@ -148,7 +148,7 @@ fun MainMenuDrawer(
         PullToRefresh(
             refreshing = conversationsLoading,
             onRefresh = onRefreshConversations,
-            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+            modifier = Modifier.windowInsetsPadding(WindowInsets.topChrome),
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
