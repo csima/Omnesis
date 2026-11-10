@@ -282,8 +282,10 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
         .background {
             GeometryReader { geo in
                 Color.clear
-                    .onAppear { width = geo.size.width }
-                    .onChange(of: geo.size.width) { _, newWidth in width = newWidth }
+                    .onAppear { width = MenuReveal.settledWidth(current: width, measured: geo.size.width) }
+                    .onChange(of: geo.size.width) { _, newWidth in
+                        width = MenuReveal.settledWidth(current: width, measured: newWidth)
+                    }
             }
         }
         .coordinateSpace(.named(MenuReveal.coordinateSpace))
