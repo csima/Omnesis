@@ -79,6 +79,8 @@ export class RetrievalCriticTurn {
   /** The latest verdict, and how many retrievals it judged. */
   verdict: RetrievalVerdict = PASS;
   judged = 0;
+  /** Each rejection this turn, with how many retrievals it had judged. */
+  readonly rejections: Array<{ readonly judged: number; readonly note: string }> = [];
   /** Calls in one model round run concurrently; they share one review. */
   judging: Promise<RetrievalVerdict> | null = null;
 
@@ -156,7 +158,14 @@ export function describeRetrieval(tool: string, args: unknown, result: ToolResul
   }
 }
 
-export function buildCriticPrompt(request: string, retrievals: readonly string[]): string {
+export function buildCriticPrompt(
+  request: string,
+  retrievals: readonly string[],
+  rejections: RetrievalCriticTurn["rejections"] = [],
+): string {
+  const earlier = rejections.length
+    ? `\n\nYou rejected this retrieval earlier in the turn:\n${rejections.map((r) => `- after retrieval ${r.judged}: ${clip(r.note, MAX_NOTE_CHARS)}`).join("\n")}\nPass now only if the retrieval since then supplies what you said was missing, or shows that it cannot be supplied — for example an error, or tables that do not hold the data. A retrieval that returned nothing, or one that does not attempt what you asked for, shows neither.`
+    : "";
   return `You judge an assistant's retrieval before it answers the user. The assistant answers from the user's own corpus — email, chat and messaging workspaces, files, calendar and more — with these tools: search_many and search_documents (relevance search: a few best-matching documents per query, not everything that matches), temporal_query (everything dated within a window), run_sql (exact counts and aggregates over the sources' tables), count_messages (message counts per person), fetch_many (reading documents).
 
 The user's request:
@@ -165,7 +174,7 @@ ${clip(request, MAX_REQUEST_CHARS)}
 </request>
 
 The assistant has finished retrieving and is about to answer. Its retrieval in this turn, oldest first:
-${retrievals.map((line, i) => `${i + 1}. ${line}`).join("\n")}
+${retrievals.map((line, i) => `${i + 1}. ${line}`).join("\n")}${earlier}
 
 Judge one thing: does this retrieval, taken together, support a complete and correct answer to the request as the user asked it? Later calls can make up for earlier ones: a sample followed by an exact count is a count. The usual ways it cannot:
 - A ranking, total, comparison or "top / most / all / every" question answered from a handful of relevance-search hits. Hits are a sample, not a count: the question needs counts or a full enumeration over everything in scope.
@@ -272,12 +281,13 @@ function judge(
   const n = turn.reviews;
   turn.judging = review(
     completer,
-    buildCriticPrompt(turn.request, turn.retrievals.slice(0, seen)),
+    buildCriticPrompt(turn.request, turn.retrievals.slice(0, seen), [...turn.rejections]),
     limits.timeoutMs,
   )
     .then((verdict) => {
       turn.verdict = verdict;
       turn.judged = seen;
+      if (verdict.verdict === "revise") turn.rejections.push({ judged: seen, note: verdict.note });
       log.info(
         `session ${ctx.sessionId}: review ${n}/${limits.reviewsPerTurn} of ${seen} retrieval(s) ${verdict.verdict === "adequate" ? "passed" : "revise"}`,
       );

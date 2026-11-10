@@ -155,6 +155,17 @@ describe("buildCriticPrompt", () => {
     expect(prompt).toContain("Top discussion on Slack today");
     expect(prompt).toContain("1. first call\n2. second call");
   });
+
+  it("reminds the judge of its own rejections, which only the asked-for retrieval answers", () => {
+    const prompt = buildCriticPrompt(
+      "q",
+      ["a", "b", "c"],
+      [{ judged: 1, note: "Count with run_sql." }],
+    );
+    expect(prompt).toContain("- after retrieval 1: Count with run_sql.");
+    expect(prompt).toContain("A retrieval that returned nothing");
+    expect(buildCriticPrompt("q", ["a"])).not.toContain("You rejected");
+  });
 });
 
 const ADEQUATE = '{"verdict":"adequate"}';
@@ -217,6 +228,7 @@ describe("withRetrievalCritic", () => {
     expect(await cite.invoke({}, ctx)).toBe(cited);
     expect(model.prompts[1]).toContain("1. search_many");
     expect(model.prompts[1]).toContain("2. run_sql");
+    expect(model.prompts[1]).toContain("after retrieval 1: Count messages per workspace");
   });
 
   it("does not review again without new retrieval", async () => {
