@@ -9,23 +9,33 @@
  * summarised as "the top discussions" across sixteen workspaces, a filter the
  * request never implied, the first page of a truncated result taken as the
  * whole. Rather than a prompt rule for each such case, every retrieval result
- * is shown to a reviewer model alongside the request. When the reviewer judges
+ * is judged by a reviewer model against the request. When the reviewer judges
  * that the results cannot support a complete answer, its note rides on the
- * result the agent reads next — `review` on the tool result — and the agent
- * corrects course within the same turn.
+ * result the agent reads next — `review` on the tool result — and the verdict
+ * binds: until a later retrieval passes review, the agent's citations are
+ * refused, so it cannot hand over a sourced answer built on retrieval the
+ * reviewer rejected. It has to fix the retrieval first.
  *
  * Wrapping the tools, rather than hooking a backend's loop, reaches every
  * backend, including the external runtimes whose loops Omnesis cannot enter.
  *
- * Bounded and fail-open: a turn gets a few reviews and fewer revisions, a
- * review that errors or outlasts its timeout passes the result through
- * untouched, and no reviewer model means no review.
+ * Bounded and fail-open: a turn gets a few reviews, fewer revisions and at
+ * most two refused citations, after which the agent may answer and must say
+ * what it did not cover; a review that errors or outlasts its timeout passes
+ * the result through untouched; and no reviewer model means no review.
  */
 
 import { createLogger, type CompleteCapability, type ToolResult } from "@omnesis/core";
 import type { ToolContext, ToolHandle } from "@omnesis/agent";
 
 const log = createLogger("gateway:agent").child("retrieval-critic");
+
+/** The tools that record an answer's sources: held while a rejection stands. */
+export const CITATION_TOOLS: ReadonlySet<string> = new Set([
+  "annotate",
+  "annotate_many",
+  "cite_record",
+]);
 
 /** The tools whose results answer "what is in the corpus". */
 export const REVIEWED_TOOLS: ReadonlySet<string> = new Set([
@@ -43,12 +53,15 @@ export interface RetrievalCriticLimits {
   readonly reviewsPerTurn: number;
   /** Revision notes per turn, so a reviewer can never keep a turn going. */
   readonly revisionsPerTurn: number;
+  /** Citations refused per turn while a rejection stands; past it the agent may answer. */
+  readonly refusalsPerTurn: number;
   readonly timeoutMs: number;
 }
 
 export const DEFAULT_RETRIEVAL_CRITIC_LIMITS: RetrievalCriticLimits = {
-  reviewsPerTurn: 4,
-  revisionsPerTurn: 2,
+  reviewsPerTurn: 6,
+  revisionsPerTurn: 3,
+  refusalsPerTurn: 2,
   timeoutMs: 20_000,
 };
 
@@ -57,8 +70,14 @@ export class RetrievalCriticTurn {
   readonly retrievals: string[] = [];
   reviews = 0;
   revisions = 0;
+  refusals = 0;
   /** Calls in one model round run concurrently; one review at a time. */
   reviewing = false;
+  /**
+   * The reviewer's standing rejection: the note from the latest review that
+   * found the retrieval insufficient, cleared when a later retrieval passes.
+   */
+  pending: string | null = null;
 
   constructor(readonly request: string) {}
 }
@@ -223,8 +242,43 @@ export interface RetrievalCriticDeps {
   readonly limits?: RetrievalCriticLimits;
 }
 
-/** Wraps a tool so its retrieval results are reviewed; any other tool comes back as it was. */
+/** What a citation gets back while the reviewer's rejection stands. */
+export function refusedCitation(note: string): ToolResult {
+  return {
+    kind: "error",
+    code: "retrieval_review_pending",
+    message:
+      `Not recorded. The retrieval review found that what you have retrieved cannot answer the request yet: ${note} ` +
+      "Carry out that retrieval now. Citations are accepted once a retrieval passes review.",
+  };
+}
+
+/** Holds a citation while the reviewer's rejection stands, up to the turn's refusals. */
+function withCitationGate(handle: ToolHandle, deps: RetrievalCriticDeps): ToolHandle {
+  const limits = deps.limits ?? DEFAULT_RETRIEVAL_CRITIC_LIMITS;
+  return {
+    ...handle,
+    invoke: async (args, ctx) => {
+      const turn = deps.turn(ctx);
+      if (turn?.pending && turn.refusals < limits.refusalsPerTurn) {
+        turn.refusals += 1;
+        log.info(
+          `session ${ctx.sessionId} ${handle.name}: held for the retrieval review (${turn.refusals}/${limits.refusalsPerTurn})`,
+        );
+        return refusedCitation(turn.pending);
+      }
+      return handle.invoke(args, ctx);
+    },
+  };
+}
+
+/**
+ * Wraps a tool into the review: a retrieval tool's results are judged, a
+ * citation tool is held while a rejection stands, and any other tool comes
+ * back as it was.
+ */
 export function withRetrievalCritic(handle: ToolHandle, deps: RetrievalCriticDeps): ToolHandle {
+  if (CITATION_TOOLS.has(handle.name)) return withCitationGate(handle, deps);
   if (!REVIEWED_TOOLS.has(handle.name)) return handle;
   const limits = deps.limits ?? DEFAULT_RETRIEVAL_CRITIC_LIMITS;
   return {
@@ -236,12 +290,7 @@ export function withRetrievalCritic(handle: ToolHandle, deps: RetrievalCriticDep
       const latest = describeRetrieval(handle.name, args, result);
       const earlier = [...turn.retrievals];
       turn.retrievals.push(latest);
-      if (
-        !canCarryReview(result) ||
-        turn.reviewing ||
-        turn.reviews >= limits.reviewsPerTurn ||
-        turn.revisions >= limits.revisionsPerTurn
-      ) {
+      if (!canCarryReview(result) || turn.reviewing || turn.reviews >= limits.reviewsPerTurn) {
         return result;
       }
       let completer: CompleteCapability | null;
@@ -261,10 +310,15 @@ export function withRetrievalCritic(handle: ToolHandle, deps: RetrievalCriticDep
           limits.timeoutMs,
         );
         if (verdict.verdict === "adequate") {
-          log.debug(`session ${ctx.sessionId} ${handle.name}: adequate`);
+          if (turn.pending) log.info(`session ${ctx.sessionId} ${handle.name}: review passed`);
+          turn.pending = null;
           return result;
         }
+        // Past the turn's revisions, a fresh rejection adds no note; an
+        // earlier one still stands until a retrieval passes.
+        if (turn.revisions >= limits.revisionsPerTurn) return result;
         turn.revisions += 1;
+        turn.pending = verdict.note;
         log.info(
           `session ${ctx.sessionId} ${handle.name}: revise (${turn.revisions}/${limits.revisionsPerTurn})`,
         );

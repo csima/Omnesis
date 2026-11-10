@@ -212,8 +212,11 @@
           whether what has been retrieved so far can support a complete answer to the question as
           asked. When it cannot, for example a handful of search hits standing in for “the top
           discussions” across every workspace, or a filter the question did not ask for, the agent
-          is told what is missing and retrieves again before answering. A turn gets at most four
-          reviews and two such notes, and a review that fails or takes longer than 20 seconds
+          is told what is missing. The verdict binds: until a later retrieval passes review, the
+          agent cannot record the sources its answer cites, so it has to carry out the retrieval it
+          was told about first. If its citations are still refused after two attempts, it may
+          answer, and the answer opens by saying what it does not cover. A turn gets at most six
+          reviews and three such notes, and a review that fails or takes longer than 20 seconds
           changes nothing. Spoken answers are not reviewed. The reviews are billed to the agent's
           model and appear as <code>retrieval-critic</code> in spend.
         </p>
