@@ -200,6 +200,33 @@ public actor CollectorCore {
         return summary
     }
 
+    /// Whether `sourceId` still has history to read, by its last saved
+    /// cursor. False for a source this core doesn't drive, and when the
+    /// cursor can't be read.
+    public func hasHistoryPending(sourceId: String) async -> Bool {
+        guard let source = sources.first(where: { $0.id == sourceId }) else { return false }
+        do {
+            return try await source.hasHistoryPending(cursor: cursorStore.load(for: sourceId))
+        } catch {
+            return false
+        }
+    }
+
+    /// Reads `sourceId`'s pending history for as long as the calling task
+    /// runs: passes back to back until none is left, a pass fails or reads
+    /// nothing (the phone locked, the gateway out of reach — a pass only
+    /// ends empty-handed with history pending when it can't read it), or
+    /// the task is cancelled, which stops the pass at a page boundary.
+    /// Returns whether history is still pending.
+    public func readPendingHistory(sourceId: String, maxPasses: Int = 50) async -> Bool {
+        for _ in 0 ..< maxPasses {
+            guard acceptingSyncs, !Task.isCancelled, await hasHistoryPending(sourceId: sourceId) else { break }
+            let summary = await sync(sourceId: sourceId, awaitingFollowUp: true)
+            guard let summary, summary.error == nil, summary.batches > 0 else { break }
+        }
+        return await hasHistoryPending(sourceId: sourceId)
+    }
+
     /// Drain the offline buffer without pulling new data. Useful after
     /// network reconnects or at app launch before anything else runs.
     public func drainPending() async -> Uploader.Stats? {
@@ -344,6 +371,13 @@ public actor CollectorCore {
             // claiming hasMore=true.
             let maxPages = 200
             while pages < maxPages {
+                // The task running the pass was expired (a background task's
+                // time is up): stop before the next page. Every page before
+                // it is buffered and its cursor saved.
+                if Task.isCancelled {
+                    wasCancelled = true
+                    break
+                }
                 // A page cut off by suspension is redone from the same cursor
                 // on the next wake; not starting it saves the wake's time for
                 // the drain below. Everything before it is buffered and saved.
@@ -410,7 +444,9 @@ public actor CollectorCore {
                     break
                 }
             }
-            lastSyncAt[source.id] = Date()
+            if !wasCancelled {
+                lastSyncAt[source.id] = Date()
+            }
         } catch {
             // NSURLErrorCancelled (-999) means iOS suspended the process
             // mid-request (typical when an HKObserver background wake
@@ -421,10 +457,11 @@ public actor CollectorCore {
             // gateway via primary keys. Treat as transient: don't
             // surface as a sync error (which would flip the source to
             // ERROR in the portal + CLI). Next observer wake or
-            // foreground sync resumes cleanly.
+            // foreground sync resumes cleanly. A `CancellationError` is the
+            // same story told by the task: a background task iOS expired.
             let nsError = error as NSError
-            let isCancelled = nsError.domain == NSURLErrorDomain
-                && nsError.code == NSURLErrorCancelled
+            let isCancelled = error is CancellationError
+                || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
             if isCancelled {
                 wasCancelled = true
                 log
@@ -438,8 +475,9 @@ public actor CollectorCore {
             }
         }
 
-        // Drain regardless — batches from prior cycles might be waiting.
-        let stats: Uploader.Stats? = try? await uploader.drain()
+        // Drain regardless — batches from prior cycles might be waiting —
+        // unless the task was expired, when every request would be cut off.
+        let stats: Uploader.Stats? = Task.isCancelled ? nil : try? await uploader.drain()
         await emitRejections(stats)
         let remaining: Int = if let stats {
             stats.remaining

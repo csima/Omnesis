@@ -262,10 +262,19 @@ public protocol OmnesisSource: Sendable {
     /// its cursor advances. Source-local delivery marks must not advance in
     /// `sync` itself: a buffer failure must leave that page replayable.
     func didBuffer(_ result: SyncResult) async throws
+
+    /// Whether history older than what a pass reads first is still unread
+    /// after `cursor`: work for a long background task rather than a short
+    /// wake. Sources that read everything every pass have none.
+    func hasHistoryPending(cursor: SyncCursor?) -> Bool
 }
 
 extension OmnesisSource {
     public func didBuffer(_: SyncResult) async throws {}
+
+    public func hasHistoryPending(cursor _: SyncCursor?) -> Bool {
+        false
+    }
 
     public func cursorForNewPass(_ cursor: SyncCursor?) -> SyncCursor? {
         cursor

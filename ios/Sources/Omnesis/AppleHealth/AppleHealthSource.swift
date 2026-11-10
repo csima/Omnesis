@@ -67,6 +67,10 @@ public struct AppleHealthSource: OmnesisSource {
         schedule.beginningPass(AppleHealthCursor.decode(from: cursor), now: Date()).encode()
     }
 
+    public func hasHistoryPending(cursor: SyncCursor?) -> Bool {
+        schedule.hasHistoryPending(AppleHealthCursor.decode(from: cursor))
+    }
+
     public func sync(cursor: SyncCursor?) async throws -> SyncResult {
         var typed = AppleHealthCursor.decode(from: cursor)
         if typed.caughtUp == nil {

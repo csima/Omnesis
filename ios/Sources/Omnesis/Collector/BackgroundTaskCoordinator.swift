@@ -34,6 +34,13 @@ public final class BackgroundTaskCoordinator {
         "\(appBundleIdentifier).photosBackfill"
     }
 
+    /// Apple Health history — the backlog a HealthKit wake's thirty seconds
+    /// only chips at. A `BGProcessingTask` like the Photos backfill, so it
+    /// reads with no time limit until it is done or iOS expires it.
+    public static var healthHistoryIdentifier: String {
+        "\(appBundleIdentifier).healthHistory"
+    }
+
     private static var appBundleIdentifier: String {
         guard let identifier = Bundle.main.bundleIdentifier else {
             preconditionFailure("Background tasks require an app bundle identifier")
@@ -58,6 +65,14 @@ public final class BackgroundTaskCoordinator {
     /// before pairing" shape.
     public typealias PhotosBackfillHandler = @Sendable () async -> Void
 
+    /// Late-bound Apple Health history read, run by the processing task.
+    /// Returns whether history is still pending once it stops.
+    public typealias HealthHistoryHandler = @Sendable () async -> Bool
+
+    /// Late-bound check for whether Apple Health has history pending.
+    /// False before pairing and while Apple Health is off.
+    public typealias HealthHistoryProbe = @Sendable () async -> Bool
+
     /// Refresh observable delivery-health state after background work mutates
     /// the buffer. This coordinator owns no UI state, so its caller supplies
     /// the hop back to the state owner.
@@ -67,18 +82,24 @@ public final class BackgroundTaskCoordinator {
     private let bufferAgeProvider: BufferAgeProvider
     private let refreshCompleted: RefreshCompletedHandler
     private let photosBackfillHandler: PhotosBackfillHandler
+    private let healthHistoryProbe: HealthHistoryProbe
+    private let healthHistoryHandler: HealthHistoryHandler
     private let log = AppLog.make(category: "collector.bg")
 
     public init(
         coreProvider: @escaping CoreProvider,
         bufferAgeProvider: @escaping BufferAgeProvider = { nil },
         refreshCompleted: @escaping RefreshCompletedHandler = {},
-        photosBackfillHandler: @escaping PhotosBackfillHandler = {}
+        photosBackfillHandler: @escaping PhotosBackfillHandler = {},
+        healthHistoryProbe: @escaping HealthHistoryProbe = { false },
+        healthHistoryHandler: @escaping HealthHistoryHandler = { false }
     ) {
         self.coreProvider = coreProvider
         self.bufferAgeProvider = bufferAgeProvider
         self.refreshCompleted = refreshCompleted
         self.photosBackfillHandler = photosBackfillHandler
+        self.healthHistoryProbe = healthHistoryProbe
+        self.healthHistoryHandler = healthHistoryHandler
     }
 
     /// Call once on app launch (from `App.swift`). Registers the BG
@@ -111,6 +132,19 @@ public final class BackgroundTaskCoordinator {
                 return
             }
             self.handle(task: processingTask)
+        }
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.healthHistoryIdentifier,
+            using: nil
+        ) { [weak self] task in
+            guard let self else { task.setTaskCompleted(success: false)
+                return
+            }
+            guard let processingTask = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            self.handleHealthHistory(task: processingTask)
         }
     }
 
@@ -171,6 +205,27 @@ public final class BackgroundTaskCoordinator {
         }
     }
 
+    /// Ask iOS for a run of the Apple Health history task, when there is
+    /// history left to read. Call on `scenePhase == .background`. iOS
+    /// prefers to run processing tasks while the phone charges; it is not
+    /// required, so a long unplugged stretch still gets its turn.
+    public func scheduleHealthHistoryIfPending() async {
+        guard await healthHistoryProbe() else { return }
+        scheduleHealthHistory()
+    }
+
+    private func scheduleHealthHistory() {
+        let request = BGProcessingTaskRequest(identifier: Self.healthHistoryIdentifier)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            log.notice("Scheduled Apple Health history read")
+        } catch {
+            log.warning("Health history BGTask submit failed: \(String(describing: error), privacy: .private)")
+        }
+    }
+
     // MARK: - Internals
 
     /// Execute the refresh body independently of `BGTask` so the buffer
@@ -218,6 +273,27 @@ public final class BackgroundTaskCoordinator {
             await work.value
             // See the refresh-task handler above for why this reads
             // `work.isCancelled`, not the ambient `Task.isCancelled`.
+            task.setTaskCompleted(success: !work.isCancelled)
+        }
+    }
+
+    private func handleHealthHistory(task: BGProcessingTask) {
+        log.notice("Health history BG task fired")
+        // Re-schedule before any real work, so a run iOS kills outright
+        // still has a successor; withdrawn below once nothing is left.
+        scheduleHealthHistory()
+
+        let handler = healthHistoryHandler
+        let work = Task {
+            await handler()
+        }
+        task.expirationHandler = { work.cancel() }
+
+        Task { [work] in
+            let pending = await work.value
+            if !pending, !work.isCancelled {
+                BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.healthHistoryIdentifier)
+            }
             task.setTaskCompleted(success: !work.isCancelled)
         }
     }
