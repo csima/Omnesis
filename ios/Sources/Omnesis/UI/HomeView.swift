@@ -356,13 +356,19 @@ struct HomeView: View {
             )
         } content: {
             ZStack {
-                sectionContent
-                    // Attached to the section rather than the whole container so
-                    // the banner travels with the app it is reporting on, instead
-                    // of hanging over the menu.
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        HomeTopBanners(onReviewAccess: reviewPendingAccessRequest) { settingsDestination = $0 }
-                    }
+                // Attached to the section rather than the whole container so
+                // the banner travels with the app it is reporting on, instead
+                // of hanging over the menu. Stacked above the section rather
+                // than set as a `.safeAreaInset`: every section is a
+                // NavigationStack, which does not pass an outer inset on to its
+                // content, so an inset banner sat over the section's top
+                // controls — the menu button among them — instead of above
+                // them. With no banner the section still meets the top edge
+                // and keeps its safe area.
+                VStack(spacing: 0) {
+                    HomeTopBanners(onReviewAccess: reviewPendingAccessRequest) { settingsDestination = $0 }
+                    sectionContent
+                }
 
                 // Quick capture rises over the section rather than being
                 // presented as a full-screen cover. It still arrives from the
