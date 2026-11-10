@@ -348,22 +348,49 @@ public struct Batch: Codable, Equatable, Sendable {
     }
 
     /// Derive an id like `20260418T145023123-a1b2c3d4` that sorts
-    /// lexicographically in the order batches were produced.
-    public static func makeId(now: Date = Date()) -> String {
+    /// lexicographically in the order batches were produced: each id is
+    /// at least a millisecond after the one before it in this process, so
+    /// two batches made within one millisecond, or across a clock step
+    /// back, still go in the order they were made.
+    public static func makeId() -> String {
+        makeId(millis: IdClock.shared.next())
+    }
+
+    /// An id stamped with `now` exactly, for batches made to look older.
+    public static func makeId(now: Date) -> String {
+        makeId(millis: Int64((now.timeIntervalSince1970 * 1000).rounded(.down)))
+    }
+
+    private static func makeId(millis: Int64) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
+        let seconds = millis.quotientAndRemainder(dividingBy: 1000)
         let components = calendar.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second, .nanosecond],
-            from: now
+            [.year, .month, .day, .hour, .minute, .second],
+            from: Date(timeIntervalSince1970: TimeInterval(seconds.quotient))
         )
-        let millis = (components.nanosecond ?? 0) / 1_000_000
         let stamp = String(
             format: "%04d%02d%02dT%02d%02d%02d%03d",
             components.year ?? 0, components.month ?? 0, components.day ?? 0,
             components.hour ?? 0, components.minute ?? 0, components.second ?? 0,
-            millis
+            Int(seconds.remainder)
         )
         let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).lowercased()
         return "\(stamp)-\(suffix)"
+    }
+
+    /// Milliseconds for batch ids, never repeating or going back.
+    private final class IdClock: @unchecked Sendable {
+        static let shared = IdClock()
+        private let lock = NSLock()
+        private var last: Int64 = 0
+
+        func next() -> Int64 {
+            let now = Int64((Date().timeIntervalSince1970 * 1000).rounded(.down))
+            return lock.withLock {
+                last = max(now, last + 1)
+                return last
+            }
+        }
     }
 }
