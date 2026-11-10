@@ -539,6 +539,55 @@ final class BackgroundUploadResultTests: BackgroundUploadTestCase {
         XCTAssertTrue(stats.rejected.contains(PushRejection(sourceId: sourceId, reason: "paused")))
     }
 
+    /// A paused answer whose result arrives while the record of hand-offs
+    /// can't be read (a locked phone, in a process that hasn't read it
+    /// yet). Without the mark the answer can't be told from a delivery, so
+    /// nothing is removed.
+    func testAPausedAnswerWithAnUnreadableRecordKeepsTheBatch() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let first = buffer()
+        try await first.enqueue(rowsBatch())
+        _ = try await uploader(first, gateway: gateway(session), transport: transport, switches: BackgroundSwitches()).drain()
+        let tag = try XCTUnwrap(transport.started.first?.tag)
+
+        // A relaunched process, before it has read the record.
+        let record = directory.appendingPathComponent("background-uploads.state")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: record.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: record.path) }
+        let relaunched = buffer()
+        let up = try uploader(relaunched, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+        let paused = #"{"ingested":0,"rejected":[{"sourceId":"mock:fixture","reason":"paused"}]}"#
+        await complete(up, transport: transport, tag: tag, status: 200, body: paused)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: record.path)
+        let remaining = try await buffer().count()
+        XCTAssertEqual(remaining, 1, "an answer that can't be attributed deletes nothing")
+        let marks = try await buffer().backgroundUploadMarks()
+        XCTAssertEqual(marks.count, 1, "the hand-off is still recorded")
+    }
+
+    /// The same answer when the record reads as empty (unrecognised): the
+    /// batch itself names its source, so the rejection is still matched.
+    func testAPausedAnswerWithoutAMarkIsAttributedByTheBatch() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let transport = FakeBackgroundTransport()
+        let first = buffer()
+        try await first.enqueue(rowsBatch())
+        _ = try await uploader(first, gateway: gateway(session), transport: transport, switches: BackgroundSwitches()).drain()
+        let tag = try XCTUnwrap(transport.started.first?.tag)
+
+        let record = directory.appendingPathComponent("background-uploads.state")
+        try Data("not a record".utf8).write(to: record)
+        let relaunched = buffer()
+        let up = try uploader(relaunched, gateway: gateway(session), transport: transport, switches: BackgroundSwitches())
+        let paused = #"{"ingested":0,"rejected":[{"sourceId":"mock:fixture","reason":"paused"}]}"#
+        await complete(up, transport: transport, tag: tag, status: 200, body: paused)
+
+        let remaining = try await relaunched.count()
+        XCTAssertEqual(remaining, 1, "a paused source's batch is kept")
+    }
+
     /// A batch that leaves the queue another way takes its mark with it.
     func testRemovingABatchClearsItsMark() async throws {
         let session = CollectorCoreTests.MockSession()

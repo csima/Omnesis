@@ -668,9 +668,24 @@ extension Uploader {
     /// foreground drain uses. A result for a hand-off the batch's mark no
     /// longer names — from before a re-pair, or superseded — changes
     /// nothing, except that a delivery still removes the delivered batch.
+    ///
+    /// A result is only acted on once it can be attributed. While the
+    /// record of hand-offs can't be read (a locked phone), nothing is
+    /// known: the batch and its mark stay, and once the task is gone a
+    /// later drain finds the mark without a task and sends the batch again.
+    /// The same holds for a delivery whose source can be read from neither
+    /// the mark nor the batch: an answer that rejects a source can only be
+    /// told from a delivery by knowing which source it was for.
     public func finishBackgroundUpload(_ completion: BackgroundUploadCompletion) async {
         guard let tag = BackgroundUploadTag(completion.tag) else { return }
-        let mark = try? await buffer.backgroundUploadMarks()[tag.batchId]
+        let marks: [String: BackgroundUploadMark]
+        do {
+            marks = try await buffer.backgroundUploadMarks()
+        } catch {
+            log.notice("Background upload of \(tag.batchId, privacy: .public) finished while its record was unreadable; kept")
+            return
+        }
+        let mark = marks[tag.batchId]
         let current = mark?.tag == completion.tag
 
         guard case .response(let status, let body) = completion.outcome else {
@@ -683,9 +698,21 @@ extension Uploader {
             if current { await apply(failure, to: tag, sourceId: mark?.sourceId) }
             return
         }
+        let sourceId: String
+        do {
+            guard let known = try await source(of: tag, mark: mark) else {
+                // No mark and no batch: nothing left to settle.
+                try? await buffer.finishBackgroundUpload(tag: tag)
+                return
+            }
+            sourceId = known
+        } catch {
+            log.notice("Background upload of \(tag.batchId, privacy: .public) can't be attributed yet; kept")
+            return
+        }
         let rejection: PushRejection?
         do {
-            rejection = try Self.rejection(in: body, from: tag.endpoint, sourceId: mark?.sourceId)
+            rejection = try Self.rejection(in: body, from: tag.endpoint, sourceId: sourceId)
         } catch {
             // Unreadable answer: retried, as in the foreground.
             if current { try? await buffer.finishBackgroundUpload(tag: tag) }
@@ -712,6 +739,13 @@ extension Uploader {
         }
     }
 
+    /// The source a hand-off was for: its mark's, else its batch's. `nil`
+    /// when neither is left; throws when the batch can't be read.
+    private func source(of tag: BackgroundUploadTag, mark: BackgroundUploadMark?) async throws -> String? {
+        if let mark { return mark.sourceId }
+        return try await buffer.load(id: tag.batchId)?.sourceId
+    }
+
     /// Act on a background upload's failure as the foreground drain would
     /// on the same answer.
     private func apply(_ failure: DeliveryFailure, to tag: BackgroundUploadTag, sourceId: String?) async {
@@ -735,7 +769,7 @@ extension Uploader {
     private static func rejection(
         in body: Data,
         from endpoint: BackgroundUploadEndpoint,
-        sourceId: String?
+        sourceId: String
     ) throws
         -> PushRejection? {
         let rejected = switch endpoint {
