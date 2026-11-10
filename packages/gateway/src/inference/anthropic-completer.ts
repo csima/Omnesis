@@ -39,6 +39,18 @@ export class AnthropicCompleter implements CompleteCapability {
       stop?: readonly string[];
     },
   ): Promise<string> {
+    return (await this.completeWithUsage(prompt, opts)).text;
+  }
+
+  /** The reply and the tokens it cost, so a caller can record its spend. */
+  async completeWithUsage(
+    prompt: string,
+    opts?: {
+      maxTokens?: number;
+      temperature?: number;
+      stop?: readonly string[];
+    },
+  ): Promise<{ text: string; usage: { promptTokens: number; completionTokens: number } | null }> {
     const request = {
       model: this.modelId,
       max_tokens: opts?.maxTokens ?? 150,
@@ -56,8 +68,16 @@ export class AnthropicCompleter implements CompleteCapability {
         );
       }),
     );
-
-    return responseText(response);
+    const usage = response.usage
+      ? {
+          promptTokens:
+            response.usage.input_tokens +
+            (response.usage.cache_read_input_tokens ?? 0) +
+            (response.usage.cache_creation_input_tokens ?? 0),
+          completionTokens: response.usage.output_tokens,
+        }
+      : null;
+    return { text: responseText(response), usage };
   }
 
   async dispose(): Promise<void> {
