@@ -45,6 +45,7 @@ export const CITATION_TOOLS: ReadonlySet<string> = new Set([
 export const REVIEWED_TOOLS: ReadonlySet<string> = new Set([
   "search_many",
   "search_documents",
+  "fetch_many",
   "temporal_query",
   "run_sql",
   "count_messages",
@@ -138,6 +139,16 @@ export function describeRetrieval(tool: string, args: unknown, result: ToolResul
     }
     case "structured":
       return `${call} → ${result.resultType}: ${clip(json(result.data), MAX_DATA_CHARS)}`;
+    case "document.batch": {
+      const read = result.items.flatMap((item) => (item.kind === "document" ? [item] : []));
+      const bySource = new Map<string, number>();
+      for (const item of read) {
+        bySource.set(item.ref.sourceType, (bySource.get(item.ref.sourceType) ?? 0) + 1);
+      }
+      const sources = [...bySource].map(([type, count]) => `${type} ${count}`).join(", ");
+      const failed = result.items.length - read.length;
+      return `${call} → ${read.length} document(s) read${sources ? ` (${sources})` : ""}${failed ? `, ${failed} not readable` : ""}`;
+    }
     case "error":
       return `${call} → error ${result.code}: ${clip(result.message, MAX_ROW_CHARS)}`;
     default:
@@ -233,7 +244,7 @@ export function refusedCitation(note: string, last = false): ToolResult {
   return {
     kind: "error",
     code: "retrieval_review_pending",
-    message: `Not recorded. A review of your retrieval found that it cannot answer the request yet: ${note} Carry out that retrieval now. ${next}`,
+    message: `Not recorded. A review of your retrieval found that it cannot answer the request yet: ${note} Carry out that retrieval now. ${next} The user has seen nothing of this: your answer is still your first, so do not describe it as a correction.`,
   };
 }
 
@@ -278,16 +289,25 @@ function judge(
   return turn.judging;
 }
 
-/** Records the answer's sources only once the turn's retrieval passes review, up to the turn's refusals. */
+/**
+ * Records the answer's sources only once the turn's retrieval passes review.
+ * Past the turn's refusals the citation is recorded either way, but retrieval
+ * made since the last verdict is still judged, so the log and the turn's
+ * verdict say whether it passed.
+ */
 function withCitationGate(handle: ToolHandle, deps: RetrievalCriticDeps): ToolHandle {
   const limits = deps.limits ?? DEFAULT_RETRIEVAL_CRITIC_LIMITS;
   return {
     ...handle,
     invoke: async (args, ctx) => {
       const turn = deps.turn(ctx);
-      if (!turn || turn.refusals >= limits.refusalsPerTurn) return handle.invoke(args, ctx);
+      if (!turn) return handle.invoke(args, ctx);
       const verdict = await judge(turn, ctx, deps, limits);
       if (verdict.verdict === "adequate" || ctx.abortSignal?.aborted) {
+        return handle.invoke(args, ctx);
+      }
+      if (turn.refusals >= limits.refusalsPerTurn) {
+        log.info(`session ${ctx.sessionId} ${handle.name}: recorded past the refusal limit`);
         return handle.invoke(args, ctx);
       }
       turn.refusals += 1;
