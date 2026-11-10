@@ -28,6 +28,12 @@ public enum ExecutionMargin {
     /// batch on a weak uplink has been seen to take twenty; this leaves room
     /// for the common case without starting uploads that are bound to be cut.
     public static let upload: TimeInterval = 10
+    /// What reading a page needs left: the page, and an upload after it.
+    /// A wake that reads a page it then has no time to deliver has moved
+    /// the source's cursor past samples that are only on the phone, and a
+    /// run of such wakes reads ever further ahead of what reaches the
+    /// gateway.
+    public static let pageAndUpload: TimeInterval = page + upload
     /// How close to the end a wake reports itself finished even though its
     /// work is still running, so iOS hears back before it suspends the app.
     public static let wakeReport: TimeInterval = 2

@@ -14,9 +14,11 @@ import Foundation
 /// delivered immediately.
 ///
 /// Durability model (see design doc §4.4):
-///   - HealthKit is the source of truth. Dropping oldest batches
-///     because the buffer filled is recoverable by resetting the
-///     source anchor (Phase 3).
+///   - HealthKit is the source of truth, but a queued batch is one
+///     whose cursor has already moved past it, so the buffer never
+///     drops one to make room: a batch that doesn't fit is refused
+///     (`Full`), and its page is read again from the same cursor once
+///     there is room.
 ///   - The buffer is a network-coalescing optimisation, not a
 ///     durability layer. Losing the directory entirely just means a
 ///     fresh backfill.
@@ -157,6 +159,9 @@ public actor OfflineBuffer {
     /// yet. Toggled inside `ensureCacheLoaded()`.
     private var cacheLoaded: Bool = false
 
+    /// The source of each queued batch read so far, by batch id.
+    private var batchSources: [String: String] = [:]
+
     /// Batches handed to the background upload queue, keyed by batch id.
     /// `nil` until the sidecar is read; it stays `nil` while the sidecar
     /// can't be read (a locked phone), so "unreadable" is never taken for
@@ -199,28 +204,25 @@ public actor OfflineBuffer {
         lifetime.invalidate()
     }
 
-    /// Persist a batch to disk. If the buffer would exceed
-    /// `maxSizeBytes`, drops oldest batches FIFO until there's room.
-    /// Returns the number of evicted batches (0 if nothing was dropped).
-    @discardableResult
-    public func enqueue(_ batch: Batch) throws -> Int {
+    /// `enqueue` refused a batch: it would take the buffer past
+    /// `maxSizeBytes`.
+    public struct Full: Error, Equatable {}
+
+    /// Persist a batch to disk. Throws `Full`, and drops nothing, when the
+    /// batch would take the buffer past `maxSizeBytes`: every queued batch
+    /// is one its source's cursor has already moved past, so dropping one
+    /// to make room would lose its samples for good. A batch alone in an
+    /// empty buffer is always taken, or an oversized page would stall its
+    /// source forever.
+    public func enqueue(_ batch: Batch) throws {
         try lifetime.withActive {
             try ProtectedStore.offlineBuffer.requireBackupExclusion(
                 to: directory, fileManager: fileManager
             )
             ensureCacheLoaded()
             let data = try encoder.encode(batch)
-            var evicted = 0
-
-            // Ensure room before writing. Delete oldest until under limit.
-            while totalBytes + data.count > config.maxSizeBytes,
-                  let oldest = fileURLs.first {
-                let size = (try? sizeOf(oldest)) ?? 0
-                try fileManager.removeItem(at: oldest)
-                fileURLs.removeFirst()
-                totalBytes = max(0, totalBytes - size)
-                forgetFailures(id: oldest.deletingPathExtension().lastPathComponent)
-                evicted += 1
+            guard fileURLs.isEmpty || totalBytes + data.count <= config.maxSizeBytes else {
+                throw Full()
             }
 
             let url = fileURL(for: batch.id)
@@ -237,7 +239,7 @@ public actor OfflineBuffer {
                 fileURLs.append(url)
             }
             totalBytes += data.count
-            return evicted
+            batchSources[batch.id] = batch.sourceId
         }
     }
 
@@ -484,6 +486,7 @@ public actor OfflineBuffer {
     }()
 
     private func forgetFailures(id: String) {
+        batchSources[id] = nil
         forgetBackgroundMark(id: id)
         guard permanentFailures.removeValue(forKey: id) != nil else { return }
         persistFailures()
@@ -702,5 +705,35 @@ extension OfflineBuffer {
         if (try? persistBackgroundMarks(marks)) == nil {
             backgroundMarks = nil
         }
+    }
+}
+
+// MARK: - Backlog by source
+
+extension OfflineBuffer {
+    private struct BatchSource: Decodable {
+        let sourceId: String
+    }
+
+    /// Batches of `sourceId` still queued. One that can't be read (the
+    /// phone is locked) counts as the source's own, so a backlog the
+    /// buffer can't see holds the source's reading back instead of
+    /// letting it run ahead.
+    public func pendingCount(sourceId: String) throws -> Int {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            return fileURLs.count(where: { url in
+                let id = url.deletingPathExtension().lastPathComponent
+                return (source(ofBatch: id, at: url) ?? sourceId) == sourceId
+            })
+        }
+    }
+
+    private func source(ofBatch id: String, at url: URL) -> String? {
+        if let known = batchSources[id] { return known }
+        guard let data = try? Data(contentsOf: url),
+              let read = try? decoder.decode(BatchSource.self, from: data) else { return nil }
+        batchSources[id] = read.sourceId
+        return read.sourceId
     }
 }

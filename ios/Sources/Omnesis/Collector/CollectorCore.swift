@@ -15,8 +15,11 @@ import Foundation
 ///      Each page is converted into a `Batch` and appended to the
 ///      `OfflineBuffer`. The cursor advances per-page — so even if the
 ///      phone dies mid-cycle, the next resume starts where we left off.
-///      A cursor saved for a page the buffer later has to drop is not
-///      walked back; the cycle publishes a `CoverageClaim` instead.
+///      Reading never runs ahead of delivery: a pass drains what earlier
+///      ones left before it reads, reads a page only with time left to
+///      upload it, and stops reading while the source has more than a few
+///      batches undelivered or the buffer is full, leaving the cursor
+///      where it is.
 ///   3. Drain the `OfflineBuffer` into the gateway. Batches that fail
 ///      a transient error stay on disk and are retried by the next
 ///      drain invocation.
@@ -132,6 +135,11 @@ public actor CollectorCore {
     private var lastSyncAt: [String: Date] = [:]
     private var acceptingSyncs = true
     private var quiescenceWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// A source reads no further page while more of its batches than this
+    /// are waiting for delivery. Each one is a page whose cursor has moved
+    /// on, so the samples in it exist only on the phone until it lands.
+    static let maxUndeliveredBatches = 4
 
     public init(
         gateway: GatewayClient,
@@ -322,7 +330,7 @@ public actor CollectorCore {
         while pendingReruns.remove(source.id) != nil,
               acceptingSyncs,
               !Task.isCancelled,
-              await budget?.allows(ExecutionMargin.page) ?? true {
+              await budget?.allows(ExecutionMargin.pageAndUpload) ?? true {
             summary = await runPass(source: source)
         }
         pendingReruns.remove(source.id)
@@ -339,7 +347,8 @@ public actor CollectorCore {
     // swiftlint:disable:next function_body_length
     private func runPass(source: any OmnesisSource) async -> SyncSummary {
         var batchesWritten = 0
-        var batchesDropped = 0
+        var uploadedBeforeEnd = 0
+        var backlogged = false
         var recordsProduced = 0
         var itemsProcessed = 0
         var errorMessage: String?
@@ -367,10 +376,14 @@ public actor CollectorCore {
                 preparedSourceIds.insert(source.id)
             }
             var cursor = try await source.cursorForNewPass(cursorStore.load(for: source.id, refresh: true))
+            // What earlier wakes left goes first, while there's time for it.
+            if try await buffer.count() > 0 {
+                _ = await drainWithinPass(uploaded: &uploadedBeforeEnd)
+            }
             // Cap to avoid runaway loops while a malformed source keeps
             // claiming hasMore=true.
             let maxPages = 200
-            while pages < maxPages {
+            reading: while pages < maxPages {
                 // The task running the pass was expired (a background task's
                 // time is up): stop before the next page. Every page before
                 // it is buffered and its cursor saved.
@@ -378,18 +391,24 @@ public actor CollectorCore {
                     wasCancelled = true
                     break
                 }
-                // A page cut off by suspension is redone from the same cursor
-                // on the next wake; not starting it saves the wake's time for
-                // the drain below. Everything before it is buffered and saved.
-                guard await budget?.allows(ExecutionMargin.page) ?? true else {
+                // A page is read only with time left to upload it too, so
+                // the drain below always gets its turn. A page cut off by
+                // suspension is redone from the same cursor on the next wake.
+                guard await budget?.allows(ExecutionMargin.pageAndUpload) ?? true else {
                     outOfTime = true
                     log.notice(
                         "Pausing \(source.id, privacy: .private) after \(pages, privacy: .public) pages: too little background time left"
                     )
                     break
                 }
+                guard try await deliveryKeepsUp(with: source, uploaded: &uploadedBeforeEnd) else {
+                    backlogged = true
+                    log.notice(
+                        "Pausing \(source.id, privacy: .private) after \(pages, privacy: .public) pages: its batches aren't being delivered"
+                    )
+                    break
+                }
                 let result = try await source.sync(cursor: cursor)
-                pages += 1
 
                 if !result.records.isEmpty || !result.deletedIds.isEmpty || !result.documents.isEmpty {
                     let batch = Batch(
@@ -403,14 +422,16 @@ public actor CollectorCore {
                         documents: result.documents,
                         createdAt: Date()
                     )
-                    let evicted = try await buffer.enqueue(batch)
-                    try await source.didBuffer(result)
-                    if evicted > 0 {
-                        batchesDropped += evicted
-                        log.warning(
-                            "Buffer eviction: dropped \(evicted, privacy: .public) old batches to make room for \(source.id, privacy: .private)"
-                        )
+                    do {
+                        try await buffer.enqueue(batch)
+                    } catch is OfflineBuffer.Full {
+                        // The page is read again from the same cursor once
+                        // the buffer has room; nothing queued is dropped.
+                        backlogged = true
+                        log.notice("Pausing \(source.id, privacy: .private): the buffer is full")
+                        break reading
                     }
+                    try await source.didBuffer(result)
                     batchesWritten += 1
                     recordsProduced += result.records.count
                     // A page may represent the same item as both an analytics
@@ -419,6 +440,7 @@ public actor CollectorCore {
                     // without double-counting mixed pages such as workouts.
                     itemsProcessed += max(result.records.count, result.documents.count)
                 }
+                pages += 1
 
                 cursor = result.cursor
                 try await cursorStore.save(
@@ -479,6 +501,7 @@ public actor CollectorCore {
         // unless the task was expired, when every request would be cut off.
         let stats: Uploader.Stats? = Task.isCancelled ? nil : try? await uploader.drain()
         await emitRejections(stats)
+        let uploaded = uploadedBeforeEnd + (stats?.uploaded ?? 0)
         let remaining: Int = if let stats {
             stats.remaining
         } else {
@@ -491,7 +514,7 @@ public actor CollectorCore {
                 displayName: source.displayName,
                 message: errorMessage
             ))
-        } else if wasCancelled || (outOfTime && pages == 0) {
+        } else if wasCancelled || ((outOfTime || backlogged) && pages == 0) {
             // Nothing happened this pass that a status should claim.
             await emitLifecycle(.idle(sourceId: source.id, displayName: source.displayName))
         } else {
@@ -500,7 +523,7 @@ public actor CollectorCore {
                 displayName: source.displayName,
                 records: itemsProcessed,
                 completedAt: Date(),
-                coverage: Self.coverageClaim(droppedBatches: batchesDropped)
+                coverage: nil
             ))
         }
 
@@ -508,32 +531,28 @@ public actor CollectorCore {
             sourceId: source.id,
             batches: batchesWritten,
             records: recordsProduced,
-            uploaded: stats?.uploaded ?? 0,
+            uploaded: uploaded,
             remaining: remaining,
             error: errorMessage,
             blocked: stats?.blocked
         )
     }
 
-    /// The claim a cycle makes once the offline buffer had to drop batches to
-    /// stay inside its size limit.
-    ///
-    /// The buffer is where a page waits between capture and upload, and the
-    /// gateway's cursor for the source moves on as soon as a page is written
-    /// there. Dropping the oldest batches therefore drops data the source will
-    /// never offer again, because the cursor is already past it. Capturing into
-    /// a full buffer is still the better trade — a phone that stopped capturing
-    /// would fall behind everything, not just its oldest pages — so the gap is
-    /// reported rather than prevented.
-    private static func coverageClaim(droppedBatches: Int) -> CoverageClaim? {
-        guard droppedBatches > 0 else { return nil }
-        return CoverageClaim(
-            coverage: .partial,
-            detail: """
-            This device ran out of room for data waiting to reach Omnesis and dropped \
-            the oldest of it, so some history is missing. Re-sync this source to fill the gap.
-            """
-        )
+    /// Whether `source` may read another page: few enough of its batches
+    /// are waiting for delivery, after a drain if there were too many.
+    private func deliveryKeepsUp(with source: any OmnesisSource, uploaded: inout Int) async throws -> Bool {
+        if try await buffer.pendingCount(sourceId: source.id) < Self.maxUndeliveredBatches { return true }
+        _ = await drainWithinPass(uploaded: &uploaded)
+        return try await buffer.pendingCount(sourceId: source.id) < Self.maxUndeliveredBatches
+    }
+
+    /// A drain before the pass's last one, when there's time for an upload.
+    private func drainWithinPass(uploaded: inout Int) async -> Uploader.Stats? {
+        guard !Task.isCancelled, await budget?.allows(ExecutionMargin.upload) ?? true,
+              let stats = try? await uploader.drain() else { return nil }
+        await emitRejections(stats)
+        uploaded += stats.uploaded
+        return stats
     }
 
     private func resumeQuiescenceWaitersIfReady() {

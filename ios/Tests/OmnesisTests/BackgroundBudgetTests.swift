@@ -105,30 +105,7 @@ final class BackgroundBudgetTests: XCTestCase {
 
     // MARK: - Pages
 
-    func testSyncStopsBeforeAPageItHasNoTimeFor() async throws {
-        let session = CollectorCoreTests.MockSession()
-        let gateway = try gateway(session)
-        let buffer = OfflineBuffer(directory: directory)
-        let source = CollectorCoreTests.MockSource(pages: pages(3))
-        let budget = ScriptedBudget([30], then: ExecutionMargin.page - 1)
-        let core = CollectorCore(
-            gateway: gateway,
-            buffer: buffer,
-            cursorStore: CursorStore(gateway: gateway),
-            uploader: Uploader(gateway: gateway, buffer: buffer),
-            sources: [source],
-            budget: budget
-        )
-
-        let summary = await core.sync(sourceId: "mock:ios-a")
-
-        XCTAssertNil(summary?.error, "running out of time is not a failure")
-        XCTAssertEqual(source.callCount, 1, "the second page must not start")
-        XCTAssertEqual(savedAnchors(session), ["a1"], "the cursor stays after the last page it buffered")
-        XCTAssertEqual(ingestCount(session), 1, "what was buffered still drains")
-        let checks = await budget.checks
-        XCTAssertEqual(checks, 2)
-    }
+    // Reading with a budget the uploader shares: DeliveryPaceTests.
 
     func testAWakeWithNoTimeLeftReadsNothing() async throws {
         let session = CollectorCoreTests.MockSession()
