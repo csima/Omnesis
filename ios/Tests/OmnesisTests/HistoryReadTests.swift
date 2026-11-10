@@ -122,14 +122,22 @@ final class HistoryReadTests: XCTestCase {
     }
 
     /// A gateway that keeps the last cursor saved for each source and
-    /// accepts every upload.
-    private func gateway(_ session: CollectorCoreTests.MockSession) throws -> GatewayClient {
+    /// accepts every upload. While `cursorReads` holds a status, reading a
+    /// cursor answers with it instead.
+    private func gateway(
+        _ session: CollectorCoreTests.MockSession,
+        cursorReads: CursorReads = CursorReads()
+    ) throws
+        -> GatewayClient {
         let saved = SavedCursors()
         session.responder = { req in
             var status = 200
             var body = #"{"ok":true}"#
             if req.url?.path.hasPrefix("/sync-state/") == true {
-                if req.httpMethod == "POST", let data = req.httpBody {
+                if req.httpMethod != "POST", let failure = cursorReads.failure {
+                    status = failure
+                    body = #"{"error":"unavailable"}"#
+                } else if req.httpMethod == "POST", let data = req.httpBody {
                     saved.set(data)
                 } else if let cursor = saved.get() {
                     body = #"{"cursor":"# + cursor + "}"
@@ -151,6 +159,16 @@ final class HistoryReadTests: XCTestCase {
             token: "omn_test",
             session: session
         )
+    }
+
+    final class CursorReads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var status: Int?
+
+        var failure: Int? {
+            get { lock.withLock { status } }
+            set { lock.withLock { status = newValue } }
+        }
     }
 
     private final class SavedCursors: @unchecked Sendable {
@@ -179,10 +197,11 @@ final class HistoryReadTests: XCTestCase {
     private func core(
         _ source: HistorySource,
         session: CollectorCoreTests.MockSession,
-        recorder: LifecycleRecorder? = nil
+        recorder: LifecycleRecorder? = nil,
+        cursorReads: CursorReads = CursorReads()
     ) throws
         -> (CollectorCore, OfflineBuffer) {
-        let gateway = try gateway(session)
+        let gateway = try gateway(session, cursorReads: cursorReads)
         let buffer = OfflineBuffer(directory: directory)
         let core = CollectorCore(
             gateway: gateway,
@@ -200,11 +219,11 @@ final class HistoryReadTests: XCTestCase {
         let source = HistorySource(total: 4)
         let (core, buffer) = try core(source, session: session)
 
-        let pendingBefore = await core.hasHistoryPending(sourceId: source.id)
-        XCTAssertTrue(pendingBefore)
-        let pending = await core.readPendingHistory(sourceId: source.id)
+        let before = await core.historyStatus(sourceId: source.id)
+        XCTAssertEqual(before, .pending)
+        let after = await core.readPendingHistory(sourceId: source.id)
 
-        XCTAssertFalse(pending)
+        XCTAssertEqual(after, .finished)
         XCTAssertEqual(source.callCount, 4, "one page per pass, four passes")
         let queued = try await buffer.count()
         XCTAssertEqual(queued, 0, "each pass drained what it read")
@@ -215,9 +234,9 @@ final class HistoryReadTests: XCTestCase {
         let source = HistorySource(total: 4, stuck: true)
         let (core, _) = try core(source, session: session)
 
-        let pending = await core.readPendingHistory(sourceId: source.id)
+        let status = await core.readPendingHistory(sourceId: source.id)
 
-        XCTAssertTrue(pending, "the history is still there for the next run")
+        XCTAssertEqual(status, .pending, "the history is still there for the next run")
         XCTAssertEqual(source.callCount, 1, "no second pass over a phone that can't read it")
     }
 
@@ -225,10 +244,41 @@ final class HistoryReadTests: XCTestCase {
         let session = CollectorCoreTests.MockSession()
         let (core, _) = try core(HistorySource(total: 4), session: session)
 
-        let pending = await core.hasHistoryPending(sourceId: "apple-health:local")
-        XCTAssertFalse(pending)
+        let status = await core.historyStatus(sourceId: "apple-health:local")
+        XCTAssertEqual(status, .finished)
         let read = await core.readPendingHistory(sourceId: "apple-health:local")
-        XCTAssertFalse(read)
+        XCTAssertEqual(read, .finished)
+    }
+
+    /// A cursor that can't be read says nothing about the history: the
+    /// run must not be taken as finished, or the processing task would
+    /// withdraw its successor over one failed request.
+    func testACursorThatCannotBeReadIsNotFinishedHistory() async throws {
+        let session = CollectorCoreTests.MockSession()
+        let cursorReads = CursorReads()
+        cursorReads.failure = 503
+        let source = HistorySource(total: 4)
+        let (core, _) = try core(source, session: session, cursorReads: cursorReads)
+
+        let status = await core.historyStatus(sourceId: source.id)
+        let read = await core.readPendingHistory(sourceId: source.id)
+
+        XCTAssertEqual(status, .unknown)
+        XCTAssertEqual(read, .unknown)
+        XCTAssertTrue(read.wantsHistoryRun, "the scheduled run stays")
+        XCTAssertEqual(source.callCount, 0, "no pass without a cursor")
+
+        // Once the gateway answers again, the read carries on.
+        cursorReads.failure = nil
+        let later = await core.readPendingHistory(sourceId: source.id)
+        XCTAssertEqual(later, .finished)
+        XCTAssertEqual(source.callCount, 4)
+    }
+
+    func testOnlyAFinishedHistoryWithdrawsTheRun() {
+        XCTAssertTrue(CollectorCore.HistoryStatus.pending.wantsHistoryRun)
+        XCTAssertTrue(CollectorCore.HistoryStatus.unknown.wantsHistoryRun)
+        XCTAssertFalse(CollectorCore.HistoryStatus.finished.wantsHistoryRun)
     }
 
     /// iOS expiring the task stops the read before its next page. The
@@ -241,9 +291,9 @@ final class HistoryReadTests: XCTestCase {
         let source = HistorySource(total: 6, pagesPerPass: 6, cancelOnPage: 2)
         let (core, buffer) = try core(source, session: session, recorder: recorder)
 
-        let pending = await Task { await core.readPendingHistory(sourceId: source.id) }.value
+        let status = await Task { await core.readPendingHistory(sourceId: source.id) }.value
 
-        XCTAssertTrue(pending)
+        XCTAssertEqual(status, .pending)
         XCTAssertEqual(source.callCount, 2, "no page after the task was expired")
         let saved = session.calls.filter { $0.method == "POST" && $0.url.contains("/sync-state/") }
         XCTAssertEqual(saved.count, 2, "both pages' cursors saved")

@@ -66,12 +66,12 @@ public final class BackgroundTaskCoordinator {
     public typealias PhotosBackfillHandler = @Sendable () async -> Void
 
     /// Late-bound Apple Health history read, run by the processing task.
-    /// Returns whether history is still pending once it stops.
-    public typealias HealthHistoryHandler = @Sendable () async -> Bool
+    /// Returns where the history stands once it stops.
+    public typealias HealthHistoryHandler = @Sendable () async -> CollectorCore.HistoryStatus
 
     /// Late-bound check for whether Apple Health has history pending.
-    /// False before pairing and while Apple Health is off.
-    public typealias HealthHistoryProbe = @Sendable () async -> Bool
+    /// `finished` before pairing and while Apple Health is off.
+    public typealias HealthHistoryProbe = @Sendable () async -> CollectorCore.HistoryStatus
 
     /// Refresh observable delivery-health state after background work mutates
     /// the buffer. This coordinator owns no UI state, so its caller supplies
@@ -91,8 +91,8 @@ public final class BackgroundTaskCoordinator {
         bufferAgeProvider: @escaping BufferAgeProvider = { nil },
         refreshCompleted: @escaping RefreshCompletedHandler = {},
         photosBackfillHandler: @escaping PhotosBackfillHandler = {},
-        healthHistoryProbe: @escaping HealthHistoryProbe = { false },
-        healthHistoryHandler: @escaping HealthHistoryHandler = { false }
+        healthHistoryProbe: @escaping HealthHistoryProbe = { .finished },
+        healthHistoryHandler: @escaping HealthHistoryHandler = { .finished }
     ) {
         self.coreProvider = coreProvider
         self.bufferAgeProvider = bufferAgeProvider
@@ -210,7 +210,7 @@ public final class BackgroundTaskCoordinator {
     /// prefers to run processing tasks while the phone charges; it is not
     /// required, so a long unplugged stretch still gets its turn.
     public func scheduleHealthHistoryIfPending() async {
-        guard await healthHistoryProbe() else { return }
+        guard await healthHistoryProbe().wantsHistoryRun else { return }
         scheduleHealthHistory()
     }
 
@@ -280,7 +280,8 @@ public final class BackgroundTaskCoordinator {
     private func handleHealthHistory(task: BGProcessingTask) {
         log.notice("Health history BG task fired")
         // Re-schedule before any real work, so a run iOS kills outright
-        // still has a successor; withdrawn below once nothing is left.
+        // still has a successor; withdrawn below only once the history is
+        // known to be finished — a cursor that couldn't be read is not.
         scheduleHealthHistory()
 
         let handler = healthHistoryHandler
@@ -290,8 +291,8 @@ public final class BackgroundTaskCoordinator {
         task.expirationHandler = { work.cancel() }
 
         Task { [work] in
-            let pending = await work.value
-            if !pending, !work.isCancelled {
+            let status = await work.value
+            if !status.wantsHistoryRun, !work.isCancelled {
                 BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.healthHistoryIdentifier)
             }
             task.setTaskCompleted(success: !work.isCancelled)

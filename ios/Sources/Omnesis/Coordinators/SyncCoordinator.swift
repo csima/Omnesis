@@ -203,14 +203,14 @@ final class SyncCoordinator {
                 await handler()
             },
             healthHistoryProbe: { [weak self] in
-                guard let core = await MainActor.run(body: { self?.core }) else { return false }
-                return await core.hasHistoryPending(sourceId: SyncCoordinator.appleHealthSourceId)
+                guard let core = await MainActor.run(body: { self?.core }) else { return .finished }
+                return await core.historyStatus(sourceId: SyncCoordinator.appleHealthSourceId)
             },
             healthHistoryHandler: { [weak self] in
-                guard let core = await MainActor.run(body: { self?.core }) else { return false }
-                let pending = await core.readPendingHistory(sourceId: SyncCoordinator.appleHealthSourceId)
+                guard let core = await MainActor.run(body: { self?.core }) else { return .finished }
+                let status = await core.readPendingHistory(sourceId: SyncCoordinator.appleHealthSourceId)
                 await self?.refreshBufferCount()
-                return pending
+                return status
             }
         )
         #endif
