@@ -113,7 +113,7 @@ function loadCompletionProvider(
         return null;
       }
       log.info(`Completion provider configured (anthropic): ${resolved.catalogId}`);
-      return new AnthropicCompleter(resolved.apiModelId, apiKey);
+      return new AnthropicCompleter(resolved.apiModelId, apiKey, resolved.catalogEntry);
     }
 
     case "http": {

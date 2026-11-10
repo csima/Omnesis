@@ -32,7 +32,13 @@ import {
 } from "@omnesis/core";
 import Anthropic from "@anthropic-ai/sdk";
 import { resolveAnthropicApiKey } from "../model-credentials.js";
-import { AnthropicTemperature, AnthropicThinking, responseText } from "./anthropic-messages.js";
+import {
+  AnthropicOneShot,
+  AnthropicTemperature,
+  applyShape,
+  responseText,
+  type OneShotCapabilities,
+} from "./anthropic-messages.js";
 import { prepareAnswerWitnessRequest, parseAnswerWitnessVerdict } from "./answer-entailment.js";
 import {
   annotationEntailmentPrompt,
@@ -366,10 +372,14 @@ function withoutUsage(provider: CompleteCapability): EntailmentCompleter {
  * call fails open at the gate instead of stalling a run for the SDK's
  * multi-minute default.
  */
-function anthropicEntailmentCompleter(modelId: string, apiKey: string): EntailmentCompleter {
+function anthropicEntailmentCompleter(
+  modelId: string,
+  apiKey: string,
+  capabilities?: OneShotCapabilities,
+): EntailmentCompleter {
   const client = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
   const sampling = new AnthropicTemperature();
-  const thinkingMode = new AnthropicThinking();
+  const oneShot = new AnthropicOneShot(capabilities);
   return {
     modelId,
     complete: async (prompt, opts) => {
@@ -378,15 +388,14 @@ function anthropicEntailmentCompleter(modelId: string, apiKey: string): Entailme
         max_tokens: opts?.maxTokens ?? 128,
         messages: [{ role: "user" as const, content: prompt }],
       };
-      const response = await thinkingMode.send((thinking) =>
-        sampling.send(opts?.temperature ?? 0, (temperature) =>
-          client.messages.create(
-            temperature === undefined
-              ? { ...request, thinking }
-              : { ...request, thinking, temperature },
+      const response = await oneShot.send((shape) =>
+        sampling.send(opts?.temperature ?? 0, (temperature) => {
+          const shaped = applyShape(request, shape);
+          return client.messages.create(
+            temperature === undefined ? shaped : { ...shaped, temperature },
             opts?.signal ? { signal: opts.signal } : undefined,
-          ),
-        ),
+          );
+        }),
       );
       return {
         text: responseText(response),
@@ -479,7 +488,9 @@ async function loadVerifier(
         return null;
       }
       log.info(`Entailment verifier configured (anthropic): ${resolved.catalogId}`);
-      return build(anthropicEntailmentCompleter(resolved.apiModelId, apiKey));
+      return build(
+        anthropicEntailmentCompleter(resolved.apiModelId, apiKey, resolved.catalogEntry),
+      );
     }
 
     case "http": {

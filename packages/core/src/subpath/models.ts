@@ -66,6 +66,8 @@ export type {
   CatalogEntry,
   GgufCatalogEntry,
   AnthropicCatalogEntry,
+  AnthropicEffortLevel,
+  AnthropicThinkingTypes,
   Manifest,
   ManifestEntry,
   ModelsOverview,

@@ -7,6 +7,7 @@ import {
   CATALOG,
   createLogger,
   type AnthropicCatalogEntry,
+  type AnthropicEffortLevel,
   type BackendStatus,
   type CatalogEntry,
 } from "@omnesis/core";
@@ -26,9 +27,30 @@ interface AnthropicModelRecord {
     thinking: {
       types: {
         adaptive: { supported: boolean };
+        between_tools?: { supported: boolean } | null;
+        disabled?: { supported: boolean } | null;
+        enabled?: { supported: boolean } | null;
       };
     };
+    effort?: {
+      supported: boolean;
+      low?: { supported: boolean } | null;
+      medium?: { supported: boolean } | null;
+      high?: { supported: boolean } | null;
+      xhigh?: { supported: boolean } | null;
+      max?: { supported: boolean } | null;
+    } | null;
   } | null;
+}
+
+const EFFORT_LEVELS: readonly AnthropicEffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+
+function effortLevelsOf(
+  effort: NonNullable<AnthropicModelRecord["capabilities"]>["effort"],
+): AnthropicEffortLevel[] | undefined {
+  if (!effort) return undefined;
+  if (!effort.supported) return [];
+  return EFFORT_LEVELS.filter((level) => effort[level]?.supported === true);
 }
 
 export interface AnthropicModelsClient {
@@ -337,6 +359,15 @@ export function mapAnthropicModels(
         ? {}
         : {
             adaptiveThinking: record.capabilities.thinking.types.adaptive.supported,
+            thinkingTypes: {
+              adaptive: record.capabilities.thinking.types.adaptive.supported,
+              betweenTools: record.capabilities.thinking.types.between_tools?.supported === true,
+              disabled: record.capabilities.thinking.types.disabled?.supported === true,
+              enabled: record.capabilities.thinking.types.enabled?.supported === true,
+            },
+            ...(effortLevelsOf(record.capabilities.effort) === undefined
+              ? {}
+              : { effortLevels: effortLevelsOf(record.capabilities.effort) }),
           }),
     });
   }

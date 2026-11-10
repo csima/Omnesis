@@ -86,6 +86,7 @@ describe("mapAnthropicModels", () => {
         maxInputTokens: 1_000_000,
         maxOutputTokens: 64_000,
         adaptiveThinking: true,
+        thinkingTypes: { adaptive: true, betweenTools: false, disabled: false, enabled: false },
       },
       {
         kind: "anthropic-api",
@@ -99,6 +100,66 @@ describe("mapAnthropicModels", () => {
           "Cloud model reported by the Anthropic Models API. Requires an Anthropic API key and permission for remote inference.",
       },
     ]);
+  });
+});
+
+describe("mapAnthropicModels thinking capabilities", () => {
+  it("keeps every thinking type and effort level the Models API reports", () => {
+    const [entry] = mapAnthropicModels([
+      {
+        id: "claude-sonnet-5-5",
+        display_name: "claude-sonnet-5-5",
+        max_input_tokens: 1_000_000,
+        max_tokens: 128_000,
+        capabilities: {
+          thinking: {
+            types: {
+              adaptive: { supported: true },
+              between_tools: { supported: true },
+              disabled: { supported: false },
+              enabled: { supported: false },
+            },
+          },
+          effort: {
+            supported: true,
+            low: { supported: true },
+            medium: { supported: true },
+            high: { supported: true },
+            xhigh: { supported: true },
+            max: { supported: true },
+          },
+        },
+      },
+    ]);
+    expect(entry).toMatchObject({
+      thinkingTypes: { adaptive: true, betweenTools: true, disabled: false, enabled: false },
+      effortLevels: ["low", "medium", "high", "xhigh", "max"],
+    });
+  });
+
+  it("records a model that takes no effort setting as having no levels", () => {
+    const [entry] = mapAnthropicModels([
+      {
+        id: "claude-haiku-4-5",
+        display_name: "claude-haiku-4-5",
+        max_input_tokens: 200_000,
+        max_tokens: 64_000,
+        capabilities: {
+          thinking: {
+            types: {
+              adaptive: { supported: false },
+              disabled: { supported: true },
+              enabled: { supported: true },
+            },
+          },
+          effort: { supported: false },
+        },
+      },
+    ]);
+    expect(entry).toMatchObject({
+      thinkingTypes: { adaptive: false, betweenTools: false, disabled: true, enabled: true },
+      effortLevels: [],
+    });
   });
 });
 
