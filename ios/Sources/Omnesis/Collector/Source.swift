@@ -379,6 +379,18 @@ public struct Batch: Codable, Equatable, Sendable {
         return "\(stamp)-\(suffix)"
     }
 
+    /// How long ago the batch with this id was made, read from the stamp
+    /// `makeId` puts first; `nil` for an id it didn't make.
+    static func age(ofId id: String, now: Date = Date()) -> TimeInterval? {
+        guard id.count >= 18 else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS"
+        guard let made = formatter.date(from: String(id.prefix(18))) else { return nil }
+        return now.timeIntervalSince(made)
+    }
+
     /// Milliseconds for batch ids, never repeating or going back.
     private final class IdClock: @unchecked Sendable {
         static let shared = IdClock()

@@ -60,8 +60,8 @@ final class UploaderTests: XCTestCase {
         )
     }
 
-    private func enqueueOne(_ buf: OfflineBuffer) async throws -> String {
-        let id = Batch.makeId(now: Date().addingTimeInterval(-8 * 60 * 60))
+    private func enqueueOne(_ buf: OfflineBuffer, age: TimeInterval = 8 * 60 * 60) async throws -> String {
+        let id = Batch.makeId(now: Date().addingTimeInterval(-age))
         try await buf.enqueue(Batch(
             id: id,
             sourceId: "apple-health:local",
@@ -484,5 +484,24 @@ final class UploaderTests: XCTestCase {
             let remaining = try await buf.count()
             XCTAssertEqual(remaining, item.verdict == .refuse ? 0 : 1, label)
         }
+    }
+}
+
+/// The cut-off 400 is bounded.
+extension UploaderTests {
+    /// A gateway that has the 408 still answers this 400 for a complete body
+    /// that does not parse, which no retry changes. Past the window a batch
+    /// is charged for it, and set aside (kept) like any refused batch.
+    func testTheCutOffAnswerIsNotRetriedForever() async throws {
+        let buf = buffer()
+        _ = try await enqueueOne(buf, age: 3 * 24 * 60 * 60)
+        let body = #"{"error":"Malformed JSON in request body","code":"BAD_REQUEST"}"#
+        let uploader = try Uploader(gateway: gateway(status: 400, body: body), buffer: buf)
+
+        _ = try await uploader.drain()
+        _ = try await uploader.drain()
+
+        let setAside = try await buf.quarantinedCount()
+        XCTAssertEqual(setAside, 1, "charged once past the window")
     }
 }

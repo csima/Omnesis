@@ -55,6 +55,28 @@ final class DeliveryClassificationTests: XCTestCase {
         }
     }
 
+    /// The cut-off 400 is retried only while the batch is young; an old or
+    /// unknown one is charged, so a gateway that means it as a verdict
+    /// can't keep a batch in the queue for good.
+    func testTheCutOffAnswerIsRetriedOnlyWithinItsWindow() {
+        let cutOff = DeliveryFailure.status(400, body: Self.cutOffBody)
+        let window = DeliveryClassification.cutOffRetryWindow
+        XCTAssertEqual(DeliveryClassification.verdict(for: cutOff, batchAge: 60), .retry)
+        XCTAssertEqual(DeliveryClassification.verdict(for: cutOff, batchAge: window - 1), .retry)
+        XCTAssertEqual(DeliveryClassification.verdict(for: cutOff, batchAge: window), .refuse)
+        XCTAssertEqual(DeliveryClassification.verdict(for: cutOff, batchAge: nil), .refuse)
+        let incomplete = DeliveryFailure.status(408, body: Self.incompleteBody)
+        XCTAssertEqual(DeliveryClassification.verdict(for: incomplete, batchAge: nil), .retry, "only the 400 is bounded")
+    }
+
+    func testABatchsAgeIsReadFromItsId() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let id = Batch.makeId(now: now.addingTimeInterval(-90))
+        let age = try XCTUnwrap(Batch.age(ofId: id, now: now))
+        XCTAssertEqual(age, 90, accuracy: 0.001)
+        XCTAssertNil(Batch.age(ofId: "fixture", now: now))
+    }
+
     /// Only an exact 400 counts as cut off: the same message on another
     /// status is that status's verdict.
     func testTheCutOffMessageOnlyCountsOnA400() {
@@ -79,7 +101,7 @@ final class DeliveryClassificationTests: XCTestCase {
             }
             let viaClient = DeliveryClassification.failure(from: thrown)
             XCTAssertEqual(
-                raw.map(DeliveryClassification.verdict(for:)),
+                raw.map { DeliveryClassification.verdict(for: $0) },
                 DeliveryClassification.verdict(for: viaClient),
                 "\(item.status) \(item.body)"
             )

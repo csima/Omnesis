@@ -51,17 +51,36 @@ public enum DeliveryClassification {
     /// suspended mid-upload, the link dropped, or a proxy gave up on a slow
     /// body — and never that the batch is wrong. Matched exactly, on 400
     /// only: any other 400 is still the gateway's verdict on the payload.
+    ///
+    /// Not forever: a gateway that has the 408 still gives this 400 for a
+    /// complete body that does not parse, which repeating cannot change.
+    /// A batch older than `cutOffRetryWindow` is charged for it like any
+    /// refusal, so it is set aside (kept, not deleted) after the usual
+    /// quarantine budget instead of being retried for the life of the
+    /// install.
     static let truncatedBodyMessage = "Malformed JSON in request body"
 
-    public static func verdict(for failure: DeliveryFailure) -> DeliveryVerdict {
+    /// How long after it was made a batch is retried on the cut-off 400
+    /// without being charged. A weak uplink cuts off a body now and then;
+    /// it does not cut off the same batch for two days.
+    static let cutOffRetryWindow: TimeInterval = 2 * 24 * 60 * 60
+
+    /// - Parameter batchAge: How long ago the batch was made; bounds the
+    ///   cut-off 400's retries. `nil` (unknown) counts as past the window.
+    public static func verdict(for failure: DeliveryFailure, batchAge: TimeInterval? = 0) -> DeliveryVerdict {
         switch failure {
         case .status(401, _):
             .reauthorize
         case .status(403, _):
             .blocked
         case .status(let status, let body) where (400 ..< 500).contains(status):
-            retryableStatuses.contains(status) || isCutOffInTransit(status: status, body: body)
-                ? .retry : .refuse
+            if retryableStatuses.contains(status) {
+                .retry
+            } else if isCutOffInTransit(status: status, body: body), let batchAge, batchAge < cutOffRetryWindow {
+                .retry
+            } else {
+                .refuse
+            }
         case .status:
             // 5xx: the gateway or something in front of it is unwell.
             .retry

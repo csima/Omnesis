@@ -393,7 +393,7 @@ public actor Uploader {
     /// delivery path shares (`DeliveryClassification`). Throws only on 401.
     private func classify(_ error: any Error, id: String, batchSourceId: String?) throws -> BatchResult {
         let failure = DeliveryClassification.failure(from: error)
-        switch DeliveryClassification.verdict(for: failure) {
+        switch DeliveryClassification.verdict(for: failure, batchAge: Batch.age(ofId: id)) {
         case .reauthorize:
             log.error("Gateway returned 401 during drain — needs re-pair")
             throw GatewayClient.Error.unauthorized
@@ -736,7 +736,7 @@ extension Uploader {
     /// Act on a background upload's failure as the foreground drain would
     /// on the same answer.
     private func apply(_ failure: DeliveryFailure, to tag: BackgroundUploadTag, sourceId: String?) async {
-        switch DeliveryClassification.verdict(for: failure) {
+        switch DeliveryClassification.verdict(for: failure, batchAge: Batch.age(ofId: tag.batchId)) {
         case .reauthorize:
             backgroundUnauthorized = true
         case .blocked:
