@@ -264,7 +264,7 @@ final class SyncCoordinator {
             createdPipeline = false
         } else {
             buffer = OfflineBuffer(directory: bufferDirectoryProvider(), fileManager: bufferFileManager)
-            uploader = Uploader(gateway: gateway, buffer: buffer)
+            uploader = Uploader(gateway: gateway, buffer: buffer, budget: BackgroundTimeBudget())
             deliveryBuffer = buffer
             self.uploader = uploader
             createdPipeline = true
@@ -292,6 +292,7 @@ final class SyncCoordinator {
             uploader: uploader,
             sources: sources,
             prepareSource: Self.sourcePreparation(pairing: pairing),
+            budget: BackgroundTimeBudget(),
             onProgress: { [weak self] progress in
                 await MainActor.run {
                     guard self?.collectorGeneration == generation else { return }
@@ -447,6 +448,30 @@ final class SyncCoordinator {
         let summary = await BackgroundTaskGuard.run(name: "omnesis.source-sync") {
             await core.sync(sourceId: sourceId)
         }
+        await recordSourceSync(summary, core: core, generation: generation)
+    }
+
+    /// Handle a HealthKit observer wake: sync the source and drain what it
+    /// buffered, under a background-task assertion, returning when that is
+    /// done or the wake's time is nearly up. The observer reports the wake
+    /// handled when this returns, so iOS keeps the app running until then.
+    ///
+    /// A wake that lands while the source is already syncing waits for the
+    /// follow-up pass it queues, since the running pass may have read its
+    /// page before the new samples arrived.
+    func handleHealthKitWake(sourceId: String) async {
+        guard let core else { return }
+        let generation = collectorGeneration
+        let budget = BackgroundTimeBudget()
+        await BackgroundTaskGuard.run(name: "omnesis.healthkit-wake") {
+            await BackgroundWake.run(budget: budget) { [weak self] in
+                let summary = await core.sync(sourceId: sourceId, awaitingFollowUp: true)
+                await self?.recordSourceSync(summary, core: core, generation: generation)
+            }
+        }
+    }
+
+    private func recordSourceSync(_ summary: CollectorCore.SyncSummary?, core: CollectorCore, generation: Int) async {
         guard collectorGeneration == generation, self.core === core else { return }
         if let observed = summary?.blocked {
             blockedSourceIds = observed.sorted()
