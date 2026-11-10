@@ -72,7 +72,7 @@ function critic(
   return withRetrievalCritic(handle, {
     turn: () => turn ?? undefined,
     completer: () => completer,
-    limits: { reviewsPerTurn: 4, revisionsPerTurn: 2, refusalsPerTurn: 2, timeoutMs },
+    limits: { reviewsPerTurn: 4, refusalsPerTurn: 2, timeoutMs },
   });
 }
 
@@ -215,15 +215,26 @@ describe("withRetrievalCritic", () => {
     expect(model.prompts[1]).toContain("2. run_sql");
   });
 
-  it("stops adding notes once the turn's revisions are spent, and its reviews once they are", async () => {
+  it("stops reviewing once the turn's reviews are spent, keeping the last verdict", async () => {
     const model = reviewer(REVISE);
     const turn = new RetrievalCriticTurn("q");
     const handle = critic(tool("search_documents", slackHits), model, turn);
     const results = [];
     for (let i = 0; i < 6; i += 1) results.push(await handle.invoke({}, ctx));
-    expect(results.filter((r) => "review" in r && r.review)).toHaveLength(2);
+    expect(results.filter((r) => "review" in r && r.review)).toHaveLength(4);
     expect(model.prompts).toHaveLength(4);
     expect(turn.pending).toBe("Count messages per workspace with run_sql first.");
+  });
+
+  it("lets every review's verdict replace the last, so a later pass releases citations", async () => {
+    const verdicts = [REVISE, REVISE, REVISE, '{"verdict":"adequate"}'];
+    const model = reviewer(async () => verdicts.shift()!);
+    const turn = new RetrievalCriticTurn("q");
+    const handle = critic(tool("run_sql", slackHits), model, turn);
+    for (let i = 0; i < 3; i += 1) await handle.invoke({}, ctx);
+    expect(turn.pending).not.toBeNull();
+    await handle.invoke({}, ctx);
+    expect(turn.pending).toBeNull();
   });
 
   it("reviews one call at a time when a round runs several at once", async () => {
@@ -275,8 +286,12 @@ describe("withRetrievalCritic", () => {
       const turn = new RetrievalCriticTurn("q");
       await critic(tool("search_many", slackHits), reviewer(REVISE), turn).invoke({}, ctx);
       const cite = critic(tool("cite_record", cited), null, turn);
-      expect(await cite.invoke({}, ctx)).toMatchObject({ code: "retrieval_review_pending" });
-      expect(await cite.invoke({}, ctx)).toMatchObject({ code: "retrieval_review_pending" });
+      const first = (await cite.invoke({}, ctx)) as { code: string; message: string };
+      expect(first.code).toBe("retrieval_review_pending");
+      expect(first.message).not.toContain("does not cover");
+      const last = (await cite.invoke({}, ctx)) as { code: string; message: string };
+      expect(last.code).toBe("retrieval_review_pending");
+      expect(last.message).toContain("must open by saying plainly what it does not cover");
       expect(await cite.invoke({}, ctx)).toBe(cited);
     });
 
