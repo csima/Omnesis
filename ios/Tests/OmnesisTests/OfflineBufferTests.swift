@@ -166,22 +166,53 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(Set(ids).count, ids.count)
     }
 
-    func testEvictionWhenOverSizeLimit() async throws {
-        // A 1 KB cap. Each batch has records ~200 bytes of JSON.
+    /// A full buffer refuses the next batch and drops nothing: every queued
+    /// batch is one its source's cursor has already moved past.
+    func testAFullBufferRefusesABatchAndDropsNothing() async throws {
         let config = OfflineBuffer.Config(maxSizeBytes: 2048, warningSizeBytes: 1024)
         let buf = OfflineBuffer(directory: directory, config: config)
 
-        // Push many small batches until we force eviction.
-        var totalEvicted = 0
+        var accepted: [String] = []
+        var refused = 0
         for i in 0 ..< 50 {
             let id = String(format: "20260418T10000%04d-zzzz", i)
-            let evicted = try await buf.enqueue(makeBatch(id: id, recordCount: 5))
-            totalEvicted += evicted
+            do {
+                try await buf.enqueue(makeBatch(id: id, recordCount: 5))
+                accepted.append(id)
+            } catch is OfflineBuffer.Full {
+                refused += 1
+            }
         }
 
         let size = try await buf.totalSizeBytes()
         XCTAssertLessThanOrEqual(size, 2048, "Buffer should not exceed cap; was \(size)")
-        XCTAssertGreaterThan(totalEvicted, 0, "Expected at least some evictions under pressure")
+        XCTAssertGreaterThan(refused, 0, "Expected the cap to refuse batches")
+        let queued = try await buf.listIds()
+        XCTAssertEqual(queued, accepted, "every batch it took is still there")
+    }
+
+    /// A batch bigger than the whole cap is still taken by an empty buffer,
+    /// or its source could never move past it.
+    func testAnEmptyBufferTakesAnOversizedBatch() async throws {
+        let config = OfflineBuffer.Config(maxSizeBytes: 64, warningSizeBytes: 32)
+        let buf = OfflineBuffer(directory: directory, config: config)
+        try await buf.enqueue(makeBatch(id: "20260418T100000000-aaaa", recordCount: 5))
+        let count = try await buf.count()
+        XCTAssertEqual(count, 1)
+    }
+
+    func testPendingCountIsPerSource() async throws {
+        let buf = OfflineBuffer(directory: directory)
+        try await buf.enqueue(makeBatch(id: "20260418T100000000-aaaa", recordCount: 1))
+        try await buf.enqueue(makeBatch(id: "20260418T100000001-aaaa", recordCount: 1))
+        try await buf.enqueue(makeBatch(id: "20260418T100000002-aaaa", recordCount: 1, sourceId: "mock:other"))
+        let mine = try await buf.pendingCount(sourceId: "apple-health:local")
+        XCTAssertEqual(mine, 2)
+
+        // A fresh actor over the same directory reads the sources back.
+        let reopened = OfflineBuffer(directory: directory)
+        let theirs = try await reopened.pendingCount(sourceId: "mock:other")
+        XCTAssertEqual(theirs, 1)
     }
 
     func testWarningThresholdCrossed() async throws {
