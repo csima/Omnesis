@@ -32,7 +32,7 @@ import {
 } from "@omnesis/core";
 import Anthropic from "@anthropic-ai/sdk";
 import { resolveAnthropicApiKey } from "../model-credentials.js";
-import { AnthropicTemperature, NO_THINKING, responseText } from "./anthropic-messages.js";
+import { AnthropicTemperature, AnthropicThinking, responseText } from "./anthropic-messages.js";
 import { prepareAnswerWitnessRequest, parseAnswerWitnessVerdict } from "./answer-entailment.js";
 import {
   annotationEntailmentPrompt,
@@ -369,19 +369,23 @@ function withoutUsage(provider: CompleteCapability): EntailmentCompleter {
 function anthropicEntailmentCompleter(modelId: string, apiKey: string): EntailmentCompleter {
   const client = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
   const sampling = new AnthropicTemperature();
+  const thinkingMode = new AnthropicThinking();
   return {
     modelId,
     complete: async (prompt, opts) => {
       const request = {
         model: modelId,
         max_tokens: opts?.maxTokens ?? 128,
-        thinking: NO_THINKING,
         messages: [{ role: "user" as const, content: prompt }],
       };
-      const response = await sampling.send(opts?.temperature ?? 0, (temperature) =>
-        client.messages.create(
-          temperature === undefined ? request : { ...request, temperature },
-          opts?.signal ? { signal: opts.signal } : undefined,
+      const response = await thinkingMode.send((thinking) =>
+        sampling.send(opts?.temperature ?? 0, (temperature) =>
+          client.messages.create(
+            temperature === undefined
+              ? { ...request, thinking }
+              : { ...request, thinking, temperature },
+            opts?.signal ? { signal: opts.signal } : undefined,
+          ),
         ),
       );
       return {
