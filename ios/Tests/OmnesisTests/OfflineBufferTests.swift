@@ -362,30 +362,37 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(setAside, 0)
     }
 
-    func testQuarantineRetentionIsCapped() async throws {
+    /// Every quarantined batch is a page its source's anchor has moved
+    /// past, so its samples exist nowhere else. A full quarantine leaves
+    /// the next batch queued (its source then pauses on its backlog)
+    /// instead of deleting the oldest set-aside batch; only the user's
+    /// discard removes them.
+    func testAFullQuarantineKeepsTheNextBatchQueuedAndDeletesNothing() async throws {
         let config = quarantineConfig(retained: 2)
         let buf = OfflineBuffer(directory: directory, config: config)
 
         var ids: [String] = []
+        var quarantined: [Bool] = []
         for index in 0 ..< 4 {
             // Descending age keeps the ids in ascending (creation) order.
             let id = agedId(TimeInterval(4 - index) * 60 * 60)
             ids.append(id)
             try await buf.enqueue(makeBatch(id: id))
             _ = try await buf.recordPermanentFailure(id: id)
-            _ = try await buf.recordPermanentFailure(id: id)
+            try await quarantined.append(buf.recordPermanentFailure(id: id))
         }
 
+        XCTAssertEqual(quarantined, [true, true, false, false])
         let setAside = try await buf.quarantinedCount()
-        XCTAssertEqual(setAside, 2, "Oldest quarantined batches are dropped past the cap")
+        XCTAssertEqual(setAside, 2)
         let kept = try FileManager.default.contentsOfDirectory(
             at: directory.appendingPathComponent("quarantine"), includingPropertiesForKeys: nil
         )
         .map { $0.deletingPathExtension().lastPathComponent }
         .sorted()
-        XCTAssertEqual(kept, Array(ids.suffix(2)), "The newest two survive")
-        let count = try await buf.count()
-        XCTAssertEqual(count, 0)
+        XCTAssertEqual(kept, Array(ids.prefix(2)), "the first two stay set aside")
+        let queued = try await buf.listIds()
+        XCTAssertEqual(queued, Array(ids.suffix(2)), "the rest stay queued")
     }
 
     /// The sidecar must not resurrect a run against an id that is no longer
