@@ -157,6 +157,15 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertNil(finalAge)
     }
 
+    /// Batches made within one millisecond still sort, and so drain, in
+    /// the order they were made: a deletion must not overtake the insert
+    /// it follows.
+    func testBatchIdsSortInTheOrderTheyWereMade() {
+        let ids = (0 ..< 500).map { _ in Batch.makeId() }
+        XCTAssertEqual(ids, ids.sorted())
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
     func testEvictionWhenOverSizeLimit() async throws {
         // A 1 KB cap. Each batch has records ~200 bytes of JSON.
         let config = OfflineBuffer.Config(maxSizeBytes: 2048, warningSizeBytes: 1024)
