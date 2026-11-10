@@ -8438,6 +8438,48 @@ final class PreviewSnapshotTests: XCTestCase {
         )
     }
 
+    /// The folded outer display of a book-style iPhone: a short, nearly
+    /// square screen with almost no top safe area. A source-attention banner
+    /// there once sat over the Ask screen's floating menu and conversation
+    /// buttons, leaving no way into the menu: the banner was a
+    /// `.safeAreaInset`, which a section's NavigationStack does not pass on.
+    /// Rendered in a real window: at this size the offscreen host lays the
+    /// Ask screen out larger than the canvas and crops it. The landing (no
+    /// conversation) is the screen the report showed; the keyboard variant
+    /// stands in for a focused composer by taking the keyboard's height off
+    /// the screen; the conversation variant adds the trailing buttons.
+    func testHomeAttentionBannerKeepsTopButtonsOnFoldedDisplay() {
+        let size = CGSize(width: 466, height: 678)
+        func home(_ agentPreview: AppStore.AgentPreviewSeed? = nil) -> some View {
+            let store = AppStore.preview(
+                sources: PreviewMocks.sources,
+                statusesBySource: PreviewMocks.syncStatuses,
+                deviceNames: PreviewMocks.deviceNames,
+                statusSnapshot: PreviewMocks.statusSnapshot,
+                indexStats: PreviewMocks.indexStats,
+                sourcePermissionHealth: PreviewMocks.sourcePermissionHealth,
+                agentPreview: agentPreview
+            )
+            return HomeView()
+                .environment(store)
+                .environment(store.notificationRouter)
+        }
+        // The folded keyboard takes about 310pt; a bottom inset would not
+        // reach past the section's NavigationStack, so shorten the screen.
+        let keyboardSize = CGSize(width: size.width, height: size.height - 310)
+        for scheme in [ColorScheme.dark, .light] {
+            let suffix = scheme == .light ? "-light" : ""
+            renderInWindow(home(), name: "343-home-attention-banner-folded\(suffix)", scheme: scheme, size: size)
+            renderInWindow(home(), name: "343b-home-attention-banner-folded-keyboard\(suffix)", scheme: scheme, size: keyboardSize)
+            renderInWindow(
+                home(PreviewMocks.agentConversationsRich),
+                name: "343c-home-attention-banner-folded-conversation\(suffix)",
+                scheme: scheme,
+                size: size
+            )
+        }
+    }
+
     func testAccessAuthorizationCodeGate() {
         snapshot(
             AccessAuthorizationSheet()
