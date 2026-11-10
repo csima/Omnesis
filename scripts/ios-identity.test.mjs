@@ -630,6 +630,14 @@ describe("Xcode simulator destination discovery", () => {
     expect(check.invoke).toThrow("did not discover eligible destination");
   });
 
+  it("reads Xcode 27.1's compatible and incompatible destination headings", () => {
+    const compatible = 'Destinations compatible with the "Omnesis" scheme:';
+    const incompatible = 'Destinations incompatible with the "Omnesis" scheme:';
+    discovery([`${compatible}\n${placeholder}\n${phone}\n\n${incompatible}`]).invoke();
+    const check = discovery([`${compatible}\n${placeholder}\n${incompatible}\n${phone}`]);
+    expect(check.invoke).toThrow("did not discover eligible destination");
+  });
+
   it("honors explicit name, OS and architecture selectors", () => {
     const check = discovery(
       [
