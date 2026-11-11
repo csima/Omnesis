@@ -288,19 +288,8 @@ public final class GatewayClient: Sendable {
         bodyData: Data?
     ) async throws
         -> (Data, URLResponse) {
-        guard let requestURL = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
-            throw Error.invalidURL
-        }
-        var request = URLRequest(url: requestURL)
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if authRequired {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        if let bodyData {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = bodyData
-        }
+        var request = try makeRequest(method: method, path: path, authRequired: authRequired, hasBody: bodyData != nil)
+        request.httpBody = bodyData
 
         let (data, response) = try await session.data(for: request)
 
@@ -326,6 +315,47 @@ public final class GatewayClient: Sendable {
                 body: String(data: data, encoding: .utf8) ?? ""
             )
         }
+    }
+
+    private func makeRequest(method: String, path: String, authRequired: Bool, hasBody: Bool) throws -> URLRequest {
+        guard let requestURL = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+            throw Error.invalidURL
+        }
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if authRequired {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if hasBody {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        return request
+    }
+
+    /// The request a background upload of `batch` sends to `endpoint`, and
+    /// its body, byte for byte what `ingestAnalyticsRecords` or
+    /// `ingestDocuments` would send. The body travels as a file, so the
+    /// request carries none.
+    public func backgroundUploadRequest(
+        for batch: Batch,
+        to endpoint: BackgroundUploadEndpoint
+    ) throws
+        -> (request: URLRequest, body: Data) {
+        let body: Data = switch endpoint {
+        case .analytics:
+            try encoder.encode(AnalyticsIngestRequest(
+                tableName: batch.tableName ?? "",
+                records: batch.records,
+                schema: batch.schema,
+                sourceId: batch.sourceId,
+                deletedIds: nil
+            ))
+        case .documents:
+            try encoder.encode(DocumentIngestRequest(documents: batch.documents))
+        }
+        let request = try makeRequest(method: "POST", path: endpoint.rawValue, authRequired: true, hasBody: true)
+        return (request, body)
     }
 
     /// The human-readable half of a gateway error response.

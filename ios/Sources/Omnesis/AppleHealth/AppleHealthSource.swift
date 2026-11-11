@@ -17,14 +17,14 @@ import UIKit
 
 /// `OmnesisSource` implementation for Apple Health.
 ///
-/// One `sync(cursor:)` call advances by one `TypeEntry`: it runs an
-/// anchored query for that type, emits a `SyncResult` with up to
-/// `pageLimit` records, and returns `hasMore = true` until all types
-/// in the catalog have been drained. When the full cycle completes,
-/// `hasMore = false`; the next sync (triggered by an HKObserverQuery
-/// or BG refresh) wraps back to cycle 0.
+/// One `sync(cursor:)` call returns one page: the first read the
+/// `AppleHealthSchedule` asks for that has something to upload, up to
+/// `pageLimit` samples of one type. A pass sweeps every type for recent
+/// samples first and then continues the history backfill; `hasMore` stays
+/// true until both are done. The next pass (an HKObserverQuery wake, a
+/// BG refresh, a foreground sync) starts a new sweep.
 ///
-/// Why rotate types this way (instead of all-in-one mega-sync):
+/// Why one type per page (instead of all-in-one mega-sync):
 ///   - Keeps each sync() call short enough to finish inside one
 ///     `HKObserverQuery` background callback (~30 s budget).
 ///   - Each batch → `/analytics/ingest` POST is a single DuckDB
@@ -59,8 +59,24 @@ public struct AppleHealthSource: OmnesisSource {
         self.pageLimit = pageLimit
     }
 
+    private var schedule: AppleHealthSchedule {
+        AppleHealthSchedule(catalog: catalog.map(\.identifier), pageLimit: pageLimit)
+    }
+
+    public func cursorForNewPass(_ cursor: SyncCursor?) -> SyncCursor? {
+        schedule.beginningPass(AppleHealthCursor.decode(from: cursor), now: Date()).encode()
+    }
+
+    public func hasHistoryPending(cursor: SyncCursor?) -> Bool {
+        schedule.hasHistoryPending(AppleHealthCursor.decode(from: cursor))
+    }
+
     public func sync(cursor: SyncCursor?) async throws -> SyncResult {
         var typed = AppleHealthCursor.decode(from: cursor)
+        if typed.caughtUp == nil {
+            // A cursor that never went through `cursorForNewPass`.
+            typed = schedule.beginningPass(typed, now: Date())
+        }
 
         // Protected-data gate. HealthKit samples are file-protection-class
         // encrypted — queries against a locked phone fail with
@@ -75,62 +91,85 @@ public struct AppleHealthSource: OmnesisSource {
         #if canImport(UIKit)
         let protectedAvailable = await MainActor.run { UIApplication.shared.isProtectedDataAvailable }
         if !protectedAvailable {
-            return SyncResult(
-                records: [], tableName: "health_body",
-                schema: nil, cursor: typed.encode(), hasMore: false
-            )
+            return emptyResult(cursor: typed)
         }
         #endif
-
-        let index = typed.cycleIndex % max(catalog.count, 1)
-        guard index < catalog.count else {
-            // Empty catalog — shouldn't happen in practice.
-            return SyncResult(
-                records: [], tableName: "health_body",
-                schema: nil, cursor: typed.encode(), hasMore: false
-            )
-        }
-        let entry = catalog[index]
-
-        guard let sampleType = entry.sampleType else {
-            // Skip unknown identifier.
-            typed.cycleIndex = index + 1
-            return SyncResult(
-                records: [], tableName: entry.category.tableName,
-                schema: HealthSchemas.schema(for: entry.category),
-                cursor: typed.encode(),
-                hasMore: typed.cycleIndex < catalog.count
-            )
-        }
-
-        let decodedAnchor: HKQueryAnchor? = if let encoded = typed.anchor(for: entry.identifier) {
-            AnchorCoder.decode(encoded)
-        } else {
-            nil
-        }
 
         // Second defence: even when isProtectedDataAvailable was true at
         // the top, a race is possible (user locks mid-query). Catch the
         // specific HK "protected data inaccessible" error and bail out
-        // gracefully — same semantics as the gate above.
-        let queryResult: (samples: [HKSample], deletions: [HKDeletedObject], newAnchor: HKQueryAnchor?)
+        // gracefully — same semantics as the gate above. The reads this
+        // page made before it found nothing, so the next pass redoing them
+        // costs no data.
         do {
-            queryResult = try await client.runAnchoredQuery(
-                type: sampleType,
-                anchor: decodedAnchor,
-                limit: pageLimit
+            let next = try await schedule.nextPage(from: typed, now: Date()) { read in
+                try await self.read(read)
+            }
+            guard let page = next.page else {
+                return emptyResult(cursor: next.cursor, hasMore: next.hasMore)
+            }
+            return SyncResult(
+                records: page.records,
+                tableName: page.entry.category.tableName,
+                schema: HealthSchemas.schema(for: page.entry.category),
+                cursor: next.cursor.encode(),
+                hasMore: next.hasMore,
+                deletedIds: page.deletedIds,
+                documents: page.documents
             )
         } catch let err as NSError where err.domain == HKErrorDomain && err.code == HKError.errorDatabaseInaccessible.rawValue {
-            return SyncResult(
-                records: [], tableName: entry.category.tableName,
-                schema: HealthSchemas.schema(for: entry.category),
-                cursor: typed.encode(), hasMore: false
+            return emptyResult(cursor: typed)
+        }
+    }
+
+    private func emptyResult(cursor: AppleHealthCursor, hasMore: Bool = false) -> SyncResult {
+        SyncResult(
+            records: [],
+            tableName: "health_body",
+            schema: nil,
+            cursor: cursor.encode(),
+            hasMore: hasMore
+        )
+    }
+
+    /// What one read produced for upload.
+    private struct ReadPage {
+        let entry: TypeEntry
+        let records: [[String: JSONValue]]
+        let documents: [DocumentInput]
+        let deletedIds: [String]
+    }
+
+    /// Runs one read the schedule asked for and builds its page.
+    private func read(_ read: AppleHealthRead) async throws -> (page: ReadPage, outcome: AppleHealthReadOutcome) {
+        guard let entry = catalog.first(where: { $0.identifier == read.identifier }),
+              let sampleType = entry.sampleType
+        else {
+            // Unknown identifier: nothing to read, so it is at its end.
+            let entry = catalog.first { $0.identifier == read.identifier } ?? catalog[0]
+            return (
+                ReadPage(entry: entry, records: [], documents: [], deletedIds: []),
+                AppleHealthReadOutcome(returned: 0, isEmpty: true, newAnchor: nil)
             )
         }
-        let samples = queryResult.samples
-        let deletions = queryResult.deletions
-        let newAnchor = queryResult.newAnchor
 
+        let anchor: String?
+        let predicate: NSPredicate?
+        switch read {
+        case .complete(_, let encoded):
+            anchor = encoded
+            predicate = nil
+        case .recent(_, let encoded, let since):
+            anchor = encoded
+            predicate = HKQuery.predicateForSamples(withStart: since, end: nil, options: [])
+        }
+        let queryResult = try await client.runAnchoredQuery(
+            type: sampleType,
+            anchor: anchor.flatMap(AnchorCoder.decode),
+            predicate: predicate,
+            limit: pageLimit
+        )
+        let samples = queryResult.samples
         let page = buildRecordsAndDocuments(from: samples, entry: entry)
         var documents = page.documents
 
@@ -147,23 +186,15 @@ public struct AppleHealthSource: OmnesisSource {
             documents.append(contentsOf: nightDocuments)
         }
 
-        let deletedIds = deletions.map(\.uuid.uuidString)
-
-        if let newAnchor, let encoded = AnchorCoder.encode(newAnchor) {
-            typed.setAnchor(encoded, for: entry.identifier)
-        }
-
-        let advanced = advanceCycle(cursor: typed, index: index, sampleCount: samples.count)
-        typed = advanced.cursor
-
-        return SyncResult(
-            records: page.records,
-            tableName: entry.category.tableName,
-            schema: HealthSchemas.schema(for: entry.category),
-            cursor: typed.encode(),
-            hasMore: advanced.hasMore,
-            deletedIds: deletedIds,
-            documents: documents
+        let deletedIds = queryResult.deletions.map(\.uuid.uuidString)
+        let readPage = ReadPage(entry: entry, records: page.records, documents: documents, deletedIds: deletedIds)
+        return (
+            readPage,
+            AppleHealthReadOutcome(
+                returned: samples.count + queryResult.deletions.count,
+                isEmpty: page.records.isEmpty && documents.isEmpty && deletedIds.isEmpty,
+                newAnchor: queryResult.newAnchor.flatMap(AnchorCoder.encode)
+            )
         )
     }
 
@@ -201,28 +232,6 @@ public struct AppleHealthSource: OmnesisSource {
             normalizedSamples.append(normalised)
         }
         return PageResult(records: records, documents: documents, normalizedSamples: normalizedSamples)
-    }
-
-    /// Advances the rotation cursor after one page: stays on the
-    /// current type if it filled the page (more to read), otherwise
-    /// moves to the next type, wrapping — and recording
-    /// `lastCycleCompletedAt` — once the whole catalog has been drained.
-    private func advanceCycle(
-        cursor: AppleHealthCursor,
-        index: Int,
-        sampleCount: Int
-    )
-        -> (cursor: AppleHealthCursor, hasMore: Bool) {
-        var typed = cursor
-        let thisTypeHasMore = sampleCount >= pageLimit
-        typed.cycleIndex = thisTypeHasMore ? index : index + 1
-
-        guard typed.cycleIndex < catalog.count else {
-            typed.lastCycleCompletedAt = ISO8601DateFormatter().string(from: Date())
-            typed.cycleIndex = 0
-            return (typed, false)
-        }
-        return (typed, true)
     }
 
     /// Rebuilds the night document for every distinct night this page's

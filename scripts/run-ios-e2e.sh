@@ -131,14 +131,37 @@ json.dump({'gatewayURL': '$URL', 'apiToken': '$TOKEN'}, sys.stdout)
 RESULT_DIR="$(mktemp -d)"
 trap 'cleanup; rm -f "$CONFIG_FILE"; rm -rf "$RESULT_DIR"' EXIT
 
-xcodebuild test \
-  -project Omnesis.xcodeproj \
-  -scheme Omnesis \
-  -destination "$DEST" \
-  "${PACKAGE_FLAGS[@]}" \
-  -resultBundlePath "$RESULT_DIR/live.xcresult" \
-  -only-testing:OmnesisTests/GatewayLiveE2ETests \
-  -only-testing:OmnesisTests/RealtimeAudioCaptureDeviceTests
+XCODEBUILD_LOG="$RESULT_DIR/xcodebuild.log"
+live_tests() {
+  rm -rf "$RESULT_DIR/live.xcresult"
+  xcodebuild test \
+    -project Omnesis.xcodeproj \
+    -scheme Omnesis \
+    -destination "$DEST" \
+    "${PACKAGE_FLAGS[@]}" \
+    -resultBundlePath "$RESULT_DIR/live.xcresult" \
+    -only-testing:OmnesisTests/GatewayLiveE2ETests \
+    -only-testing:OmnesisTests/RealtimeAudioCaptureDeviceTests \
+    2>&1 | tee "$XCODEBUILD_LOG"
+}
+
+# Xcode can drop a discovered phone from its destinations while the gateway
+# boots; xcodebuild then exits 70 before building anything. Check again right
+# before the run and, for that pre-build failure only, wait and start once more.
+# A run that built or tested is never repeated.
+node "$ROOT/scripts/ci/wait-ios-destination.mjs" "$DEST" "${PACKAGE_FLAGS[@]}"
+status=0
+live_tests || status=$?
+if [[ "$status" -eq 70 ]] &&
+  grep -q "Unable to find a device matching the provided destination specifier" "$XCODEBUILD_LOG"; then
+  echo "→ Xcode lost $DEST before building; waiting for it again…"
+  node "$ROOT/scripts/ci/wait-ios-destination.mjs" "$DEST" "${PACKAGE_FLAGS[@]}"
+  status=0
+  live_tests || status=$?
+fi
+if [[ "$status" -ne 0 ]]; then
+  exit "$status"
+fi
 
 # Gateway coverage must never silently skip. Hardware probes must pass when
 # their explicit local fixture is enabled, and otherwise remain skipped.

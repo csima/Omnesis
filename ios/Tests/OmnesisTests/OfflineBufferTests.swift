@@ -50,6 +50,45 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    /// The queue keeps the order batches went in, on disk, not the order
+    /// their ids sort in: a batch queued after a relaunch, by a clock that
+    /// stepped back, still goes after every batch queued before it.
+    func testOrderSurvivesARelaunchAndAClockStepBack() async throws {
+        let made = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = makeBatch(id: Batch.makeId(now: made))
+        try await OfflineBuffer(directory: directory).enqueue(first)
+
+        let relaunched = OfflineBuffer(directory: directory)
+        let second = makeBatch(id: Batch.makeId(now: made.addingTimeInterval(-60)))
+        try await relaunched.enqueue(second)
+        let third = makeBatch(id: Batch.makeId(now: made.addingTimeInterval(-30)))
+        try await relaunched.enqueue(third)
+
+        let queued = try await relaunched.listIds()
+        XCTAssertEqual(queued, [first.id, second.id, third.id])
+        let again = try await OfflineBuffer(directory: directory).listIds()
+        XCTAssertEqual(again, [first.id, second.id, third.id], "read back the same after another relaunch")
+    }
+
+    /// Batches queued before sequences keep their place ahead of every
+    /// batch queued since.
+    func testBatchesFromBeforeSequencesGoFirst() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacy = makeBatch(id: Batch.makeId(now: Date(timeIntervalSince1970: 1_800_000_000)))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(legacy).write(to: directory.appendingPathComponent("\(legacy.id).json"))
+        let buf = OfflineBuffer(directory: directory)
+        let queued = makeBatch(id: Batch.makeId(now: Date(timeIntervalSince1970: 1_700_000_000)))
+        try await buf.enqueue(queued)
+
+        let ids = try await buf.listIds()
+        XCTAssertEqual(ids, [legacy.id, queued.id])
+        try await buf.remove(id: legacy.id)
+        let left = try await buf.listIds()
+        XCTAssertEqual(left, [queued.id])
+    }
+
     func testEnqueueFailsClosedWhenBackupExclusionCannotBeApplied() async throws {
         let buffer = OfflineBuffer(directory: directory)
         try FileManager.default.removeItem(at: directory)
@@ -104,6 +143,33 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(peeked?.id, "20260418T100000000-aaaa")
     }
 
+    /// An app container's path reaches the buffer as `/var/…` while a
+    /// directory listing returns `/private/var/…`. A buffer reloaded from
+    /// disk after a relaunch must still drop what it delivers, or the count
+    /// keeps naming batches that are long gone.
+    func testRemovalAfterReloadThroughASymlinkedPath() async throws {
+        // A symlinked ancestor, as `/var` is on iOS.
+        let real = directory.appendingPathComponent("real", isDirectory: true)
+        let link = directory.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: real.path)
+        let bufferDirectory = link.appendingPathComponent("buffer", isDirectory: true)
+        let batch = makeBatch()
+        try await OfflineBuffer(directory: bufferDirectory).enqueue(batch)
+
+        let relaunched = OfflineBuffer(directory: bufferDirectory)
+        let before = try await relaunched.count()
+        XCTAssertEqual(before, 1)
+        try await relaunched.remove(id: batch.id)
+
+        let count = try await relaunched.count()
+        XCTAssertEqual(count, 0)
+        let ids = try await relaunched.listIds()
+        XCTAssertEqual(ids, [])
+        let bytes = try await relaunched.totalSizeBytes()
+        XCTAssertEqual(bytes, 0)
+    }
+
     func testLoadingFilesRemovedByAnotherOwnerHealsCachedHealthState() async throws {
         let ids = [agedId(10 * 60 * 60), agedId(9 * 60 * 60)]
         let current = OfflineBuffer(directory: directory)
@@ -130,22 +196,62 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertNil(finalAge)
     }
 
-    func testEvictionWhenOverSizeLimit() async throws {
-        // A 1 KB cap. Each batch has records ~200 bytes of JSON.
+    /// Batches made within one millisecond still sort, and so drain, in
+    /// the order they were made: a deletion must not overtake the insert
+    /// it follows.
+    func testBatchIdsSortInTheOrderTheyWereMade() {
+        let ids = (0 ..< 500).map { _ in Batch.makeId() }
+        XCTAssertEqual(ids, ids.sorted())
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
+    /// A full buffer refuses the next batch and drops nothing: every queued
+    /// batch is one its source's cursor has already moved past.
+    func testAFullBufferRefusesABatchAndDropsNothing() async throws {
         let config = OfflineBuffer.Config(maxSizeBytes: 2048, warningSizeBytes: 1024)
         let buf = OfflineBuffer(directory: directory, config: config)
 
-        // Push many small batches until we force eviction.
-        var totalEvicted = 0
+        var accepted: [String] = []
+        var refused = 0
         for i in 0 ..< 50 {
             let id = String(format: "20260418T10000%04d-zzzz", i)
-            let evicted = try await buf.enqueue(makeBatch(id: id, recordCount: 5))
-            totalEvicted += evicted
+            do {
+                try await buf.enqueue(makeBatch(id: id, recordCount: 5))
+                accepted.append(id)
+            } catch is OfflineBuffer.Full {
+                refused += 1
+            }
         }
 
         let size = try await buf.totalSizeBytes()
         XCTAssertLessThanOrEqual(size, 2048, "Buffer should not exceed cap; was \(size)")
-        XCTAssertGreaterThan(totalEvicted, 0, "Expected at least some evictions under pressure")
+        XCTAssertGreaterThan(refused, 0, "Expected the cap to refuse batches")
+        let queued = try await buf.listIds()
+        XCTAssertEqual(queued, accepted, "every batch it took is still there")
+    }
+
+    /// A batch bigger than the whole cap is still taken by an empty buffer,
+    /// or its source could never move past it.
+    func testAnEmptyBufferTakesAnOversizedBatch() async throws {
+        let config = OfflineBuffer.Config(maxSizeBytes: 64, warningSizeBytes: 32)
+        let buf = OfflineBuffer(directory: directory, config: config)
+        try await buf.enqueue(makeBatch(id: "20260418T100000000-aaaa", recordCount: 5))
+        let count = try await buf.count()
+        XCTAssertEqual(count, 1)
+    }
+
+    func testPendingCountIsPerSource() async throws {
+        let buf = OfflineBuffer(directory: directory)
+        try await buf.enqueue(makeBatch(id: "20260418T100000000-aaaa", recordCount: 1))
+        try await buf.enqueue(makeBatch(id: "20260418T100000001-aaaa", recordCount: 1))
+        try await buf.enqueue(makeBatch(id: "20260418T100000002-aaaa", recordCount: 1, sourceId: "mock:other"))
+        let mine = try await buf.pendingCount(sourceId: "apple-health:local")
+        XCTAssertEqual(mine, 2)
+
+        // A fresh actor over the same directory reads the sources back.
+        let reopened = OfflineBuffer(directory: directory)
+        let theirs = try await reopened.pendingCount(sourceId: "mock:other")
+        XCTAssertEqual(theirs, 1)
     }
 
     func testWarningThresholdCrossed() async throws {
@@ -295,30 +401,37 @@ final class OfflineBufferTests: XCTestCase {
         XCTAssertEqual(setAside, 0)
     }
 
-    func testQuarantineRetentionIsCapped() async throws {
+    /// Every quarantined batch is a page its source's anchor has moved
+    /// past, so its samples exist nowhere else. A full quarantine leaves
+    /// the next batch queued (its source then pauses on its backlog)
+    /// instead of deleting the oldest set-aside batch; only the user's
+    /// discard removes them.
+    func testAFullQuarantineKeepsTheNextBatchQueuedAndDeletesNothing() async throws {
         let config = quarantineConfig(retained: 2)
         let buf = OfflineBuffer(directory: directory, config: config)
 
         var ids: [String] = []
+        var quarantined: [Bool] = []
         for index in 0 ..< 4 {
             // Descending age keeps the ids in ascending (creation) order.
             let id = agedId(TimeInterval(4 - index) * 60 * 60)
             ids.append(id)
             try await buf.enqueue(makeBatch(id: id))
             _ = try await buf.recordPermanentFailure(id: id)
-            _ = try await buf.recordPermanentFailure(id: id)
+            try await quarantined.append(buf.recordPermanentFailure(id: id))
         }
 
+        XCTAssertEqual(quarantined, [true, true, false, false])
         let setAside = try await buf.quarantinedCount()
-        XCTAssertEqual(setAside, 2, "Oldest quarantined batches are dropped past the cap")
+        XCTAssertEqual(setAside, 2)
         let kept = try FileManager.default.contentsOfDirectory(
             at: directory.appendingPathComponent("quarantine"), includingPropertiesForKeys: nil
         )
-        .map { $0.deletingPathExtension().lastPathComponent }
+        .map(QueuedBatchFile.batchId(of:))
         .sorted()
-        XCTAssertEqual(kept, Array(ids.suffix(2)), "The newest two survive")
-        let count = try await buf.count()
-        XCTAssertEqual(count, 0)
+        XCTAssertEqual(kept, Array(ids.prefix(2)), "the first two stay set aside")
+        let queued = try await buf.listIds()
+        XCTAssertEqual(queued, Array(ids.suffix(2)), "the rest stay queued")
     }
 
     /// The sidecar must not resurrect a run against an id that is no longer
@@ -331,7 +444,7 @@ final class OfflineBufferTests: XCTestCase {
         try await bufA.enqueue(makeBatch(id: id))
         _ = try await bufA.recordPermanentFailure(id: id)
         // Delete the batch behind the buffer's back, leaving the sidecar entry.
-        try FileManager.default.removeItem(at: directory.appendingPathComponent("\(id).json"))
+        try FileManager.default.removeItem(at: queuedBatchFile(id, in: directory))
 
         let bufB = OfflineBuffer(directory: directory, config: config)
         try await bufB.enqueue(makeBatch(id: id))
@@ -385,4 +498,10 @@ final class OfflineBufferTests: XCTestCase {
             last = id
         }
     }
+}
+
+/// The file queued batch `id` is in.
+func queuedBatchFile(_ id: String, in directory: URL) throws -> URL {
+    let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+    return try XCTUnwrap(files.first { $0.pathExtension == "json" && QueuedBatchFile.batchId(of: $0) == id })
 }

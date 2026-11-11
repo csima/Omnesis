@@ -60,8 +60,8 @@ final class UploaderTests: XCTestCase {
         )
     }
 
-    private func enqueueOne(_ buf: OfflineBuffer) async throws -> String {
-        let id = Batch.makeId(now: Date().addingTimeInterval(-8 * 60 * 60))
+    private func enqueueOne(_ buf: OfflineBuffer, age: TimeInterval = 8 * 60 * 60) async throws -> String {
+        let id = Batch.makeId(now: Date().addingTimeInterval(-age))
         try await buf.enqueue(Batch(
             id: id,
             sourceId: "apple-health:local",
@@ -161,7 +161,7 @@ final class UploaderTests: XCTestCase {
             deletedIds: ["sample-removed"],
             createdAt: Date()
         ))
-        let file = directory.appendingPathComponent("\(id).json")
+        let file = try queuedBatchFile(id, in: directory)
         let encoded = try Data(contentsOf: file)
         var legacyPayload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any]
@@ -334,6 +334,75 @@ final class UploaderTests: XCTestCase {
         }
     }
 
+    /// A gateway that predates `REQUEST_BODY_INCOMPLETE` reports a request
+    /// body that stopped arriving — the app suspended mid-upload — as a 400
+    /// "Malformed JSON". The app cannot produce malformed JSON, so that 400 is
+    /// a cut-off upload and must not count against the batch.
+    func testATruncatedUploadOnAnOlderGatewayIsNotAVerdictOnThePayload() async throws {
+        let buf = buffer()
+        _ = try await enqueueOne(buf)
+        let body = #"{"error":"Malformed JSON in request body","code":"BAD_REQUEST"}"#
+        let uploader = try Uploader(gateway: gateway(status: 400, body: body), buffer: buf)
+
+        var outcomes: [DrainOutcome] = []
+        for _ in 0 ..< 6 {
+            try await outcomes.append(DrainOutcome(uploader.drain()))
+        }
+
+        XCTAssertEqual(Set(outcomes), [.unreachable], "a cut-off upload is a transport failure")
+        let setAside = try await buf.quarantinedCount()
+        XCTAssertEqual(setAside, 0)
+        let remaining = try await buf.count()
+        XCTAssertEqual(remaining, 1)
+    }
+
+    /// The narrow match above must not widen into "every 400 is retryable":
+    /// a validation refusal, or any other 400 message, is still a verdict.
+    func testOtherBadRequestsStillCountAgainstTheBatch() async throws {
+        for body in [
+            #"{"error":"Validation failed","code":"VALIDATION_ERROR","detail":[]}"#,
+            #"{"error":"Malformed JSON in request body, and more","code":"BAD_REQUEST"}"#,
+            "",
+        ] {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("omnesis-uploader-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let buf = OfflineBuffer(
+                directory: dir,
+                config: OfflineBuffer.Config(
+                    maxSizeBytes: 1_000_000,
+                    warningSizeBytes: 500_000,
+                    quarantineAfterAttempts: 2,
+                    quarantineGrace: 0,
+                    maxQuarantinedBatches: 25
+                )
+            )
+            _ = try await enqueueOne(buf)
+            let uploader = try Uploader(gateway: gateway(status: 400, body: body), buffer: buf)
+
+            _ = try await uploader.drain()
+            _ = try await uploader.drain()
+
+            let setAside = try await buf.quarantinedCount()
+            XCTAssertEqual(setAside, 1, "a 400 with body \(body) is the gateway's verdict")
+        }
+    }
+
+    /// What a current gateway answers for the same cut-off body.
+    func testAnIncompleteBodyAnswerIsRetryable() async throws {
+        let buf = buffer()
+        _ = try await enqueueOne(buf)
+        let body = #"{"error":"Request body ended before it was complete","code":"REQUEST_BODY_INCOMPLETE"}"#
+        let uploader = try Uploader(gateway: gateway(status: 408, body: body), buffer: buf)
+
+        for _ in 0 ..< 6 {
+            _ = try await uploader.drain()
+        }
+
+        let setAside = try await buf.quarantinedCount()
+        XCTAssertEqual(setAside, 0)
+    }
+
     /// A 403 means the device's token is missing this source's write scope.
     /// The data delivers once the grant lands, so it must survive however
     /// long the operator takes to grant it.
@@ -373,5 +442,66 @@ final class UploaderTests: XCTestCase {
         XCTAssertEqual(setAside, 0)
         let remaining = try await buf.count()
         XCTAssertEqual(remaining, 1)
+    }
+
+    /// The drain does what `DeliveryClassification` says for every status
+    /// in its table, so the rule and the foreground path cannot drift apart.
+    func testTheDrainActsOnEveryVerdictTheRuleGives() async throws {
+        for item in DeliveryClassificationTests.statusCases {
+            let label = "\(item.status) \(item.body)"
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("omnesis-uploader-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let buf = OfflineBuffer(
+                directory: dir,
+                config: OfflineBuffer.Config(
+                    maxSizeBytes: 1_000_000,
+                    warningSizeBytes: 500_000,
+                    quarantineAfterAttempts: 2,
+                    quarantineGrace: 0,
+                    maxQuarantinedBatches: 25
+                )
+            )
+            _ = try await enqueueOne(buf)
+            let uploader = try Uploader(gateway: gateway(status: item.status, body: item.body), buffer: buf)
+
+            switch item.verdict {
+            case .reauthorize:
+                do {
+                    _ = try await uploader.drain()
+                    XCTFail("\(label) must stop the drain")
+                } catch {}
+            case .blocked:
+                let stats = try await uploader.drain()
+                XCTAssertEqual(stats.blocked, ["apple-health:local"], label)
+            case .refuse, .retry:
+                _ = try await uploader.drain()
+                _ = try await uploader.drain()
+            }
+
+            let setAside = try await buf.quarantinedCount()
+            XCTAssertEqual(setAside, item.verdict == .refuse ? 1 : 0, label)
+            let remaining = try await buf.count()
+            XCTAssertEqual(remaining, item.verdict == .refuse ? 0 : 1, label)
+        }
+    }
+}
+
+/// The cut-off 400 is bounded.
+extension UploaderTests {
+    /// A gateway that has the 408 still answers this 400 for a complete body
+    /// that does not parse, which no retry changes. Past the window a batch
+    /// is charged for it, and set aside (kept) like any refused batch.
+    func testTheCutOffAnswerIsNotRetriedForever() async throws {
+        let buf = buffer()
+        _ = try await enqueueOne(buf, age: 3 * 24 * 60 * 60)
+        let body = #"{"error":"Malformed JSON in request body","code":"BAD_REQUEST"}"#
+        let uploader = try Uploader(gateway: gateway(status: 400, body: body), buffer: buf)
+
+        _ = try await uploader.drain()
+        _ = try await uploader.drain()
+
+        let setAside = try await buf.quarantinedCount()
+        XCTAssertEqual(setAside, 1, "charged once past the window")
     }
 }

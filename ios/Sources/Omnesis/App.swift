@@ -71,6 +71,8 @@ public struct OmnesisApp: App {
                 RealtimeScrollDemoSurface()
             } else if Self.settingsPreview {
                 settingsPreviewRoot
+            } else if Self.homeAttentionPreview {
+                homeAttentionPreviewRoot
             } else if Self.accessAuthorizationPreview {
                 accessAuthorizationPreviewRoot
             } else if Self.agentReadingAnchorPreview {
@@ -176,6 +178,26 @@ public struct OmnesisApp: App {
 
     static var settingsPreview: Bool {
         ProcessInfo.processInfo.environment["DEMO_SETTINGS_PREVIEW"] == "1"
+    }
+
+    /// `DEMO_HOME_PREVIEW=attention` boots the whole home shell over a
+    /// preview store with phone sources needing attention, so the top banner
+    /// can be checked against each section's own top controls in a real
+    /// process, on any display.
+    static var homeAttentionPreview: Bool {
+        ProcessInfo.processInfo.environment["DEMO_HOME_PREVIEW"] == "attention"
+    }
+
+    private var homeAttentionPreviewRoot: some View {
+        let store = AppStore.preview(
+            sources: PreviewMocks.sources,
+            statusSnapshot: PreviewMocks.statusSnapshot,
+            sourcePermissionHealth: PreviewMocks.sourcePermissionHealth
+        )
+        return HomeView()
+            .environment(store)
+            .environment(store.notificationRouter)
+            .environment(\.appearanceStore, store.appearance)
     }
 
     static var accessAuthorizationPreview: Bool {
@@ -2125,20 +2147,16 @@ public final class AppStore {
         )
         backgroundDelivery = installer
         await installer.install { [weak self] in
-            // The closure is `@Sendable` (runs in the global actor
-            // context). Hop to the main actor to fire-and-forget a sync
-            // on the main-actor-isolated coordinator. `Task<Void, Never>`
-            // pins the overload (throwing vs non-throwing) and the
-            // `_ =` discards the value so `MainActor.run`'s closure
-            // returns `Void` — without that, type inference flips and
-            // the closure body becomes `Task<Void, Never>` instead.
-            await MainActor.run { [weak self] in
-                _ = Task<Void, Never> { [weak self] in
-                    await self?.syncCoord.syncOne(sourceId: "apple-health:local")
-                }
-            }
+            // HealthKit counts the wake as handled when this returns, and iOS
+            // may suspend the app soon after, so it waits for the sync and
+            // its drain (or for the wake's time to run short).
+            await self?.handleHealthKitWake()
         }
         #endif
+    }
+
+    private func handleHealthKitWake() async {
+        await syncCoord.handleHealthKitWake(sourceId: "apple-health:local")
     }
 
     // MARK: - Photos opt-in / opt-out

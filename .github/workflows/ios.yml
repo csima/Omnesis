@@ -72,6 +72,15 @@ jobs:
       - name: Resolve Swift packages
         run: scripts/ci/resolve-ios-packages.sh Omnesis
 
+      - name: Wait for Xcode to discover the simulator
+        # A phone CoreSimulator reports as booted can still be missing from
+        # Xcode's destinations; xcodebuild then exits 70 before building.
+        working-directory: ios
+        run: |
+          node ../scripts/ci/wait-ios-destination.mjs "$IOS_DESTINATION" \
+            -clonedSourcePackagesDirPath build/packages \
+            -disableAutomaticPackageResolution
+
       - name: lane [ios-build]
         working-directory: ios
         run: |

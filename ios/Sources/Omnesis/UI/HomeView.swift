@@ -350,11 +350,23 @@ struct HomeView: View {
             )
         } content: {
             ZStack {
-                sectionContent
-                    // Attached to the section rather than the whole container so
-                    // the banner travels with the app it is reporting on, instead
-                    // of hanging over the menu.
-                    .safeAreaInset(edge: .top, spacing: 0) { topBanners }
+                // Attached to the section rather than the whole container so
+                // the banner travels with the app it is reporting on, instead
+                // of hanging over the menu. Stacked above the section rather
+                // than set as a `.safeAreaInset`: every section is a
+                // NavigationStack, which does not pass an outer inset on to its
+                // content, so an inset banner sat over the section's top
+                // controls — the menu button among them — instead of above
+                // them. With no banner the section still meets the top edge
+                // and keeps its safe area.
+                VStack(spacing: 0) {
+                    HomeTopBanners(
+                        accessBannerState: $accessBannerState,
+                        onReviewAccessRequest: reviewPendingAccessRequest,
+                        onOpenPermissions: { settingsDestination = .permissions(sourceId: nil) }
+                    )
+                    sectionContent
+                }
 
                 // Quick capture rises over the section rather than being
                 // presented as a full-screen cover. It still arrives from the
@@ -532,48 +544,6 @@ struct HomeView: View {
             consumePendingPrivacyApproval()
             store.homeTabChanged(selection)
             consumeForegroundConversationRequest()
-        }
-    }
-
-    /// What sits above the section: a waiting access request first, then
-    /// the permission and notification problems.
-    private var topBanners: some View {
-        VStack(spacing: 0) {
-            if let offer = accessBannerState.offer(
-                from: store.pendingAccessRequests,
-                nowMillis: Int64(Date().timeIntervalSince1970 * 1000)
-            ) {
-                AccessPendingRequestBanner(
-                    offer: offer,
-                    onReview: { reviewPendingAccessRequest(offer.newest) },
-                    onDismiss: {
-                        accessBannerState.dismiss(
-                            store.pendingAccessRequests,
-                            nowMillis: Int64(Date().timeIntervalSince1970 * 1000)
-                        )
-                    }
-                )
-            }
-            let showNotificationWarning = NotificationWarningDismissal.shouldShowWarning(
-                health: store.pushDeliveryHealth,
-                dismissed: store.notificationWarningDismissed
-            )
-            // Gateway push setup is explained in Settings → Notifications, not here:
-            // it asks whoever runs the gateway to act, and a banner over every screen
-            // hides the controls beneath it.
-            if !store.degradedSourcePermissions.isEmpty || showNotificationWarning {
-                AppAttentionBanner(
-                    problems: store.degradedSourcePermissions,
-                    notificationWarning: showNotificationWarning ? store.pushDeliveryHealth.warning : nil,
-                    onOpenPermissions: { settingsDestination = .permissions(sourceId: nil) },
-                    onOpenNotificationSettings: {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(url)
-                        }
-                    },
-                    onDismissNotification: showNotificationWarning ? { store.dismissNotificationWarning() } : nil
-                )
-            }
         }
     }
 

@@ -45,11 +45,15 @@ function fields(text, separator) {
 function eligible(output, requested) {
   let available = false;
   for (const line of output.split("\n")) {
-    if (/^\s*Available destinations for /.test(line)) {
+    // Xcode 27.1 renamed the headings: "Available"/"Ineligible destinations
+    // for" became "Destinations compatible/incompatible with".
+    if (/^\s*(?:Available destinations for|Destinations compatible with) /.test(line)) {
       available = true;
       continue;
     }
-    if (/^\s*Ineligible destinations for /.test(line)) available = false;
+    if (/^\s*(?:Ineligible destinations for|Destinations incompatible with) /.test(line)) {
+      available = false;
+    }
     const row = available && line.match(/^\s*\{(.*)\}\s*$/);
     if (!row) continue;
     const device = fields(row[1], ":");

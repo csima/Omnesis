@@ -75,4 +75,19 @@ public enum BackgroundTaskGuard {
         return result
     }
 }
+
+/// The time iOS has left this process: `SystemTimeBudget` over
+/// `UIApplication.backgroundTimeRemaining`.
+@available(iOS 17.0, *)
+public struct BackgroundTimeBudget: ExecutionBudget {
+    private let system = SystemTimeBudget {
+        await MainActor.run { UIApplication.shared.backgroundTimeRemaining }
+    }
+
+    public init() {}
+
+    public func remainingTime() async -> TimeInterval? {
+        await system.remainingTime()
+    }
+}
 #endif

@@ -35,9 +35,11 @@ import Foundation
 /// narrower than "it failed":
 ///
 ///   - A 4xx the gateway means as a verdict on the payload. Not every 4xx
-///     is: 401 and 403 are about the token, and `retryableStatuses` are
-///     explicit "ask again later" answers that a proxy in front of the
+///     is: 401 and 403 are about the token, and the retryable statuses
+///     are explicit "ask again later" answers that a proxy in front of the
 ///     gateway can emit under nothing worse than load or a slow uplink.
+///     `DeliveryClassification` holds the rule, so every delivery path
+///     reads a failure the same way.
 ///   - A `DecodingError` from the batch file is bytes on disk that do not
 ///     parse. Distinct from a *read* failure, which is routine while the
 ///     device is locked and stays transient.
@@ -51,70 +53,6 @@ import Foundation
 /// Those are states the world resolves on its own, and dropping data
 /// because a gateway was unreachable for a week would be a far worse bug
 /// than the one quarantine fixes.
-/// What a drain pass amounted to, in the terms a person asking "did my data
-/// get through?" can act on.
-///
-/// A drain reports counts, which answer a different question: `skipped: 1`
-/// and `failed: 1` are both "one batch didn't make it" but call for opposite
-/// responses — wait for the link to come back, versus stop waiting, because
-/// the gateway is refusing this payload and will refuse it again.
-public enum DrainOutcome: Hashable, Sendable {
-    /// Batches went through and none failed.
-    case delivered
-    /// The gateway answered, and refused. Retrying reproduces it.
-    case refused
-    /// The phone retained the batches because the gateway says their source is paused.
-    case paused
-    /// The gateway refused this phone's write scope for at least one source.
-    case blocked
-    /// The gateway could not be reached. Retrying later is the fix.
-    case unreachable
-    /// Batches remain without a specific failure explaining why they are still queued.
-    case stalled
-    /// Another drain already owns the buffer; this pass observed nothing.
-    case busy
-    /// Nothing was pending.
-    case idle
-    /// The drain itself failed — most commonly a dead token (401).
-    case failed
-
-    /// Classify a finished pass. `nil` stats mean the drain threw.
-    ///
-    /// Precedence is by what the user can act on: a transport failure
-    /// outranks a refusal, because "Omnesis is unreachable" is both the more
-    /// likely cause when both appear and the one with an obvious remedy.
-    public init(_ stats: Uploader.Stats?) {
-        guard let stats else {
-            self = .failed
-            return
-        }
-        // `blocked == nil` is the drain's marker for "this pass never walked
-        // the buffer" — reporting its zeroed counts as success would claim a
-        // delivery that never happened.
-        if stats.blocked == nil {
-            self = .busy
-        } else if stats.failed > 0 {
-            self = .unreachable
-        } else if stats.blocked?.isEmpty == false {
-            self = .blocked
-        } else if stats.skipped > 0 {
-            self = .refused
-        } else if stats.remaining > 0,
-                  stats.rejected.contains(where: { $0.reason == "paused" }) {
-            self = .paused
-        } else if stats.remaining > 0,
-                  !stats.rejected.isEmpty {
-            self = .stalled
-        } else if stats.uploaded > 0 {
-            self = .delivered
-        } else if stats.remaining > 0 {
-            self = .stalled
-        } else {
-            self = .idle
-        }
-    }
-}
-
 public actor Uploader {
     private final class GatewayRoute: @unchecked Sendable {
         private let lock = NSLock()
@@ -139,22 +77,22 @@ public actor Uploader {
 
     private nonisolated let gatewayRoute: GatewayRoute
     private let buffer: OfflineBuffer
+    private let budget: (any ExecutionBudget)?
     private let log = AppLog.make(category: "collector.uploader")
     private var draining = false
+    private let background: BackgroundUploads?
+    /// Background results the next drain reports, as if it had seen them:
+    /// a 401 (thrown), source rejections, and 403s by source. A 403'd
+    /// source's batches go through the foreground drain until one is
+    /// delivered, so the refusal reaches `Stats.blocked` the usual way.
+    private var backgroundUnauthorized = false
+    private var backgroundRejections: [String: String] = [:]
+    private var backgroundBlocked: Set<String> = []
 
     /// After this many transient failures back-to-back with no successful
     /// upload in between, give up the drain pass. Keeps us from burning
     /// battery hammering an offline gateway.
     private let maxConsecutiveFailures = 3
-
-    /// 4xx codes that mean "later", not "no". They arrive from the gateway's
-    /// own backpressure and from anything sitting in front of it — a reverse
-    /// proxy timing out a slow request body on a weak uplink returns 408, a
-    /// rate limiter returns 429 — so treating them as a verdict on the
-    /// payload would put the largest batches, uploaded over the worst
-    /// connections, first in line to be discarded. A 409 also occurs while
-    /// source storage is being migrated; retain the original batch for retry.
-    private static let retryableStatuses: Set<Int> = [408, 409, 425, 429]
 
     public struct Stats: Equatable, Sendable {
         public var uploaded: Int
@@ -175,11 +113,28 @@ public actor Uploader {
         /// still refused. The device's token is missing `write:<source-type>`;
         /// the data stays buffered and delivers once the scope is granted.
         public var blocked: [String]?
+        /// True when the pass stopped short of the buffer's end because too
+        /// little background time was left to start another upload. What it
+        /// left stays queued for the next drain.
+        public var stoppedForTime = false
+        /// Batches this pass handed to the background upload queue.
+        public var handedOff = 0
+        /// Batches an earlier pass handed off whose result isn't in yet,
+        /// and later batches of their sources held back behind them; this
+        /// pass left them alone.
+        public var inBackground = 0
     }
 
-    public init(gateway: GatewayClient, buffer: OfflineBuffer) {
+    public init(
+        gateway: GatewayClient,
+        buffer: OfflineBuffer,
+        budget: (any ExecutionBudget)? = nil,
+        background: BackgroundUploads? = nil
+    ) {
         gatewayRoute = GatewayRoute(gateway: gateway)
         self.buffer = buffer
+        self.budget = budget
+        self.background = background
     }
 
     /// Route future drain passes to updated pairing credentials without
@@ -202,6 +157,8 @@ public actor Uploader {
         }
         draining = true
         defer { draining = false }
+        let ids = try await buffer.listIds()
+        let pass = try await startBackgroundPass(ids: ids)
 
         var uploaded = 0
         var failed = 0
@@ -209,28 +166,44 @@ public actor Uploader {
         var quarantined = 0
         var consecutiveFailures = 0
         // sourceId → reason for any source the gateway rejected this pass.
-        var rejections: [String: String] = [:]
-        // Sources the gateway refused with 403 this pass.
-        var blocked: Set<String> = []
+        var rejections = pass.rejections
+        var holds = SourceHolds()
+        var stoppedForTime = false
+        var handedOff = 0
+        var inBackground = 0
+        var order = BackgroundOrder(pass: pass)
         let gateway = gatewayRoute.current()
 
-        let ids = try await buffer.listIds()
-        drainPass: for id in ids {
-            let effect = try await deliver(id: id, blockedSources: blocked, gateway: gateway).effect
+        drainPass: for (index, id) in ids.enumerated() {
+            switch order.place(of: id, at: index) {
+            case .send: break
+            case .withSystem:
+                inBackground += 1
+                continue drainPass
+            case .holdRest:
+                inBackground += ids.count - index
+                break drainPass
+            }
+            // An upload that iOS suspends halfway is sent again in full on the
+            // next wake, so one that can't finish only spends the time left.
+            guard await budget?.allows(ExecutionMargin.upload) ?? true else {
+                stoppedForTime = true
+                log.notice("Stopping drain: too little background time left for another upload")
+                break drainPass
+            }
+            let effect = try await deliver(
+                id: id, holds: holds, waitingSources: order.waiting, gateway: gateway, handOff: pass.handOff
+            ).effect
             uploaded += effect.uploaded
+            handedOff += effect.handedOff
+            inBackground += order.note(effect)
             failed += effect.failed
             skipped += effect.skipped
-            if effect.resetsConsecutiveFailures {
-                consecutiveFailures = 0
-            } else {
-                consecutiveFailures += effect.failed
-            }
+            consecutiveFailures = effect.resetsConsecutiveFailures ? 0 : consecutiveFailures + effect.failed
             if let rejection = effect.rejection {
                 rejections[rejection.sourceId] = rejection.reason
             }
-            if let sourceId = effect.blockedSourceId {
-                blocked.insert(sourceId)
-            }
+            holds.note(effect)
             if effect.isPermanentFailure, await notePermanentFailure(id: id) {
                 quarantined += 1
             }
@@ -243,93 +216,34 @@ public actor Uploader {
         }
 
         let remaining = try await buffer.count()
-        if uploaded > 0 || failed > 0 || skipped > 0 {
-            let counts = "\(uploaded) uploaded, \(skipped) skipped, \(failed) failed, "
+        if uploaded > 0 || failed > 0 || skipped > 0 || handedOff > 0 {
+            let counts = "\(uploaded) uploaded, \(handedOff) handed off, \(skipped) skipped, \(failed) failed, "
                 + "\(quarantined) quarantined, \(remaining) remaining"
             log.notice("Drain pass: \(counts, privacy: .public)")
         }
-        let rejected = rejections
-            .map { PushRejection(sourceId: $0.key, reason: $0.value) }
-            .sorted { $0.sourceId < $1.sourceId }
         return Stats(
             uploaded: uploaded,
             failed: failed,
             skipped: skipped,
             remaining: remaining,
-            rejected: rejected,
-            blocked: blocked.sorted()
+            rejected: rejections
+                .map { PushRejection(sourceId: $0.key, reason: $0.value) }
+                .sorted { $0.sourceId < $1.sourceId },
+            blocked: holds.blocked.sorted(),
+            stoppedForTime: stoppedForTime,
+            handedOff: handedOff,
+            inBackground: inBackground
         )
-    }
-
-    private struct BatchEffect {
-        var uploaded = 0
-        var failed = 0
-        var skipped = 0
-        var resetsConsecutiveFailures = false
-        var isPermanentFailure = false
-        var rejection: PushRejection?
-        var blockedSourceId: String?
-    }
-
-    /// What one batch amounted to. Each result projects a small, declarative
-    /// effect that the drain loop folds into its pass-wide state.
-    private enum BatchResult {
-        case uploaded
-        /// Delivered, but the queued file could not be deleted afterwards.
-        case deliveredButRetained
-        /// The gateway declined the source itself (removed / paused).
-        case sourceRejected(sourceId: String, reason: String)
-        /// 403 — this device's token lacks the source's write scope. The
-        /// source id is absent when the batch file could not be read.
-        case sourceBlocked(sourceId: String?)
-        /// Repeating cannot change the result; counts against the batch's
-        /// quarantine budget.
-        case permanentlyRefused
-        /// The world may fix this on its own; never costs the batch data.
-        case transientFailure
-        /// Replicated deletion was deliberately refused to this non-holder.
-        case replicaDeletionDeferred
-        /// The file went away between listing and loading it.
-        case vanished
-        /// An earlier batch of the same source was refused with 403 this
-        /// pass, so this one was not attempted.
-        case skippedBlockedSource
-
-        var effect: BatchEffect {
-            switch self {
-            case .uploaded:
-                BatchEffect(uploaded: 1, resetsConsecutiveFailures: true)
-            case .deliveredButRetained:
-                BatchEffect(uploaded: 1, resetsConsecutiveFailures: true, isPermanentFailure: true)
-            case .sourceRejected(let sourceId, let reason):
-                BatchEffect(
-                    resetsConsecutiveFailures: true,
-                    rejection: PushRejection(sourceId: sourceId, reason: reason)
-                )
-            case .sourceBlocked(let sourceId):
-                BatchEffect(skipped: 1, resetsConsecutiveFailures: true, blockedSourceId: sourceId)
-            case .permanentlyRefused:
-                BatchEffect(skipped: 1, resetsConsecutiveFailures: true, isPermanentFailure: true)
-            case .transientFailure:
-                BatchEffect(failed: 1)
-            case .replicaDeletionDeferred:
-                // Another healthy replica owns deletion authority. Retaining
-                // the batch is expected coordination, not a failure.
-                BatchEffect(resetsConsecutiveFailures: true)
-            case .vanished:
-                BatchEffect()
-            case .skippedBlockedSource:
-                BatchEffect(skipped: 1)
-            }
-        }
     }
 
     /// Attempt one batch. Throws only on 401 — the token itself is dead, so
     /// there is no point continuing the pass.
     private func deliver(
         id: String,
-        blockedSources: Set<String>,
-        gateway: GatewayClient
+        holds: SourceHolds,
+        waitingSources: Set<String>,
+        gateway: GatewayClient,
+        handOff: Bool
     ) async throws
         -> BatchResult {
         // Set once the batch file is readable, so the 403 case can attribute
@@ -347,8 +261,22 @@ public actor Uploader {
             // sends analytics before documents — so a source whose analytics
             // rows are accepted but whose documents are refused would re-send
             // those rows on every batch.
-            if blockedSources.contains(batch.sourceId) {
+            if holds.blocked.contains(batch.sourceId) {
                 return .skippedBlockedSource
+            }
+            if waitingSources.contains(batch.sourceId) {
+                return .heldBehindBackground(sourceId: batch.sourceId)
+            }
+            // A batch sent past an earlier one of its source that failed would
+            // land first: a deletion before the insert it follows, a newer row
+            // before an older one.
+            if holds.fenced.contains(batch.sourceId) {
+                return .heldBehindFailure
+            }
+            if handOff, !backgroundBlocked.contains(batch.sourceId),
+               let endpoint = BackgroundUploadEndpoint(batch: batch),
+               await handToBackground(batch, endpoint: endpoint, gateway: gateway) {
+                return .handedOff(sourceId: batch.sourceId)
             }
 
             let pushOutcome = try await pushWithReplicaLease(batch, gateway: gateway)
@@ -369,6 +297,7 @@ public actor Uploader {
                 return .sourceRejected(sourceId: batch.sourceId, reason: reason)
             }
 
+            backgroundBlocked.remove(batch.sourceId)
             do {
                 try await buffer.remove(id: batch.id)
                 return .uploaded
@@ -382,10 +311,20 @@ public actor Uploader {
                 )
                 return .deliveredButRetained
             }
-        } catch GatewayClient.Error.unauthorized {
+        } catch {
+            return try classify(error, id: id, batchSourceId: batchSourceId)
+        }
+    }
+
+    /// What a failed delivery means for the batch, by the rule every
+    /// delivery path shares (`DeliveryClassification`). Throws only on 401.
+    private func classify(_ error: any Error, id: String, batchSourceId: String?) throws -> BatchResult {
+        let failure = DeliveryClassification.failure(from: error)
+        switch DeliveryClassification.verdict(for: failure, batchAge: Batch.age(ofId: id)) {
+        case .reauthorize:
             log.error("Gateway returned 401 during drain — needs re-pair")
             throw GatewayClient.Error.unauthorized
-        } catch GatewayClient.Error.forbidden {
+        case .blocked:
             // Unauthorized for THIS source only — the token is otherwise
             // valid. Leave the batch on disk (it delivers once the scope is
             // granted) and keep draining so other sources aren't stranded
@@ -399,39 +338,19 @@ public actor Uploader {
                 log.warning("Gateway returned 403 for an unreadable batch \(id, privacy: .public)")
             }
             return .sourceBlocked(sourceId: batchSourceId)
-        } catch GatewayClient.Error.serverError(let status, let body) where (400 ..< 500).contains(status) {
-            // Persistent client-side error — move on so the rest of the queue
-            // can still drain. Batch stays on disk; a future drain retries it
-            // (e.g. after the gateway schema catches up) until it runs out of
-            // budget.
+        case .refuse:
+            // Move on so the rest of the queue can still drain. The batch
+            // stays on disk; a future drain retries it (e.g. after the
+            // gateway schema catches up) until it runs out of budget.
             log.warning(
-                "Skipping batch \(id, privacy: .public) after \(status, privacy: .public): \(body, privacy: .private)"
+                "Batch \(id, privacy: .public) refused: \(String(describing: failure), privacy: .private)"
             )
-            return Self.retryableStatuses.contains(status) ? .transientFailure : .permanentlyRefused
-        } catch let error as DecodingError {
-            // The bytes were read and do not parse. Unlike a read failure —
-            // routine while the device is locked — no amount of retrying turns
-            // them back into a batch.
-            log.warning(
-                "Batch \(id, privacy: .public) is not decodable: \(String(describing: error), privacy: .private)"
+            return .permanentlyRefused(sourceId: batchSourceId)
+        case .retry:
+            log.notice(
+                "Batch \(id, privacy: .public) not delivered, retrying next drain: \(String(describing: failure), privacy: .private)"
             )
-            return .permanentlyRefused
-        } catch GatewayClient.Error.decoding(let detail) {
-            // The gateway answered something this app can't read. Transient,
-            // because the likeliest causes are: a captive portal returning an
-            // HTML login page with a 200, a proxy error page, or a gateway
-            // restarting behind one — all of which clear on their own. Only
-            // a genuine protocol mismatch would repeat, and paying for that
-            // with data is the worse trade.
-            log.warning(
-                "Batch \(id, privacy: .public) got an unreadable gateway response: \(detail, privacy: .private)"
-            )
-            return .transientFailure
-        } catch {
-            log.warning(
-                "Batch \(id, privacy: .public) undeliverable: \(String(describing: error), privacy: .private)"
-            )
-            return .transientFailure
+            return .transientFailure(sourceId: batchSourceId)
         }
     }
 
@@ -528,5 +447,269 @@ public actor Uploader {
             rejectedReason = resp.rejected.first { $0.sourceId == batch.sourceId }?.reason
         }
         return PushOutcome(rejectedReason: rejectedReason, deletionDeferred: deletionDeferred)
+    }
+}
+
+// MARK: - Background uploads
+
+extension Uploader {
+    private struct BackgroundPass {
+        /// Source rejections background results reported since the last pass.
+        let rejections: [String: String]
+        /// Batches the system holds a task for, with their source: from the
+        /// record of hand-offs, and from the tasks themselves whatever the
+        /// record says.
+        let outstanding: [String: String]
+        /// Where in the queue the batches stop being sendable: the first a
+        /// task is out for whose source can't be read, or the start when a
+        /// task is out for a batch no longer queued. It and every later
+        /// batch wait.
+        let holdFrom: Int?
+        let handOff: Bool
+    }
+
+    /// Where a batch stands against the background queue this pass.
+    private enum BackgroundPlace {
+        case send
+        /// Handed off by an earlier pass; its result isn't in yet.
+        case withSystem
+        /// The record can't say whose batches are out: this batch and every
+        /// later one wait behind the earliest the system holds.
+        case holdRest
+    }
+
+    /// Delivery in order per source. The system finishes background tasks
+    /// in no particular order, so while a batch of a source is with it,
+    /// that source's later batches wait: a deletion sent ahead of the
+    /// insert before it would be undone when the insert lands, and so
+    /// would a newer version of a row by an older one.
+    private struct BackgroundOrder {
+        let pass: BackgroundPass
+        /// Sources with a batch in the background queue.
+        private(set) var waiting: Set<String> = []
+
+        init(pass: BackgroundPass) {
+            self.pass = pass
+        }
+
+        mutating func place(of id: String, at index: Int) -> BackgroundPlace {
+            if let holdFrom = pass.holdFrom, index >= holdFrom { return .holdRest }
+            if let sourceId = pass.outstanding[id] {
+                waiting.insert(sourceId)
+                return .withSystem
+            }
+            return .send
+        }
+
+        /// Note a batch's effect; returns the batches it held back.
+        mutating func note(_ effect: BatchEffect) -> Int {
+            if let sourceId = effect.waitingSourceId { waiting.insert(sourceId) }
+            return effect.heldBack
+        }
+    }
+
+    /// What background uploads bring to a drain pass over `ids`: results
+    /// recorded since the last one, the batches still with their task, and
+    /// whether this pass hands batches off. Throws the 401 a background
+    /// upload got.
+    private func startBackgroundPass(ids: [String]) async throws -> BackgroundPass {
+        if backgroundUnauthorized {
+            backgroundUnauthorized = false
+            log.error("Gateway returned 401 to a background upload — needs re-pair")
+            throw GatewayClient.Error.unauthorized
+        }
+        let live = await reconcileBackgroundUploads()
+        let rejections = backgroundRejections
+        backgroundRejections = [:]
+        // Hand-offs need the record of them; while it can't be read or
+        // decoded, none are made.
+        let marks = await background == nil ? [:] : (try? buffer.backgroundUploadMarks())
+        var outstanding = (marks ?? [:]).mapValues(\.sourceId)
+        var holdFrom: Int?
+        // The tasks' own tags say which batches are out, whatever the record
+        // says: a record lost or written over must not send a batch again,
+        // or the rest of its source, while its task can still land.
+        let position = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        for tag in live.compactMap(BackgroundUploadTag.init) where outstanding[tag.batchId] == nil {
+            guard let index = position[tag.batchId] else {
+                holdFrom = 0
+                continue
+            }
+            if let sourceId = try? await buffer.load(id: tag.batchId)?.sourceId {
+                outstanding[tag.batchId] = sourceId
+            } else {
+                holdFrom = min(holdFrom ?? index, index)
+            }
+        }
+        let handOff = await shouldHandOff() && marks != nil
+        return BackgroundPass(rejections: rejections, outstanding: outstanding, holdFrom: holdFrom, handOff: handOff)
+    }
+
+    /// Hand batches off this pass only when the person turned it on and the
+    /// phone is unlocked, so the outbox file is readable when the upload
+    /// starts. Otherwise every batch takes the foreground path.
+    private func shouldHandOff() async -> Bool {
+        guard let background, background.isEnabled() else { return false }
+        return await background.protectedDataAvailable()
+    }
+
+    /// Write the batch's one request body to the outbox, mark the batch, and
+    /// start the task — in that order, so a result can never arrive for a
+    /// batch not yet marked. False when any step fails; the batch then takes
+    /// the foreground path in the same pass.
+    private func handToBackground(
+        _ batch: Batch,
+        endpoint: BackgroundUploadEndpoint,
+        gateway: GatewayClient
+    ) async
+        -> Bool {
+        guard let background else { return false }
+        let tag = BackgroundUploadTag(batchId: batch.id, endpoint: endpoint)
+        do {
+            let (request, body) = try gateway.backgroundUploadRequest(for: batch, to: endpoint)
+            let file = try await buffer.prepareBackgroundUpload(body, tag: tag, sourceId: batch.sourceId)
+            background.transport.upload(request, fromFile: file, tag: tag.description)
+            return true
+        } catch {
+            log.notice(
+                "Batch \(batch.id, privacy: .public) not handed off: \(String(describing: error), privacy: .private)"
+            )
+            try? await buffer.finishBackgroundUpload(tag: tag)
+            return false
+        }
+    }
+
+    /// Forget hand-offs whose task the system no longer holds — lost across
+    /// a relaunch, or whose result arrived while the record couldn't be
+    /// read — so their batches go back to the ordinary queue. Every drain:
+    /// asking the system is cheap, and a mark nothing clears would hold its
+    /// batch back for good. Returns the tags of the tasks the system holds.
+    private func reconcileBackgroundUploads() async -> Set<String> {
+        guard let background else { return [] }
+        let live = await background.transport.pendingTags()
+        do {
+            let cleared = try await buffer.reconcileBackgroundUploads(liveTags: live)
+            if cleared > 0 {
+                log.notice("\(cleared, privacy: .public) background uploads lost their task; queued again")
+            }
+        } catch {
+            // The record can't be read (a locked phone); the next drain retries.
+        }
+        return live
+    }
+
+    /// Record what a background upload came to, by the same rule the
+    /// foreground drain uses. A result for a hand-off the batch's mark no
+    /// longer names — from before a re-pair, or superseded — changes
+    /// nothing, except that a delivery still removes the delivered batch.
+    ///
+    /// A result is only acted on once it can be attributed. While the
+    /// record of hand-offs can't be read (a locked phone), nothing is
+    /// known: the batch and its mark stay, and once the task is gone a
+    /// later drain finds the mark without a task and sends the batch again.
+    /// The same holds for a delivery whose source can be read from neither
+    /// the mark nor the batch: an answer that rejects a source can only be
+    /// told from a delivery by knowing which source it was for.
+    public func finishBackgroundUpload(_ completion: BackgroundUploadCompletion) async {
+        guard let tag = BackgroundUploadTag(completion.tag) else { return }
+        let marks: [String: BackgroundUploadMark]
+        do {
+            marks = try await buffer.backgroundUploadMarks()
+        } catch {
+            log.notice("Background upload of \(tag.batchId, privacy: .public) finished while its record was unreadable; kept")
+            return
+        }
+        let mark = marks[tag.batchId]
+        let current = mark?.tag == completion.tag
+
+        guard case .response(let status, let body) = completion.outcome else {
+            if current { try? await buffer.finishBackgroundUpload(tag: tag) }
+            log.notice("Background upload of \(tag.batchId, privacy: .public) got no answer; queued again")
+            return
+        }
+        if let failure = DeliveryClassification.failure(status: status, body: body) {
+            try? await buffer.finishBackgroundUpload(tag: tag)
+            if current { await apply(failure, to: tag, sourceId: mark?.sourceId) }
+            return
+        }
+        let sourceId: String
+        do {
+            guard let known = try await source(of: tag, mark: mark) else {
+                // No mark and no batch: nothing left to settle.
+                try? await buffer.finishBackgroundUpload(tag: tag)
+                return
+            }
+            sourceId = known
+        } catch {
+            log.notice("Background upload of \(tag.batchId, privacy: .public) can't be attributed yet; kept")
+            return
+        }
+        let rejection: PushRejection?
+        do {
+            rejection = try Self.rejection(in: body, from: tag.endpoint, sourceId: sourceId)
+        } catch {
+            // Unreadable answer: retried, as in the foreground.
+            if current { try? await buffer.finishBackgroundUpload(tag: tag) }
+            return
+        }
+        if let rejection {
+            try? await buffer.finishBackgroundUpload(tag: tag)
+            guard current else { return }
+            backgroundRejections[rejection.sourceId] = rejection.reason
+            if rejection.reason == "removed" {
+                try? await buffer.remove(id: tag.batchId)
+            }
+            return
+        }
+        // Delivered. Removing the batch also clears its mark.
+        do {
+            try await buffer.remove(id: tag.batchId)
+            try? await buffer.finishBackgroundUpload(tag: tag)
+        } catch {
+            if current {
+                try? await buffer.finishBackgroundUpload(tag: tag)
+                _ = await notePermanentFailure(id: tag.batchId)
+            }
+        }
+    }
+
+    /// The source a hand-off was for: its mark's, else its batch's. `nil`
+    /// when neither is left; throws when the batch can't be read.
+    private func source(of tag: BackgroundUploadTag, mark: BackgroundUploadMark?) async throws -> String? {
+        if let mark { return mark.sourceId }
+        return try await buffer.load(id: tag.batchId)?.sourceId
+    }
+
+    /// Act on a background upload's failure as the foreground drain would
+    /// on the same answer.
+    private func apply(_ failure: DeliveryFailure, to tag: BackgroundUploadTag, sourceId: String?) async {
+        switch DeliveryClassification.verdict(for: failure, batchAge: Batch.age(ofId: tag.batchId)) {
+        case .reauthorize:
+            backgroundUnauthorized = true
+        case .blocked:
+            if let sourceId { backgroundBlocked.insert(sourceId) }
+        case .refuse:
+            log.warning(
+                "Batch \(tag.batchId, privacy: .public) refused: \(String(describing: failure), privacy: .private)"
+            )
+            _ = await notePermanentFailure(id: tag.batchId)
+        case .retry:
+            log.notice("Background upload of \(tag.batchId, privacy: .public) will be retried")
+        }
+    }
+
+    /// This source's rejection in an ingest answer, read with the same types
+    /// the foreground path decodes.
+    private static func rejection(
+        in body: Data,
+        from endpoint: BackgroundUploadEndpoint,
+        sourceId: String
+    ) throws
+        -> PushRejection? {
+        let rejected = switch endpoint {
+        case .analytics: try JSONDecoder().decode(AnalyticsIngestResponse.self, from: body).rejected
+        case .documents: try JSONDecoder().decode(DocumentIngestResponse.self, from: body).rejected
+        }
+        return rejected.first { $0.sourceId == sourceId }
     }
 }

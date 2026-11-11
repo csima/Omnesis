@@ -4,6 +4,7 @@
 import Foundation
 
 #if canImport(SwiftUI) && canImport(UIKit)
+import UIKit
 #if canImport(BackgroundTasks)
 import BackgroundTasks
 #endif
@@ -87,6 +88,8 @@ final class SyncCoordinator {
 
     /// Persistence key for `lastSyncAt` in UserDefaults.
     static let lastSyncAtKey = "omnesis.sync.lastSyncAt"
+    /// The source the Apple Health history task reads.
+    nonisolated static let appleHealthSourceId = "apple-health:local"
 
     @ObservationIgnored
     private(set) var core: CollectorCore?
@@ -131,6 +134,11 @@ final class SyncCoordinator {
     @ObservationIgnored
     private let bufferFileManager: FileManager
 
+    /// The background upload queue batches are handed to, when the person
+    /// turns that on. `nil` where there is none (the macOS logic lane).
+    @ObservationIgnored
+    private let backgroundSession: BackgroundUploadSession?
+
     #if canImport(BackgroundTasks)
     @ObservationIgnored
     private(set) var bgCoordinator: BackgroundTaskCoordinator?
@@ -155,11 +163,16 @@ final class SyncCoordinator {
         bufferFileManager: FileManager = .default,
         gatewayFactory: @escaping (Pairing) -> GatewayClient = {
             GatewayClient(baseURL: $0.url, token: $0.token)
-        }
+        },
+        backgroundSession: BackgroundUploadSession? = SyncCoordinator.defaultBackgroundSession
     ) {
         self.bufferDirectoryProvider = bufferDirectoryProvider
         self.bufferFileManager = bufferFileManager
         self.gatewayFactory = gatewayFactory
+        self.backgroundSession = backgroundSession
+        // Reattach early, so results of uploads that finished while the app
+        // wasn't running are delivered (and held until an uploader exists).
+        backgroundSession?.activate()
 
         // Rehydrate `lastSyncAt` so the Status view shows "Last synced N ago"
         // after a cold launch instead of reverting to "Not synced yet".
@@ -188,6 +201,16 @@ final class SyncCoordinator {
             photosBackfillHandler: { [weak self] in
                 guard let handler = await MainActor.run(body: { self?.onPhotosBackfillRequested }) else { return }
                 await handler()
+            },
+            healthHistoryProbe: { [weak self] in
+                guard let core = await MainActor.run(body: { self?.core }) else { return .finished }
+                return await core.historyStatus(sourceId: SyncCoordinator.appleHealthSourceId)
+            },
+            healthHistoryHandler: { [weak self] in
+                guard let core = await MainActor.run(body: { self?.core }) else { return .finished }
+                let status = await core.readPendingHistory(sourceId: SyncCoordinator.appleHealthSourceId)
+                await self?.refreshBufferCount()
+                return status
             }
         )
         #endif
@@ -217,6 +240,40 @@ final class SyncCoordinator {
         onPhotosBackfillRequested = handler
     }
 
+    // MARK: - Background uploads
+
+    nonisolated static var defaultBackgroundSession: BackgroundUploadSession? {
+        BackgroundUploadSession.shared
+    }
+
+    /// An uploader for a new pipeline, with the background queue's results
+    /// routed to it.
+    private func makeUploader(gateway: GatewayClient, buffer: OfflineBuffer) -> Uploader {
+        let uploader = Uploader(
+            gateway: gateway,
+            buffer: buffer,
+            budget: BackgroundTimeBudget(),
+            background: backgroundSession.map(Self.backgroundUploads(_:))
+        )
+        backgroundSession?.setHandler { [weak self, weak uploader] completion in
+            await uploader?.finishBackgroundUpload(completion)
+            await self?.refreshBufferCount()
+        }
+        return uploader
+    }
+
+    /// Hand-offs follow the person's setting, and only while the phone is
+    /// unlocked, so the outbox file is readable when the upload starts.
+    private nonisolated static func backgroundUploads(_ session: BackgroundUploadSession) -> BackgroundUploads {
+        BackgroundUploads(
+            transport: session,
+            isEnabled: { BackgroundUploadSettings.isEnabled(UserDefaults.standard) },
+            protectedDataAvailable: {
+                await MainActor.run { UIApplication.shared.isProtectedDataAvailable }
+            }
+        )
+    }
+
     // MARK: - Collector rebuild / teardown
 
     /// Build a fresh `CollectorCore` for the given pairing and source list.
@@ -234,6 +291,8 @@ final class SyncCoordinator {
         let identity = DeliveryIdentity(pairing: pairing)
         if let previousIdentity = deliveryIdentity, previousIdentity != identity {
             clearCollectorState(invalidateDelivery: true)
+            await backgroundSession?.cancelAll()
+            guard replacementRequestGeneration == requestGeneration else { return }
             let directory = bufferDirectoryProvider()
             do {
                 try bufferFileManager.removeItem(at: directory)
@@ -264,7 +323,7 @@ final class SyncCoordinator {
             createdPipeline = false
         } else {
             buffer = OfflineBuffer(directory: bufferDirectoryProvider(), fileManager: bufferFileManager)
-            uploader = Uploader(gateway: gateway, buffer: buffer)
+            uploader = makeUploader(gateway: gateway, buffer: buffer)
             deliveryBuffer = buffer
             self.uploader = uploader
             createdPipeline = true
@@ -292,6 +351,7 @@ final class SyncCoordinator {
             uploader: uploader,
             sources: sources,
             prepareSource: Self.sourcePreparation(pairing: pairing),
+            budget: BackgroundTimeBudget(),
             onProgress: { [weak self] progress in
                 await MainActor.run {
                     guard self?.collectorGeneration == generation else { return }
@@ -331,6 +391,7 @@ final class SyncCoordinator {
         await previousCore?.retireAndWait()
         guard replacementRequestGeneration == requestGeneration else { return }
         clearCollectorState(invalidateDelivery: true)
+        await backgroundSession?.cancelAll()
     }
 
     private func clearCollectorState(invalidateDelivery: Bool) {
@@ -338,6 +399,9 @@ final class SyncCoordinator {
         collectorGeneration += 1
         if invalidateDelivery {
             deliveryBuffer?.invalidate()
+            // Results of the old pairing's uploads wait for the next
+            // uploader, which finds no hand-off of theirs and ignores them.
+            backgroundSession?.setHandler(nil)
         }
         core = nil
         buffer = nil
@@ -447,6 +511,30 @@ final class SyncCoordinator {
         let summary = await BackgroundTaskGuard.run(name: "omnesis.source-sync") {
             await core.sync(sourceId: sourceId)
         }
+        await recordSourceSync(summary, core: core, generation: generation)
+    }
+
+    /// Handle a HealthKit observer wake: sync the source and drain what it
+    /// buffered, under a background-task assertion, returning when that is
+    /// done or the wake's time is nearly up. The observer reports the wake
+    /// handled when this returns, so iOS keeps the app running until then.
+    ///
+    /// A wake that lands while the source is already syncing waits for the
+    /// follow-up pass it queues, since the running pass may have read its
+    /// page before the new samples arrived.
+    func handleHealthKitWake(sourceId: String) async {
+        guard let core else { return }
+        let generation = collectorGeneration
+        let budget = BackgroundTimeBudget()
+        await BackgroundTaskGuard.run(name: "omnesis.healthkit-wake") {
+            await BackgroundWake.run(budget: budget) { [weak self] in
+                let summary = await core.sync(sourceId: sourceId, awaitingFollowUp: true)
+                await self?.recordSourceSync(summary, core: core, generation: generation)
+            }
+        }
+    }
+
+    private func recordSourceSync(_ summary: CollectorCore.SyncSummary?, core: CollectorCore, generation: Int) async {
         guard collectorGeneration == generation, self.core === core else { return }
         if let observed = summary?.blocked {
             blockedSourceIds = observed.sorted()
@@ -467,6 +555,9 @@ final class SyncCoordinator {
         // Scheduled unconditionally — the handler itself no-ops when
         // Photos isn't enabled (see `onPhotosBackfillRequested`).
         bgCoordinator?.scheduleNextPhotosBackfill()
+        // Only while Apple Health has history left: the core drives the
+        // source only while it is on, and says no before pairing.
+        await bgCoordinator?.scheduleHealthHistoryIfPending()
         #endif
     }
 
