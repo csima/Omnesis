@@ -777,10 +777,16 @@ describe("latest iOS destination discovery", () => {
   });
 });
 
-// Run the actual wrapper through startup failure without Xcode or a gateway.
-// Child stubs record whether readiness failure cleans up and preserves evidence.
+// Run the actual wrapper without Xcode or a gateway. Child stubs record whether
+// readiness failure cleans up and preserves evidence, and how the run is started.
 describe("iOS live gateway startup", () => {
-  function failedStartup({ destination, simulatorFails = false, discoveryFails = false } = {}) {
+  function runWrapper({
+    destination,
+    simulatorFails = false,
+    discoveryFails = false,
+    gatewayStarts = false,
+    xcodebuildExits = [],
+  } = {}) {
     const fixture = mkdtempSync(join(tmpdir(), "ios-e2e-startup-"));
     try {
       const scripts = join(fixture, "scripts");
@@ -803,6 +809,10 @@ describe("iOS live gateway startup", () => {
           echo "discover:$2" >> "$TEST_CALLS"
           ${discoveryFails ? "exit 71" : "exit 0"}
         fi
+        if [[ "$1" == */verify-ios-e2e-results.mjs ]]; then
+          echo "verify" >> "$TEST_CALLS"
+          exit 0
+        fi
         echo "prepare:$*" >> "$TEST_CALLS"
         ${simulatorFails ? "exit 70" : 'echo "00000000-0000-0000-0000-000000000017"'}
       `,
@@ -815,12 +825,34 @@ describe("iOS live gateway startup", () => {
         echo "$1:$OMNESIS_SYNTH_READY_TIMEOUT" >> "$TEST_CALLS"
         if [[ "$1" == start ]]; then
           mkdir -p "$OMNESIS_CONFIG_DIR/logs"
-          echo "synthetic startup diagnostic" > "$OMNESIS_CONFIG_DIR/logs/gateway.stdout.log"
+          ${
+            gatewayStarts
+              ? 'echo "synthetic-token" > "$OMNESIS_CONFIG_DIR/token"; exit 0'
+              : `echo "synthetic startup diagnostic" > "$OMNESIS_CONFIG_DIR/logs/gateway.stdout.log"
           echo "SYNTH_GATEWAY_NOT_READY" >&2
-          exit 23
+          exit 23`
+          }
         fi
       `,
       );
+      executable(join(bin, "curl"), `echo '{"items":[{}]}'`);
+      // Each xcodebuild run takes the next exit status; 70 is Xcode's
+      // pre-build "device not found" failure, any other is the run's own.
+      executable(
+        join(bin, "xcodebuild"),
+        `
+        count=$(( $(cat "$TEST_CALLS.xcodebuild" 2>/dev/null || echo 0) + 1 ))
+        echo "$count" > "$TEST_CALLS.xcodebuild"
+        echo "xcodebuild:$1" >> "$TEST_CALLS"
+        exits=(${xcodebuildExits.join(" ")} 0)
+        status="\${exits[count - 1]:-0}"
+        if [[ "$status" == 70 ]]; then
+          echo "xcodebuild: error: Unable to find a device matching the provided destination specifier:" >&2
+        fi
+        exit "$status"
+      `,
+      );
+      executable(join(bin, "xcrun"), 'echo "results:$1" >> "$TEST_CALLS"; echo "{}"');
       const env = {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
@@ -839,7 +871,7 @@ describe("iOS live gateway startup", () => {
         ...result,
         calls: readFileSync(calls, "utf8").trim().split("\n"),
         log:
-          simulatorFails || discoveryFails
+          simulatorFails || discoveryFails || gatewayStarts
             ? undefined
             : readFileSync(join(config, "logs/gateway.stdout.log"), "utf8"),
       };
@@ -849,7 +881,7 @@ describe("iOS live gateway startup", () => {
   }
 
   it("resolves an available iPhone before startup and cleans up failed startup", () => {
-    const result = failedStartup();
+    const result = runWrapper();
     expect(result.status).toBe(1);
     expect(result.calls[0]).toMatch(/prepare:.*scripts\/ci\/prepare-ios-simulator.mjs$/);
     expect(result.calls.slice(1)).toEqual([
@@ -865,7 +897,7 @@ describe("iOS live gateway startup", () => {
   });
 
   it("honors a destination already prepared by CI", () => {
-    const result = failedStartup({
+    const result = runWrapper({
       destination: "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000018",
     });
     expect(result.status).toBe(1);
@@ -879,20 +911,74 @@ describe("iOS live gateway startup", () => {
   });
 
   it("does not spawn a gateway when simulator preparation fails", () => {
-    const result = failedStartup({ simulatorFails: true });
+    const result = runWrapper({ simulatorFails: true });
     expect(result.status).toBe(70);
     expect(result.calls).toHaveLength(1);
     expect(result.calls[0]).toMatch(/^prepare:/);
   });
 
   it("does not spawn a gateway when Xcode cannot discover the prepared phone", () => {
-    const result = failedStartup({ discoveryFails: true });
+    const result = runWrapper({ discoveryFails: true });
     expect(result.status).toBe(71);
     expect(result.calls.map((call) => call.split(":")[0])).toEqual([
       "prepare",
       "project",
       "packages",
       "discover",
+    ]);
+  });
+
+  const started = [
+    "project",
+    "packages",
+    "discover:platform=iOS Simulator,id=00000000-0000-0000-0000-000000000019",
+    "start:300",
+  ];
+  const destination = "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000019";
+
+  it("checks Xcode still lists the phone after the gateway boots", () => {
+    const result = runWrapper({ destination, gatewayStarts: true });
+    expect(result.status).toBe(0);
+    expect(result.calls).toEqual([
+      ...started,
+      `discover:${destination}`,
+      "xcodebuild:test",
+      "results:xcresulttool",
+      "verify",
+      "stop:300",
+    ]);
+  });
+
+  it("waits and starts once more when Xcode loses the phone before building", () => {
+    const result = runWrapper({ destination, gatewayStarts: true, xcodebuildExits: [70] });
+    expect(result.status).toBe(0);
+    expect(result.calls).toEqual([
+      ...started,
+      `discover:${destination}`,
+      "xcodebuild:test",
+      `discover:${destination}`,
+      "xcodebuild:test",
+      "results:xcresulttool",
+      "verify",
+      "stop:300",
+    ]);
+  });
+
+  it("starts at most twice when Xcode keeps losing the phone", () => {
+    const result = runWrapper({ destination, gatewayStarts: true, xcodebuildExits: [70, 70] });
+    expect(result.status).toBe(70);
+    expect(result.calls.filter((call) => call === "xcodebuild:test")).toHaveLength(2);
+    expect(result.calls.at(-1)).toBe("stop:300");
+  });
+
+  it("never reruns failing tests", () => {
+    const result = runWrapper({ destination, gatewayStarts: true, xcodebuildExits: [65] });
+    expect(result.status).toBe(65);
+    expect(result.calls).toEqual([
+      ...started,
+      `discover:${destination}`,
+      "xcodebuild:test",
+      "stop:300",
     ]);
   });
 
