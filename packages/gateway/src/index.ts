@@ -3255,6 +3255,18 @@ const backfillBundle = createBackfillTasks(
       });
       return provider ? withSpendRecording(provider, recordCompleterSpend("token-identity")) : null;
     },
+    // The merge judge asks the decision model, which is not a Brain feature:
+    // it runs whenever an operator turns it on and a decision model is assigned.
+    getDecision: () => decisionService.get(),
+    getMergeJudgeMode: () => configStore.get().gateway?.backfill?.mergeCandidates?.judge ?? "off",
+    recordMergeJudgeSpend: (modelId, inputTokens) =>
+      recordDecisionSpend(
+        writeGate,
+        cognitionSpendDay(Date.now()),
+        "merge-judge",
+        modelId,
+        inputTokens,
+      ),
     readDb: db,
     backgroundWorkerNice: runtime.backgroundWorkerNice,
     ...(storageEncryption.mainDbKey ? { derivedStoreKey: storageEncryption.mainDbKey } : {}),
