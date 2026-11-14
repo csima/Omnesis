@@ -211,12 +211,8 @@ export function scoreMergeCandidates(
     const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * headPercentile));
     headThreshold = sorted[idx];
   }
-  // With no interaction scores at all (no self person yet, or scores not yet
-  // computed) nobody is in the head, and gating on it would drop every pair:
-  // judge every pair instead, as with the gate off.
-  const gated = headPercentile > 0 && data.scoreRows.some((r) => r.score > 0);
   const isHead = (personId: string): boolean => {
-    if (!gated) return true;
+    if (headPercentile <= 0) return true;
     const s = personScores.get(personId) ?? 0;
     return s >= headThreshold && s > 0;
   };
@@ -380,7 +376,7 @@ export function scoreMergeCandidates(
     kept.length > 0
   ) {
     log.info(
-      `gates ${gated ? `p${(headPercentile * 100).toFixed(0)}` : "head off (no interaction scores)"}: threshold=${headThreshold.toExponential(2)}, ${kept.length} proposals kept, ${skippedByHeadGate} long-tail, ${skippedByFamilyGate} single-name, ${skippedBySuppression} role-mailbox, ${skippedByFirstName} first-name-conflict, ${skippedBySurname} surname-conflict, ${skippedByGenericOrg} generic-org, ${skippedByBridge} bridge, ${skippedByHub} hub`,
+      `gates p${(headPercentile * 100).toFixed(0)}: threshold=${headThreshold.toExponential(2)}, ${kept.length} proposals kept, ${skippedByHeadGate} long-tail, ${skippedByFamilyGate} single-name, ${skippedBySuppression} role-mailbox, ${skippedByFirstName} first-name-conflict, ${skippedBySurname} surname-conflict, ${skippedByGenericOrg} generic-org, ${skippedByBridge} bridge, ${skippedByHub} hub`,
     );
   }
   return kept;
