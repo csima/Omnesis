@@ -130,6 +130,11 @@ export interface DocumentServiceDeps {
   indexerWake?: () => void;
   onDocumentsUpserted?: (sourceId: string, count: number) => void;
   /**
+   * Removes what other stores keep per document (its preview) once the
+   * documents are deleted. Called on every delete path that yields ids.
+   */
+  onDocumentsDeleted?: (documentIds: readonly string[]) => Promise<void>;
+  /**
    * Sub-batch size for the ingest before-state capture's event-loop yield
    * (`gateway.ingestYieldBatch`). Omitted in tests → DEFAULT_INGEST_YIELD_BATCH.
    */
@@ -536,6 +541,7 @@ export class DocumentService {
    */
   private async cascadeCognitionFor(deletedDocIds: readonly string[]): Promise<void> {
     await cascadeCognitiveStateThroughGate(this.deps.db, this.deps.writeGate, deletedDocIds);
+    await this.deps.onDocumentsDeleted?.(deletedDocIds);
   }
 
   async deleteByIds(

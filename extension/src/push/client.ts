@@ -22,6 +22,7 @@ import {
   type DurableStore,
   type FetchLike,
   type FetchLikeResponse,
+  type PagePreviewUpload,
   type PageVisit,
   type QueueItem,
 } from "./types.js";
@@ -74,6 +75,16 @@ export interface PushClientConfig {
 const PROBE_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
+ * Which page text each page's last uploaded screenshot was taken of, keyed by
+ * the page's external id. A page whose text has not changed since is not shot
+ * again.
+ */
+export const PREVIEW_LEDGER_KEY = "omnesis.push.previewLedger.v1";
+
+/** Pages the ledger remembers; the oldest entries are forgotten first. */
+const PREVIEW_LEDGER_LIMIT = 2_000;
+
+/**
  * The verdict of a proactive {@link PushClient.probeAuth} — a liveness + auth
  * check that runs independently of whether anything is queued, so an idle
  * extension still detects a revoked credential.
@@ -116,8 +127,10 @@ export class PushClient {
   private readonly batchSize: number;
   private readonly observability: PushObservability;
   private readonly transport: PushTransport;
+  private readonly store: DurableStore;
 
   constructor(config: PushClientConfig) {
+    this.store = config.store;
     this.queue = new PersistentQueue(config.store);
     this.backoff = { ...DEFAULT_BACKOFF, ...config.backoff };
     this.now = config.now ?? Date.now;
@@ -167,6 +180,68 @@ export class PushClient {
     await this.queue.enqueueReplacing(
       item,
       (queued) => queued.kind === "document" && queued.doc.externalId === doc.externalId,
+      // A page's screenshot is uploaded only once the page itself is in.
+      (queued) => queued.kind === "preview" && queued.preview.externalId === doc.externalId,
+    );
+  }
+
+  /**
+   * Whether a screenshot of this page at this text is still wanted: not when
+   * the last one uploaded, or one already queued, was taken of the same text.
+   */
+  async previewWanted(externalId: string, contentHash: string): Promise<boolean> {
+    if ((await this.readPreviewLedger())[externalId] === contentHash) return false;
+    const queued = await this.queue.list();
+    return !queued.some(
+      (item) =>
+        item.kind === "preview" &&
+        item.preview.externalId === externalId &&
+        item.preview.contentHash === contentHash,
+    );
+  }
+
+  /**
+   * Enqueue a page screenshot. It is delivered after any queued document for
+   * the same page, and replaces an older queued screenshot of that page.
+   */
+  async enqueuePreview(preview: PagePreviewUpload): Promise<void> {
+    const item: QueueItem = {
+      kind: "preview",
+      id: `preview:${preview.externalId}:${preview.contentHash}`,
+      preview,
+      attempts: 0,
+      notBefore: 0,
+      enqueuedAt: this.now(),
+    };
+    await this.queue.enqueueReplacing(
+      item,
+      (queued) => queued.kind === "preview" && queued.preview.externalId === preview.externalId,
+    );
+  }
+
+  private async readPreviewLedger(): Promise<Record<string, string>> {
+    try {
+      const raw = await this.store.get(PREVIEW_LEDGER_KEY);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      );
+    } catch {
+      return {};
+    }
+  }
+
+  private async recordUploadedPreview(externalId: string, contentHash: string): Promise<void> {
+    const ledger = await this.readPreviewLedger();
+    delete ledger[externalId];
+    ledger[externalId] = contentHash;
+    const entries = Object.entries(ledger);
+    await this.store.set(
+      PREVIEW_LEDGER_KEY,
+      JSON.stringify(Object.fromEntries(entries.slice(-PREVIEW_LEDGER_LIMIT))),
     );
   }
 
@@ -248,10 +323,14 @@ export class PushClient {
           // This log backs “Last page synced”; analytics visits must never
           // evict its document proof-of-life window.
           recentBatch.push(recentFromItem(item, now));
+        } else if (item.kind === "preview") {
+          await this.recordUploadedPreview(item.preview.externalId, item.preview.contentHash);
         }
       } else if (outcome.kind === "suppressed") {
         // The user deleted this page for good; the gateway will never store it
-        // again. It leaves the queue silently — not a sync, not a failure.
+        // again. It leaves the queue silently — not a sync, not a failure. A
+        // screenshot the gateway refuses (screenshots switched off, the page
+        // excluded since) leaves the same way.
         suppressed += 1;
       } else if (outcome.kind === "rejected") {
         // The source is removed/paused. There's nothing to retry against right
@@ -555,6 +634,7 @@ function recentFromItem(
 /** Remove captures belonging to an old/unpaired gateway identity. */
 export async function clearPushQueue(store: DurableStore): Promise<void> {
   await new PersistentQueue(store).clear();
+  await store.set(PREVIEW_LEDGER_KEY, "");
 }
 
 export { clearPushDataLoss, clearPushHealth, clearPushObservability, clearPushServerState };

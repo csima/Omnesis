@@ -4,6 +4,15 @@
 /** HTTPS access is optional at install time and requested when the user pairs. */
 export const CAPTURE_ORIGINS = ["https://*/*"];
 
+/**
+ * Page screenshots need more than the HTTPS grant: Chrome lets
+ * `chrome.tabs.captureVisibleTab` run only with `<all_urls>` or an
+ * `activeTab` invocation, and a screenshot taken at the end of a dwell has no
+ * invocation. So this optional grant is asked for in each browser, from the
+ * screenshot switch, only when the user turns screenshots on there.
+ */
+export const SCREENSHOT_ORIGINS = ["<all_urls>"];
+
 export function needsCapturePermissionRepair(paired: boolean, granted: boolean): boolean {
   return paired && !granted;
 }
@@ -32,9 +41,34 @@ export async function requestCapturePermission(
   }
 }
 
-/** Relinquish page access after capture is explicitly unpaired. */
-export function revokeCapturePermission(
+/** Whether this browser granted the screenshot permission. */
+export function hasScreenshotPermission(
+  getAll: GetPermissions = () => chrome.permissions.getAll(),
+): Promise<boolean> {
+  return getAll().then((permissions) =>
+    SCREENSHOT_ORIGINS.every((origin) => permissions.origins?.includes(origin) === true),
+  );
+}
+
+/** Ask Chrome for the screenshot permission; must run inside the user's click. */
+export function requestScreenshotPermission(
+  request: RequestPermission = (permissions) => chrome.permissions.request(permissions),
+): Promise<boolean> {
+  return request({ origins: SCREENSHOT_ORIGINS });
+}
+
+/**
+ * Relinquish page access after capture is explicitly unpaired: the
+ * screenshot grant, which covers every page, first, then the HTTPS grant,
+ * whose result is the answer.
+ */
+export async function revokeCapturePermission(
   remove: RemovePermission = (permissions) => chrome.permissions.remove(permissions),
 ): Promise<boolean> {
+  try {
+    await remove({ origins: SCREENSHOT_ORIGINS });
+  } catch {
+    // Never granted, or already gone; the HTTPS grant below is what matters.
+  }
   return remove({ origins: CAPTURE_ORIGINS });
 }

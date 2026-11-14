@@ -2380,6 +2380,31 @@ a:hover { text-decoration: underline; }
   color: var(--text-secondary);
 }
 
+.doc-main {
+  min-width: 0;
+}
+
+/* A document's preview image (a page screenshot, say), above its text. */
+.doc-preview {
+  margin: 0 0 20px;
+}
+.doc-preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 480px;
+  object-fit: contain;
+  object-position: left top;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary, transparent);
+}
+.doc-preview-caption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .doc-content {
   line-height: 1.7;
   color: var(--text-primary);
@@ -19085,4 +19110,25 @@ summary.decision-card-head {
 .cap-detail-active--warning {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
   background: color-mix(in srgb, var(--warning) 7%, var(--bg-secondary));
+}
+
+/* Devices → Browser capture: the settings every paired browser shares. */
+.browser-capture-card {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+}
+.browser-capture-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.browser-capture-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
 }

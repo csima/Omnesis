@@ -16,6 +16,7 @@ export {
   clearPushHealth,
   clearPushQueue,
   clearPushDataLoss,
+  PREVIEW_LEDGER_KEY,
 } from "./client.js";
 export type {
   PushClientConfig,
@@ -61,8 +62,10 @@ export {
   type DurableStore,
   type FetchLike,
   type FetchLikeResponse,
+  type PagePreviewUpload,
   type PageVisit,
   type QueueItem,
   type DocumentQueueItem,
+  type PreviewQueueItem,
   type VisitQueueItem,
 } from "./types.js";

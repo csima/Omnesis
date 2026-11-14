@@ -790,10 +790,10 @@ omnesis.example.com {
         </ul>
         <p>
           Automatic capture sends the readable text as Markdown, the title, the URL, the visit time
-          and how long the page was focused. Form values, drafts in editable fields, raw HTML,
-          scripts, images and screenshots never do. Credentials in the address (tokens, signatures,
-          one-time codes, passwords, session ids, an OAuth callback's code and state) are removed
-          before it is recorded.
+          and how long the page was focused. Form values, drafts in editable fields, raw HTML and
+          scripts never do, and images only as the optional page screenshot below. Credentials in
+          the address (tokens, signatures, one-time codes, passwords, session ids, an OAuth
+          callback's code and state) are removed before it is recorded.
         </p>
         <p>
           The capture token can add pages but cannot search or read. The extension loads no remote
@@ -996,6 +996,25 @@ omnesis.example.com {
           contributed, for good. The popup's <em>Exclude</em> button adds the open page's domain the
           same way and stops watching that page at once. Its pause controls pause capture in every
           paired browser for one hour, one day, or until someone resumes it.
+        </p>
+        <p id="browser-extension-screenshots">
+          <strong>Page screenshots.</strong> <em>Save a screenshot of each page</em>, on the Options
+          page, in the popup and in the portal under <strong>Settings → Devices</strong> once a
+          browser is paired, is off by default. Turned on, it applies to every paired browser: when
+          a page is captured, the browser also saves a screenshot of the visible part of the page,
+          the viewport only, as that page's preview, shown in the portal's document view and the
+          apps. The shot is taken only while the captured tab is the active tab of a focused window,
+          and only of a page the extension would capture anyway; it is downscaled to at most 1280
+          pixels on its longest side and dropped if it is still over 512 KB. A page is shot again
+          only when its text has changed. Screenshots are not redacted the way captured text is:
+          whatever the page shows on screen is in the image. Chrome lets an extension take
+          screenshots only with access to all sites, so turning this on in a browser asks Chrome for
+          that permission there; another paired browser shows
+          <em>Allow screenshots in this browser</em> on its Options page until it is granted, and
+          takes none before. The gateway keeps one per page, in its own encrypted store, includes it
+          in backups and exports, and deletes it with the page, for good or as a copy, and with an
+          excluded domain's pages. Turning screenshots off stops new ones; those already saved stay
+          with their pages.
         </p>
         <p>
           A browser rereads the settings when its copy is older than fifteen minutes, whenever the

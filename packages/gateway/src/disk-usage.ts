@@ -35,6 +35,8 @@ export interface DiskUsageLayout {
   indexDbPath: string;
   analyticsDbPath: string;
   watchDbPath: string;
+  /** The document preview store, when the gateway runs one. */
+  previewDbPath?: string;
   transcriptsDir: string;
   conversationsDir: string;
   modelsDir: string;
@@ -74,6 +76,15 @@ function partsFor(layout: DiskUsageLayout): Part[] {
       paths: withSuffixes(layout.analyticsDbPath, DUCKDB_SIDECARS),
     },
     { id: "watch", label: "Watches", paths: withSuffixes(layout.watchDbPath, SQLITE_SIDECARS) },
+    ...(layout.previewDbPath
+      ? [
+          {
+            id: "previews",
+            label: "Previews",
+            paths: withSuffixes(layout.previewDbPath, SQLITE_SIDECARS),
+          },
+        ]
+      : []),
     { id: "transcripts", label: "Agent transcripts", paths: [layout.transcriptsDir] },
     { id: "conversations", label: "Conversations", paths: [layout.conversationsDir] },
     { id: "models", label: "Models", paths: [layout.modelsDir] },

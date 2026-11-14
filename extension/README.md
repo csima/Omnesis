@@ -38,7 +38,7 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   after a timeout reuses a stored idempotency key, so the gateway replays the first redemption
   instead of finding the code spent.
 - **Capture policy.** The capture settings live on the gateway: `GET /web-capture-policy` serves the
-  shared pause, the excluded domains, the hosts other sources own, the built-in privacy rules and
+  shared pause, the excluded domains, the page-screenshot switch, the hosts other sources own, the built-in privacy rules and
   the pages the user deleted for good. The worker keeps a copy under `omnesis.capture.policy.v1`
   (15-minute TTL, refreshed on the drain alarm, on popup open and from each of its own edits) and
   captures nothing without one. Edits go through the worker to the gateway, so every paired browser
@@ -54,6 +54,20 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   remain available in diagnostic storage but do not trigger a popup warning or toolbar badge:
   they do not establish that an upload was lost. Current handoff failures and confirmed discarded
   uploads still surface in the popup and badge.
+- **Page screenshots.** Off unless the shared policy's `screenshots.enabled` is on. Then, when a
+  capture from a tab is queued, the worker (`chrome/screenshot.ts`) checks that tab is the active
+  tab of a focused, unminimized window on the page's origin, calls `chrome.tabs.captureVisibleTab`
+  (Chrome allows it only with `<all_urls>` or an `activeTab` invocation, so the Options page and
+  popup ask for the optional `<all_urls>` grant when screenshots are turned on in that browser,
+  and a browser without it takes none), checks the same again
+  afterwards and drops the shot if anything moved, then scales it to at most 1280 px on its
+  longest side and encodes WebP at 0.7 (JPEG where WebP is unavailable) with `OffscreenCanvas`
+  (`capture/screenshot.ts`), skipping it above 512 KB. It goes through the same durable queue as a
+  `preview` item to `PUT /documents/preview`, always behind its page's document; a refusal drops it
+  quietly, and it is the first thing evicted when the queue's byte budget fills.
+  `omnesis.push.previewLedger.v1` remembers which page text each uploaded shot was taken of, so a
+  page is shot again only when its content hash changes. Captures recovered from a tab's outbox
+  get no shot.
 - **The worker.** MV3 workers are evicted within seconds of idling, so `background.ts` holds no
   authoritative state: every wake rebuilds the push client from the durable queue and config, and
   `chrome.alarms` drives the drain cadence. One request per pass, exponential backoff with

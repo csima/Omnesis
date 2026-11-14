@@ -140,7 +140,14 @@ export type PopupToSwMessage =
   | CheckNowMessage
   | { type: "dismiss-diagnostics" }
   | ReadPolicyMessage
-  | AddExcludedDomainMessage;
+  | AddExcludedDomainMessage
+  | SetScreenshotsMessage;
+
+/**
+ * Switch page screenshots on or off for every paired browser. Sent by the
+ * popup and the options page; the worker applies it on the gateway.
+ */
+type SetScreenshotsMessage = { type: "set-screenshots"; enabled: boolean };
 
 /**
  * Sent by both the popup (on open) and the options page (after a pair) so the
@@ -163,7 +170,8 @@ export type OptionsToSwMessage =
   | AddExcludedDomainMessage
   | { type: "remove-excluded-domain"; domain: string }
   | ReadPolicyMessage
-  | CheckNowMessage;
+  | CheckNowMessage
+  | SetScreenshotsMessage;
 
 /** The browser's copy of the shared policy, or null before the first read succeeds. */
 export interface CapturePolicySnapshot {

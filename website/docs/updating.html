@@ -168,7 +168,7 @@
         <p>
           <code>omnesis backup</code> takes a snapshot while the gateway keeps running, into
           <code>~/.config/omnesis/backups/&lt;timestamp&gt;/</code> on the gateway machine. It holds
-          the databases (documents, index, analytics), <code>omnesis.json</code>,
+          the databases (documents, index, analytics, document previews), <code>omnesis.json</code>,
           <code>OMNESIS.md</code>, tokens, config secrets, TLS certificates and a manifest.
           <code>--note</code> labels a backup, <code>omnesis backup list</code> shows the ones you
           have, and <code>--no-index</code> leaves out <code>index.db</code>, the largest file,
@@ -340,11 +340,12 @@
         <p>
           <code>omnesis export</code> writes your documents to
           <code>~/.config/omnesis/exports/&lt;timestamp&gt;/</code>, as JSON lines by default or as
-          CSV, which leaves out the full text and adds one file per analytics table. It is for
-          taking your data elsewhere, not for restoring. On an encrypted install the export is
-          encrypted too; decrypt it with
-          <code>omnesis keyring decrypt-artifact &lt;export-dir&gt;</code> on a machine with the
-          same root key before using it outside Omnesis.
+          CSV, which leaves out the full text and adds one file per analytics table. A document's
+          preview image, such as a page screenshot, is written under <code>previews/</code>, named
+          by the document id and listed in <code>previews.jsonl</code>. It is for taking your data
+          elsewhere, not for restoring. On an encrypted install the export is encrypted too; decrypt
+          it with <code>omnesis keyring decrypt-artifact &lt;export-dir&gt;</code> on a machine with
+          the same root key before using it outside Omnesis.
         </p>
 
         <h2 id="updating">Updating</h2>

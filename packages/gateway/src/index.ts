@@ -22,6 +22,7 @@ import {
   ensurePrivateDirSync,
   experimentalEnabled,
   experimentalVisible,
+  GATEWAY_PREVIEW_STORE_FILE,
   loadManifest,
   primeSecretFileKeyCache,
   resolveWorkerEntry,
@@ -30,6 +31,8 @@ import {
 import { type OmnesisConfig } from "@omnesis/config";
 import { Ontology } from "@omnesis/watch";
 import { setActivityMarker } from "@omnesis/agent";
+import { DocumentPreviewStore } from "./previews/store.js";
+import { scheduleOrphanPreviewSweep } from "./previews/orphan-sweep.js";
 import { dotEnvKeysAtBoot } from "./load-env.js";
 import {
   resolveAnthropicApiKey,
@@ -440,6 +443,19 @@ const storageEncryption = await resolveGatewayStorageEncryptionKeys(configDir).c
 });
 const storagePosture = storageEncryptionPosture(storageEncryption.enabled);
 log[storagePosture.level](storagePosture.message);
+
+// The document preview store. A store that will not open (a newer build's
+// schema, a damaged file) leaves the gateway running without previews rather
+// than refusing to start: nothing else depends on it.
+const previewDbPath = join(configDir, GATEWAY_PREVIEW_STORE_FILE);
+let previewStore: DocumentPreviewStore | undefined;
+try {
+  previewStore = DocumentPreviewStore.open(previewDbPath, storageEncryption.previewDbKey);
+} catch (err) {
+  log.error(
+    `The preview store could not be opened; previews are off: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 // Indexer cycle / reconcile / reindex-missing cadences are resolved
 // further down against the loaded config (env > config > default) —
@@ -1233,6 +1249,7 @@ const backupService = new BackupService({
   // function here keeps the backup service independent of boot ordering.
   watchDbPath: watchJournalPath(configDir),
   watchDbKeyHex: storageEncryption.watchDbKeyHex,
+  ...(previewStore ? { previewDbPath, previewDbKeyHex: storageEncryption.previewDbKeyHex } : {}),
   analyticsDbPath,
   analyticsBackup: (dest) => analyticsDb.backupTo(dest),
   minFreeDiskBytes: () => resolveRuntimeSettings(configStore.get()).minFreeDiskMb * 1024 * 1024,
@@ -1248,6 +1265,7 @@ const exportService = new ExportService({
   exportsDir,
   gatewayDbPath: DB_PATH,
   gatewayDbKeyHex: storageEncryption.mainDbKeyHex,
+  ...(previewStore ? { previewDbPath, previewDbKeyHex: storageEncryption.previewDbKeyHex } : {}),
   analyticsExport: (destDir) => analyticsDb.exportTablesToCsv(destDir),
 });
 
@@ -2396,6 +2414,7 @@ const diskUsage = new DiskUsageMonitor(() =>
     indexDbPath,
     analyticsDbPath,
     watchDbPath: journal.path,
+    ...(previewStore ? { previewDbPath } : {}),
     transcriptsDir: cognitionTranscriptsDir(configDir),
     conversationsDir,
     modelsDir: MODELS_DIR,
@@ -2445,6 +2464,7 @@ const taskEffects: TaskEffects = {
 };
 const taskService = new TaskService(db, writeGate, briefsVirtualClock ?? Date.now, taskEffects);
 const app = createServer(db, DB_PATH, {
+  previewStore,
   interest: interestEngine,
   taskEffects,
   getDiskUsage: () => diskUsage.snapshot(),
@@ -3469,8 +3489,11 @@ const absenceSweepBundle = createAbsenceSweepTask(
     ioGate,
     indexWriteGate: directIndexWriteGate(indexDb),
     analyticsDb,
-    cascadeCognitionFor: (documentIds) =>
-      cascadeCognitiveStateThroughGate(db, writeGate, documentIds),
+    cascadeCognitionFor: async (documentIds) => {
+      await cascadeCognitiveStateThroughGate(db, writeGate, documentIds);
+      if (previewStore && documentIds.length > 0)
+        await previewStore.deleteForDocuments(documentIds);
+    },
     getMinObservations: () =>
       resolveRuntimeSettings(configStore.get()).snapshotAbsenceMinObservations,
     getMinAgeMs: () => resolveRuntimeSettings(configStore.get()).snapshotAbsenceMinAgeMs,
@@ -3480,6 +3503,15 @@ const absenceSweepBundle = createAbsenceSweepTask(
   scheduler,
 );
 const absenceSweepHandle = scheduler.schedule(absenceSweepBundle.task);
+
+// The backstop behind every delete path's preview cascade: previews whose
+// document is gone, left by a crash between the two deletes.
+const stopOrphanPreviewSweep = previewStore
+  ? scheduleOrphanPreviewSweep(db, previewStore, {
+      firstDelayMs: 5 * 60 * 1000,
+      intervalMs: 6 * 60 * 60 * 1000,
+    })
+  : undefined;
 void absenceSweepHandle;
 configStore.onChange((_before, _after, changedPaths) => {
   if (changedPaths.some((path) => path.startsWith("/gateway/snapshotAbsence"))) {
@@ -3922,6 +3954,12 @@ const doShutdown = async (): Promise<void> => {
     watchV2?.stop();
   } catch (err) {
     log.error(`watchV2.stop threw: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    stopOrphanPreviewSweep?.();
+    previewStore?.close();
+  } catch (err) {
+    log.error(`previewStore.close threw: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     indexDb.close();

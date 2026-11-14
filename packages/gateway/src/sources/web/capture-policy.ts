@@ -29,8 +29,8 @@ const log = createLogger("gateway").child("web-capture-policy");
 /**
  * The gateway-owned capture policy of the Web Pages source.
  *
- * The operator-editable settings — the shared pause and the excluded domains —
- * live under `capture` in the web source's own `sources.config` row, so they
+ * The operator-editable settings — the shared pause, the excluded domains and
+ * the page-screenshot switch — live under `capture` in the web source's own `sources.config` row, so they
  * survive with the source and every paired browser reads the same values. The
  * rest of the policy is derived on read: the hosts other sources own (pushed by
  * the collector), the built-in privacy rules, and the pages the user deleted
@@ -50,6 +50,7 @@ const MAX_EXCLUDED_DOMAINS = 1_000;
 const storedSettingsSchema = z.object({
   pause: z.object({ until: z.number().finite().nullable() }).nullable().default(null),
   excludedDomains: z.array(z.string().max(MAX_CAPTURE_DOMAIN_CHARS)).default([]),
+  screenshots: z.object({ enabled: z.boolean() }).default({ enabled: false }),
   updatedAt: z.string().default(""),
 });
 type StoredSettings = z.infer<typeof storedSettingsSchema>;
@@ -94,6 +95,7 @@ export class WebCapturePolicyService {
       // A lapsed timed pause reads as resumed so clients need no clock of their own.
       pause: pauseActive(stored.pause, this.now()) ? stored.pause : null,
       excludedDomains: stored.excludedDomains,
+      screenshots: { enabled: stored.screenshots.enabled },
       ownedDomains: [...this.deps.ownedDomains()],
       rules: DEFAULT_WEB_CAPTURE_RULES,
       removedPages: removed.ids,
@@ -144,6 +146,14 @@ export class WebCapturePolicyService {
     return this.read();
   }
 
+  /** Turn page screenshots on or off for every paired browser. */
+  async setScreenshots(enabled: boolean, auth: PolicyAuth): Promise<WebCapturePolicy> {
+    await this.edit(auth, (stored) =>
+      stored.screenshots.enabled === enabled ? null : { ...stored, screenshots: { enabled } },
+    );
+    return this.read();
+  }
+
   async clearPause(auth: PolicyAuth): Promise<WebCapturePolicy> {
     await this.edit(auth, (stored) => (stored.pause === null ? null : { ...stored, pause: null }));
     return this.read();
@@ -191,6 +201,7 @@ export class WebCapturePolicyService {
     const capture: StoredSettings = {
       pause: settings.pause,
       excludedDomains: settings.excludedDomains,
+      screenshots: settings.screenshots,
       updatedAt: new Date(this.now()).toISOString(),
     };
     const updated = await this.deps.writeGate.updateSource(WEB_SOURCE, {

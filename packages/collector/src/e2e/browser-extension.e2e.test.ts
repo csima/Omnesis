@@ -24,12 +24,14 @@ import { SyntheticE2EHarness } from "./synth-harness.js";
  * script watching a page and handing the capture to the service worker, the
  * worker surviving eviction with nothing lost, the options page and popup
  * editing the capture settings the gateway holds for every paired browser, a
+ * real `captureVisibleTab` screenshot becoming a captured page's preview, a
  * page deleted for good staying gone, the popup reporting truthfully when the
  * gateway revokes the device, and unpair clearing every trace.
  *
  * The extension is built with the TEST manifest (`extension/scripts/
- * test-manifest.mjs`): the wildcard-HTTPS host permission is granted at install
- * time instead of through the native dialog no automation can click. API
+ * test-manifest.mjs`): the optional host permissions — wildcard HTTPS for
+ * capture, `<all_urls>` for screenshots — are granted at install time instead
+ * of through the native dialogs no automation can click. API
  * permissions match the production manifest, and the extension id is pinned.
  * The store ZIP is asserted never to carry that
  * variant. The gateway serves a self-signed certificate; the worker's `fetch`
@@ -298,6 +300,62 @@ describe.skipIf(!browserAvailable)("Browser-capture extension in headless Chromi
     );
     await popup.close();
   }, 60_000);
+
+  test(
+    "with screenshots switched on from the popup, a captured page's viewport becomes its preview",
+    async () => {
+      const popup = await openPage(popupUrl);
+      await popup.locator("#screenshots-wrap").waitFor({ state: "visible", timeout: 20_000 });
+      await popup.locator("#screenshots-toggle").check();
+      await expect
+        .poll(
+          async () =>
+            (
+              (await harness.gatewayJson("/web-capture-policy")) as {
+                screenshots?: { enabled: boolean };
+              }
+            ).screenshots?.enabled,
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      await popup.close();
+
+      const url = `${FIXTURE_ORIGIN}/notes-shot`;
+      const article = await openPage(url);
+      await article.bringToFront();
+      const documentId = async (): Promise<string | undefined> => {
+        const recent = (await harness.gatewayJson("/sources/web/recent?limit=50")) as {
+          documents?: Array<{ id: string; source_url?: string | null; title?: string }>;
+        };
+        return recent.documents?.find((doc) => doc.title === "Field notes shot (fictional)")?.id;
+      };
+      await expect.poll(documentId, { timeout: CAPTURE_WAIT_MS, interval: 500 }).toBeTruthy();
+      const id = (await documentId())!;
+      await expect
+        .poll(
+          async () =>
+            ((await harness.gatewayJson(`/documents/${id}`)) as { preview?: unknown }).preview,
+          { timeout: 30_000, interval: 500, message: "the page's screenshot must be uploaded" },
+        )
+        .toMatchObject({ url: `/documents/${id}/preview` });
+      const image = await harness.gatewayFetch(`/documents/${id}/preview`);
+      expect(image.status).toBe(200);
+      expect(["image/webp", "image/jpeg"]).toContain(image.headers.get("content-type"));
+      const { width, height } = (
+        (await harness.gatewayJson(`/documents/${id}`)) as {
+          preview: { width: number; height: number };
+        }
+      ).preview;
+      expect(Math.max(width, height)).toBeLessThanOrEqual(1280);
+      await article.close();
+
+      await harness.gatewayJson("/web-capture-policy/screenshots", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+      });
+    },
+    CAPTURE_WAIT_MS + 60_000,
+  );
 
   test(
     "a service worker evicted mid-life comes back and the next page still lands",

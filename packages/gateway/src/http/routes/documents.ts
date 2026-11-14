@@ -50,6 +50,7 @@ import { documentsRateLimiter } from "../../rate-limit.js";
 import { clientIp, isLoopbackRequest } from "./admin/internals.js";
 import type { RouteApp } from "./types.js";
 import type { DocumentService } from "../services/DocumentService.js";
+import type { DocumentPreviewService } from "../../previews/service.js";
 import type { SourceService } from "../services/SourceService.js";
 import type { WriteGate } from "../../write-gate.js";
 import type { AnalyticsRecentCursor } from "../../analytics-db.js";
@@ -162,6 +163,8 @@ export interface DocumentRoutesDeps {
    * only itself as a sibling".
    */
   indexDb?: Db;
+  /** Adds each listed document's `preview` when it has one. */
+  previews?: DocumentPreviewService;
 }
 
 const FULL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -198,7 +201,7 @@ function summarizeCursor(cursor: SyncCursor): string {
  * /documents/list etc. Mirrors the original block at server.ts:2354-2538.
  */
 export function mountDocumentCoreRoutes(app: RouteApp, deps: DocumentRoutesDeps): void {
-  const { db, documentService, sourceService, indexDb } = deps;
+  const { db, documentService, sourceService, indexDb, previews } = deps;
   const ingestLimiter = documentsRateLimiter();
 
   app.post(
@@ -620,7 +623,7 @@ export function mountDocumentCoreRoutes(app: RouteApp, deps: DocumentRoutesDeps)
           // choice: internal sources have no sync that could bring a
           // document back, so deletion is a single action.
           internal: isGatewayInternalSource(sourceId),
-          documents: result.items.map(toRecentDocumentDto),
+          documents: withPreviews(result.items.map(toRecentDocumentDto), previews),
           pageInfo: buildPage([], {
             hasMore: result.hasMore,
             limit,
@@ -1110,12 +1113,28 @@ export function mountDocumentRefsRoute(
   });
 }
 
+/** Attach each document's `preview` where it has one; documents without one are unchanged. */
+function withPreviews<T extends { id: string }>(
+  documents: T[],
+  previews: DocumentPreviewService | undefined,
+): Array<T & { preview?: ReturnType<DocumentPreviewService["refFor"]> }> {
+  if (!previews || documents.length === 0) return documents;
+  const refs = previews.refsFor(documents.map((document) => document.id));
+  return documents.map((document) => {
+    const preview = refs.get(document.id);
+    return preview ? { ...document, preview } : document;
+  });
+}
+
 /**
  * The `/documents/:id` greedy GET. MUST be registered AFTER /documents/list,
  * /documents/ids, /documents/search, and the people routes (the original
  * places this at server.ts:3007, after every other documents/* GET).
  */
-export function mountDocumentByIdRoute(app: RouteApp, deps: { db: Db }): void {
+export function mountDocumentByIdRoute(
+  app: RouteApp,
+  deps: { db: Db; previews?: DocumentPreviewService },
+): void {
   // The /documents/:id GET deliberately stays db-direct: it fetches a
   // single row by id with two SELECT shape variants (FULL_UUID exact or
   // prefix match). Wrapping in DocumentService would add no cross-cutting
@@ -1135,10 +1154,14 @@ export function mountDocumentByIdRoute(app: RouteApp, deps: { db: Db }): void {
     // Flags gateway-internal sources (a dataset the gateway hosts itself) so clients
     // collapse the delete prompt to a single action: no sync exists that
     // could bring the document back.
-    const withInternalFlag = (row: Record<string, unknown>) => ({
-      ...row,
-      internal: isGatewayInternalSource(typeof row.source_id === "string" ? row.source_id : ""),
-    });
+    const withInternalFlag = (row: Record<string, unknown>) => {
+      const preview = deps.previews?.refFor(row.id as string);
+      return {
+        ...row,
+        internal: isGatewayInternalSource(typeof row.source_id === "string" ? row.source_id : ""),
+        ...(preview ? { preview } : {}),
+      };
+    };
     if (FULL_UUID.test(id)) {
       const row = db.prepare(`SELECT ${columns} ${from} WHERE document.id = ?`).get(id) as
         Record<string, unknown> | undefined;

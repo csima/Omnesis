@@ -131,6 +131,7 @@ describe("GET /web-capture-policy", () => {
       updatedAt: "",
       pause: null,
       excludedDomains: [],
+      screenshots: { enabled: false },
       ownedDomains: ["mail.example.com", "notes.example"],
       rules: DEFAULT_WEB_CAPTURE_RULES,
       removedPages: [],
@@ -160,6 +161,59 @@ describe("GET /web-capture-policy", () => {
       "bank.example",
       "shop.example",
     ]);
+  });
+});
+
+describe("page screenshots", () => {
+  test("are off by default and switched on and off for every browser by one edit", async () => {
+    expect((await policyFor(browserToken)).screenshots).toEqual({ enabled: false });
+    const on = await call("/web-capture-policy/screenshots", browserToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as WebCapturePolicy).screenshots).toEqual({ enabled: true });
+    const other = mintToken("browser", [writeScope(SourceType("web"))]);
+    expect((await policyFor(other)).screenshots).toEqual({ enabled: true });
+    expect(getSource(db, SourceId("web"))?.config).toMatchObject({
+      capture: { screenshots: { enabled: true } },
+    });
+
+    const off = await call("/web-capture-policy/screenshots", adminToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(off.status).toBe(200);
+    expect((await policyFor(browserToken)).screenshots).toEqual({ enabled: false });
+  });
+
+  test("an edit keeps the other settings and a malformed body is refused", async () => {
+    await call("/web-capture-policy/excluded-domains", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ domain: "bank.example" }),
+    });
+    await call("/web-capture-policy/screenshots", browserToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect((await policyFor(browserToken)).excludedDomains).toEqual(["bank.example"]);
+    const bad = await call("/web-capture-policy/screenshots", browserToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: "yes" }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  test("refuses a read-only token and a write token for another source", async () => {
+    const readOnly = mintToken("cli", [SCOPE_READ]);
+    const otherWriter = mintToken("cli", [writeScope(SourceType("gmail"))]);
+    for (const token of [readOnly, otherWriter]) {
+      const res = await call("/web-capture-policy/screenshots", token, {
+        method: "PUT",
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(res.status).toBe(403);
+    }
   });
 });
 

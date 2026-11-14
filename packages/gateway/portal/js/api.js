@@ -288,6 +288,13 @@ export const getDocument = (id) => request("GET", `/documents/${encodeURICompone
 // also removes its attachment children. By default it writes a durable
 // tombstone so a re-sync / re-capture can't bring the document back; with
 // `keepCopy` only this copy goes and the source may bring it back.
+// The browser capture policy every paired browser enforces. The portal reads
+// it and flips the shared page-screenshot switch; the rest is edited from the
+// extension.
+export const getWebCapturePolicy = () => request("GET", "/web-capture-policy", { cache: "no-store" });
+export const setWebCaptureScreenshots = (enabled) =>
+  request("PUT", "/web-capture-policy/screenshots", { body: { enabled } });
+
 export const deleteDocument = (id, { keepCopy = false } = {}) =>
   request(
     "DELETE",

@@ -10,6 +10,7 @@ import {
   pathHasSkippedSegment,
   pauseActive,
   pauseRemainingMs,
+  screenshotsEnabled,
   type WebCapturePolicy,
 } from "./capture-policy.js";
 
@@ -134,5 +135,19 @@ describe("isWebCapturePolicy", () => {
     expect(isWebCapturePolicy({ ...policy(), rules: {} })).toBe(false);
     expect(isWebCapturePolicy({ ...policy(), pause: { until: "soon" } })).toBe(false);
     expect(isWebCapturePolicy(null)).toBe(false);
+  });
+
+  it("accepts a policy with or without the screenshots block, and refuses a malformed one", () => {
+    expect(isWebCapturePolicy(policy({ screenshots: { enabled: true } }))).toBe(true);
+    expect(isWebCapturePolicy({ ...policy(), screenshots: { enabled: "yes" } })).toBe(false);
+    expect(isWebCapturePolicy({ ...policy(), screenshots: null })).toBe(false);
+  });
+});
+
+describe("screenshotsEnabled", () => {
+  it("is on only when the policy says so, and off for a gateway that predates the setting", () => {
+    expect(screenshotsEnabled(policy({ screenshots: { enabled: true } }))).toBe(true);
+    expect(screenshotsEnabled(policy({ screenshots: { enabled: false } }))).toBe(false);
+    expect(screenshotsEnabled(policy())).toBe(false);
   });
 });

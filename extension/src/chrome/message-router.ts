@@ -36,7 +36,11 @@ export interface BackgroundMessageDeps {
   runtimeId: string;
   popupUrl: string;
   optionsUrl: string;
-  handleCapture: (message: Extract<ContentToSwMessage, { type: "capture" }>) => Promise<CaptureAck>;
+  /** `tabId` is the tab that emitted the capture, which a page screenshot is taken of. */
+  handleCapture: (
+    message: Extract<ContentToSwMessage, { type: "capture" }>,
+    tabId: number,
+  ) => Promise<CaptureAck>;
   drain: () => Promise<void>;
   judgeEligibility: (url: string) => Promise<CaptureEligibilityResponse>;
   handlePause: (
@@ -46,6 +50,7 @@ export interface BackgroundMessageDeps {
   checkNow: () => Promise<void>;
   readPolicy: () => Promise<CapturePolicySnapshot>;
   mutateExclusions: (message: ExclusionMessage) => Promise<{ purged: number }>;
+  setScreenshots: (enabled: boolean) => Promise<void>;
   changePairing: (
     message: Extract<
       OptionsToSwMessage,
@@ -69,7 +74,7 @@ export function routeBackgroundMessage(
     isCaptureMessage(message)
   ) {
     respond(
-      deps.handleCapture(message).then((ack) => {
+      deps.handleCapture(message, sender.tab.id).then((ack) => {
         if (ack.ok && ack.accepted) runDetached(deps.drain());
         return ack;
       }),
@@ -136,6 +141,20 @@ export function routeBackgroundMessage(
       deps
         .mutateExclusions(message)
         .then(({ purged }) => ({ ok: true, purged }) satisfies ExclusionAck),
+      sendResponse,
+      failureAck,
+    );
+    return true;
+  }
+  if (
+    (fromPopup || fromOptions) &&
+    isObjectWithType(message, "set-screenshots") &&
+    typeof (message as { enabled?: unknown }).enabled === "boolean"
+  ) {
+    respond(
+      deps
+        .setScreenshots((message as { enabled: boolean }).enabled)
+        .then(() => ({ ok: true }) satisfies PauseAck),
       sendResponse,
       failureAck,
     );

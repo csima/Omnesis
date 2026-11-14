@@ -90,6 +90,10 @@ export class FakePageChrome {
   readonly openOptionsPage = { calls: 0 };
   readonly permissionRequests: chrome.permissions.Permissions[] = [];
   hostPermission = true;
+  /** Whether Chrome's `<all_urls>` screenshot grant is held. */
+  screenshotPermission = false;
+  /** What the next screenshot-grant prompt answers. */
+  grantScreenshots = true;
   contentScriptRegistered = true;
   activeTab: chrome.tabs.Tab | undefined = { id: 7, url: "https://news.example.com/story" };
   tabStatus: unknown = { state: "watching" };
@@ -145,11 +149,18 @@ export class FakePageChrome {
     permissions: {
       getAll: (): Promise<chrome.permissions.Permissions> =>
         Promise.resolve({
-          origins: this.hostPermission ? ["https://*/*"] : [],
+          origins: [
+            ...(this.hostPermission ? ["https://*/*"] : []),
+            ...(this.screenshotPermission ? ["<all_urls>"] : []),
+          ],
           permissions: ["storage", "alarms"],
         }),
       request: (permissions: chrome.permissions.Permissions): Promise<boolean> => {
         this.permissionRequests.push(permissions);
+        if (permissions.origins?.includes("<all_urls>")) {
+          this.screenshotPermission = this.grantScreenshots;
+          return Promise.resolve(this.grantScreenshots);
+        }
         this.hostPermission = true;
         return Promise.resolve(true);
       },

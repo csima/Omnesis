@@ -17,7 +17,7 @@
     "favicon",
     "search"
   ],
-  "optional_host_permissions": ["https://*/*"],
+  "optional_host_permissions": ["https://*/*", "<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

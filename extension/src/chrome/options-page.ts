@@ -2,13 +2,15 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import "./chrome-api.js";
-import { normalizeCaptureDomain } from "@omnesis/provider-web/capture-policy";
+import { normalizeCaptureDomain, screenshotsEnabled } from "@omnesis/provider-web/capture-policy";
 import { GatewayUrlError } from "../push/index.js";
 import { loadConfig, loadProfileLabel } from "./storage.js";
 import {
   hasCapturePermission,
+  hasScreenshotPermission,
   needsCapturePermissionRepair,
   requestCapturePermission,
+  requestScreenshotPermission,
 } from "./host-permission.js";
 import { hasCaptureAccess } from "./content-registration.js";
 import {
@@ -20,7 +22,12 @@ import {
   unpairBrowser,
   withBestEffortRefresh,
 } from "./options-actions.js";
-import type { CapturePolicySnapshot, ExclusionAck, OptionsToSwMessage } from "./messages.js";
+import type {
+  CapturePolicySnapshot,
+  ExclusionAck,
+  OptionsToSwMessage,
+  PauseAck,
+} from "./messages.js";
 
 /**
  * Options / pairing page controller.
@@ -247,6 +254,7 @@ export function initOptions(
         : "No domains excluded yet.";
     empty.style.display = list.length ? "none" : "block";
     ($("exclusion-form") as HTMLFormElement).hidden = !paired;
+    await renderScreenshots(paired, snapshot);
     for (const domain of list) {
       const li = document.createElement("li");
       li.className = "exclusion-item";
@@ -286,6 +294,89 @@ export function initOptions(
       li.appendChild(remove);
       ul.appendChild(li);
     }
+  }
+
+  /** Whether this browser holds Chrome's screenshot grant, read at each render. */
+  let screenshotGrant = false;
+
+  /** The shared screenshot switch, as the worker's copy of the policy has it. */
+  async function renderScreenshots(
+    paired: boolean,
+    snapshot: CapturePolicySnapshot,
+  ): Promise<void> {
+    const toggle = $("screenshots-toggle") as HTMLInputElement;
+    const hint = $("screenshots-hint");
+    const allow = $("allow-screenshots") as HTMLButtonElement;
+    screenshotGrant = await hasScreenshotPermission().catch(() => false);
+    const enabled = snapshot.policy !== null && screenshotsEnabled(snapshot.policy);
+    toggle.disabled = !paired || snapshot.policy === null;
+    toggle.checked = enabled;
+    allow.hidden = !paired || !enabled || screenshotGrant;
+    hint.textContent = !paired
+      ? "Pair this browser to change this setting for your paired browsers."
+      : snapshot.policy === null
+        ? "Capture settings have not been loaded from the gateway yet."
+        : enabled && !screenshotGrant
+          ? "Screenshots are on for your paired browsers, but Chrome has not allowed this browser to take them."
+          : "This setting is shared by every browser paired to this gateway. Chrome asks each browser for permission to take screenshots.";
+  }
+
+  /** Ask Chrome for the screenshot grant; must be called inside the click. */
+  function askForScreenshotGrant(): Promise<boolean> {
+    return requestScreenshotPermission().catch(() => false);
+  }
+
+  async function onAllowScreenshots(): Promise<void> {
+    const granted = await askForScreenshotGrant();
+    setStatus(
+      granted
+        ? "This browser now takes page screenshots."
+        : "Chrome did not allow screenshots in this browser.",
+      granted ? "ok" : "error",
+    );
+    await refreshExclusions();
+  }
+
+  async function onToggleScreenshots(): Promise<void> {
+    const toggle = $("screenshots-toggle") as HTMLInputElement;
+    const enabled = toggle.checked;
+    // Chrome only shows its permission prompt from inside the user's click,
+    // so the grant is asked for before anything is awaited.
+    const grant = enabled && !screenshotGrant ? askForScreenshotGrant() : Promise.resolve(true);
+    toggle.disabled = true;
+    try {
+      if (!(await grant)) {
+        setStatus(
+          "Chrome did not allow screenshots in this browser, so they were not turned on.",
+          "error",
+        );
+        await refreshExclusions();
+        return;
+      }
+      const result = await chrome.runtime.sendMessage<PauseAck>({
+        type: "set-screenshots",
+        enabled,
+      } satisfies OptionsToSwMessage);
+      if (!result?.ok) {
+        setStatus(
+          `Could not change screenshots: ${result?.reason ?? "worker unavailable"}`,
+          "error",
+        );
+      } else {
+        setStatus(
+          enabled
+            ? "Every paired browser now saves a screenshot of each page it captures."
+            : "Paired browsers no longer save page screenshots. Saved ones stay with their pages.",
+          "ok",
+        );
+      }
+    } catch (error) {
+      setStatus(
+        `Could not change screenshots: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+    }
+    await refreshExclusions();
   }
 
   async function onAddExclusion(event: Event): Promise<void> {
@@ -343,6 +434,14 @@ export function initOptions(
   ($("exclusion-form") as HTMLFormElement).addEventListener(
     "submit",
     (e) => void onAddExclusion(e),
+  );
+  ($("screenshots-toggle") as HTMLInputElement).addEventListener(
+    "change",
+    () => void onToggleScreenshots(),
+  );
+  ($("allow-screenshots") as HTMLButtonElement).addEventListener(
+    "click",
+    () => void onAllowScreenshots(),
   );
   void loadInitialOptionsState(refreshPairedState, refreshExclusions).then((error) => {
     if (error) {

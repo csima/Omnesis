@@ -21,7 +21,7 @@ import {
   type StorageKeyName,
 } from "@omnesis/core";
 
-// main-db, index-db, analytics-db and watch2-db. The watch journal's key keeps
+// main-db, index-db, analytics-db, watch2-db and preview-db. The watch journal's key keeps
 // a frozen spelling the file no longer has; see STORAGE_KEY_NAMES for why.
 const GATEWAY_STORAGE_KEYS = storageKeyNamesForHost("gateway");
 
@@ -36,10 +36,13 @@ export interface GatewayStorageEncryptionKeys {
    * whatever else it is — so it is keyed like the stores it is derived from.
    */
   watchDbKey: Buffer | null;
+  /** The document preview store: page screenshots are corpus material. */
+  previewDbKey: Buffer | null;
   mainDbKeyHex?: string;
   indexDbKeyHex?: string;
   analyticsDbKeyHex?: string;
   watchDbKeyHex?: string;
+  previewDbKeyHex?: string;
 }
 
 export async function resolveGatewayStorageEncryptionKeys(
@@ -53,6 +56,7 @@ export async function resolveGatewayStorageEncryptionKeys(
       indexDbKey: null,
       analyticsDbKey: null,
       watchDbKey: null,
+      previewDbKey: null,
     };
   }
 
@@ -60,16 +64,19 @@ export async function resolveGatewayStorageEncryptionKeys(
   const indexDbKey = await readRequiredStorageKey("index-db", configDir);
   const analyticsDbKey = await readRequiredStorageKey("analytics-db", configDir);
   const watchDbKey = await readRequiredStorageKey("watch2-db", configDir);
+  const previewDbKey = await readRequiredStorageKey("preview-db", configDir);
   return {
     enabled: true,
     mainDbKey,
     indexDbKey,
     analyticsDbKey,
     watchDbKey,
+    previewDbKey,
     mainDbKeyHex: storageKeyHex(mainDbKey),
     indexDbKeyHex: storageKeyHex(indexDbKey),
     analyticsDbKeyHex: storageKeyHex(analyticsDbKey),
     watchDbKeyHex: storageKeyHex(watchDbKey),
+    previewDbKeyHex: storageKeyHex(previewDbKey),
   };
 }
 
@@ -94,14 +101,14 @@ export function storageEncryptionPosture(enabled: boolean): {
     return {
       level: "info",
       message:
-        "Live storage encryption enabled for the gateway, index, analytics, and watch stores",
+        "Live storage encryption enabled for the gateway, index, analytics, watch and preview stores",
     };
   }
   return {
     level: "warn",
     message:
       "Live storage is UNENCRYPTED — no install root key is configured, so the gateway, " +
-      "index, analytics, and watch databases are plaintext on disk (protected only by " +
+      "index, analytics, watch and preview databases are plaintext on disk (protected only by " +
       "file permissions and full-disk encryption). Run `omnesis keyring init` to enable " +
       "at-rest encryption, or `omnesis doctor` to review the full posture.",
   };

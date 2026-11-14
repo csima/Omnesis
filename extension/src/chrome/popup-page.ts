@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import "./chrome-api.js";
-import { pauseRemainingMs } from "@omnesis/provider-web/capture-policy";
+import { pauseRemainingMs, screenshotsEnabled } from "@omnesis/provider-web/capture-policy";
 import { PushClient } from "../push/index.js";
-import { PAUSE_ONE_DAY_MS, PAUSE_ONE_HOUR_MS } from "../capture/policy.js";
+import { PAUSE_ONE_DAY_MS, PAUSE_ONE_HOUR_MS, readCachedPolicy } from "../capture/policy.js";
 import { chromeLocalStore, hasExactWebScope, loadConfig } from "./storage.js";
 import { composeStatus, type CaptureStatus } from "./status.js";
 import {
@@ -14,6 +14,7 @@ import {
 } from "./current-page.js";
 import { hasActiveFailure, warningFor } from "./status-presentation.js";
 import { hasCaptureAccess } from "./content-registration.js";
+import { hasScreenshotPermission, requestScreenshotPermission } from "./host-permission.js";
 import {
   CAPTURE_STATUS_MESSAGE,
   type ExclusionAck,
@@ -182,6 +183,19 @@ export function initPopup(document: Document, chrome: PopupChrome): void {
       row.appendChild(btn);
     }
     host.appendChild(row);
+  }
+
+  /** Whether this browser holds Chrome's screenshot grant, read at each render. */
+  let screenshotGrant = false;
+
+  /** The shared screenshot switch, from the worker's copy of the policy. */
+  async function renderScreenshots(): Promise<void> {
+    const cached = await readCachedPolicy(chromeLocalStore);
+    screenshotGrant = await hasScreenshotPermission().catch(() => false);
+    const enabled = cached !== null && screenshotsEnabled(cached.policy);
+    $("screenshots-wrap").hidden = cached === null;
+    ($("screenshots-toggle") as HTMLInputElement).checked = enabled;
+    $("screenshots-grant").hidden = !enabled || screenshotGrant;
   }
 
   /** Render the recent-synced proof-of-life list (newest first, capped for the popup). */
@@ -361,8 +375,10 @@ export function initPopup(document: Document, chrome: PopupChrome): void {
     if (status.paired) {
       renderControls(status, now);
       renderRecent(status, now);
+      await renderScreenshots();
     } else {
       $("controls").hidden = true;
+      $("screenshots-wrap").hidden = true;
       $("exclude-wrap").hidden = true;
       ($("recent-wrap") as HTMLDetailsElement).hidden = true;
     }
@@ -380,6 +396,18 @@ export function initPopup(document: Document, chrome: PopupChrome): void {
 
   ($("open-options") as HTMLButtonElement).addEventListener("click", () => {
     void chrome.runtime.openOptionsPage();
+  });
+  ($("screenshots-toggle") as HTMLInputElement).addEventListener("change", (event) => {
+    const enabled = (event.target as HTMLInputElement).checked;
+    // Chrome shows its permission prompt only from inside the click, so the
+    // grant is asked for before anything is awaited.
+    const grant =
+      enabled && !screenshotGrant
+        ? requestScreenshotPermission().catch(() => false)
+        : Promise.resolve(true);
+    void grant.then((granted) =>
+      granted ? sendControl({ type: "set-screenshots", enabled }) : renderSafely(),
+    );
   });
   ($("ack-warning") as HTMLButtonElement).addEventListener("click", () => {
     void sendControl({ type: "dismiss-diagnostics" });
