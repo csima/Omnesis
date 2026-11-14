@@ -549,7 +549,7 @@ struct DocumentDetailView: View {
 @available(iOS 17.0, *)
 #Preview("Document detail — with preview") {
     NavigationStack {
-        DocumentDetailPreviewWrapper(doc: PreviewMocks.documentDetailWithPreview, meta: "Web · Page · 5h ago")
+        DocumentDetailPreviewWrapper(doc: PreviewMocks.documentDetailWithPreview, meta: "Web · Page · 5h ago", annotations: [])
             .environment(AppStore.preview())
             .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
     }
@@ -579,6 +579,7 @@ struct DocumentDetailPreviewWrapper: View {
     @Environment(AppStore.self) private var store
     var doc: DocumentDetail = PreviewMocks.documentDetail
     var meta = "Gmail · Email · 3d ago"
+    var annotations = PreviewMocks.documentAnnotations
 
     var body: some View {
         ScrollView {
@@ -614,7 +615,9 @@ struct DocumentDetailPreviewWrapper: View {
                 FlatSection("Content") {
                     MarkdownView(text: doc.content)
                 }
-                AnnotationsSection(title: "Enriched by Omnesis", annotations: PreviewMocks.documentAnnotations)
+                if !annotations.isEmpty {
+                    AnnotationsSection(title: "Enriched by Omnesis", annotations: annotations)
+                }
             }
             .padding(Theme.Spacing.lg)
         }

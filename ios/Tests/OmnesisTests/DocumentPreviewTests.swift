@@ -93,13 +93,19 @@ final class DocumentPreviewDecodeTests: XCTestCase {
 }
 
 final class DocumentPreviewLoaderTests: XCTestCase {
+    private struct Reply {
+        let status: Int
+        var body = Data()
+        var headers: [String: String] = [:]
+    }
+
     private final class MockSession: URLSessionLike, @unchecked Sendable {
         private let lock = NSLock()
         private var recorded: [URLRequest] = []
         var delay: UInt64 = 0
-        var responder: (URLRequest) throws -> (Int, Data, [String: String])
+        var responder: (URLRequest) throws -> Reply
 
-        init(responder: @escaping (URLRequest) throws -> (Int, Data, [String: String])) {
+        init(responder: @escaping (URLRequest) throws -> Reply) {
             self.responder = responder
         }
 
@@ -114,14 +120,16 @@ final class DocumentPreviewLoaderTests: XCTestCase {
             recorded.append(request)
             lock.unlock()
             if delay > 0 { try await Task.sleep(nanoseconds: delay) }
-            let (status, body, headers) = try responder(request)
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: status,
-                httpVersion: "HTTP/1.1",
-                headerFields: headers
-            )!
-            return (body, response)
+            let reply = try responder(request)
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: reply.status,
+                      httpVersion: "HTTP/1.1",
+                      headerFields: reply.headers
+                  )
+            else { throw URLError(.badURL) }
+            return (reply.body, response)
         }
     }
 
@@ -145,7 +153,9 @@ final class DocumentPreviewLoaderTests: XCTestCase {
     }
 
     private func okSession(etag: String = "\"v1\"") -> MockSession {
-        MockSession { _ in (200, self.imageBytes, ["Content-Type": "image/webp", "ETag": etag, "Cache-Control": "private"]) }
+        MockSession { _ in
+            Reply(status: 200, body: self.imageBytes, headers: ["Content-Type": "image/webp", "ETag": etag, "Cache-Control": "private"])
+        }
     }
 
     func testFetchesWithReadTokenFromTheGateway() async throws {
@@ -180,7 +190,7 @@ final class DocumentPreviewLoaderTests: XCTestCase {
         let first = okSession(etag: "\"v1\"")
         _ = try await DocumentPreviewLoader(baseURL: base, token: "t", session: first, cache: cache).imageData(for: preview())
 
-        let second = MockSession { _ in (304, Data(), ["ETag": "\"v1\""]) }
+        let second = MockSession { _ in Reply(status: 304, headers: ["ETag": "\"v1\""]) }
         let data = try await DocumentPreviewLoader(baseURL: base, token: "t", session: second, cache: cache)
             .imageData(for: preview())
         XCTAssertEqual(data, imageBytes)
@@ -192,8 +202,8 @@ final class DocumentPreviewLoaderTests: XCTestCase {
         var served = imageBytes
         let session = MockSession { request in
             let etag = served == self.imageBytes ? "\"v1\"" : "\"v2\""
-            if request.value(forHTTPHeaderField: "If-None-Match") == etag { return (304, Data(), [:]) }
-            return (200, served, ["ETag": etag])
+            if request.value(forHTTPHeaderField: "If-None-Match") == etag { return Reply(status: 304) }
+            return Reply(status: 200, body: served, headers: ["ETag": etag])
         }
         let loader = DocumentPreviewLoader(baseURL: base, token: "t", session: session, cache: DocumentPreviewCache(directory: directory))
         _ = try await loader.imageData(for: preview(capturedAt: "2026-11-14T08:00:00Z"))
@@ -207,7 +217,7 @@ final class DocumentPreviewLoaderTests: XCTestCase {
     func testNotFoundDropsTheCachedCopy() async throws {
         let cache = DocumentPreviewCache(directory: directory)
         _ = try await DocumentPreviewLoader(baseURL: base, token: "t", session: okSession(), cache: cache).imageData(for: preview())
-        let gone = MockSession { _ in (404, Data(), [:]) }
+        let gone = MockSession { _ in Reply(status: 404) }
         do {
             _ = try await DocumentPreviewLoader(baseURL: base, token: "t", session: gone, cache: cache).imageData(for: preview())
             XCTFail("expected notFound")
@@ -221,7 +231,7 @@ final class DocumentPreviewLoaderTests: XCTestCase {
 
     func testAuthFailuresSurfaceAsGatewayErrors() async {
         for (status, expected) in [(401, GatewayClient.Error.unauthorized), (403, .forbidden)] {
-            let session = MockSession { _ in (status, Data(), [:]) }
+            let session = MockSession { _ in Reply(status: status) }
             let loader = DocumentPreviewLoader(baseURL: base, token: "t", session: session, cache: DocumentPreviewCache(directory: nil))
             do {
                 _ = try await loader.imageData(for: preview())
@@ -252,7 +262,7 @@ final class DocumentPreviewLoaderTests: XCTestCase {
         }
     }
 
-    func testRefusesToSendTheTokenToAnotherOrigin() async {
+    func testRefusesToSendTheTokenToAnotherOrigin() async throws {
         let session = okSession()
         let loader = DocumentPreviewLoader(baseURL: base, token: "t", session: session, cache: DocumentPreviewCache(directory: nil))
         for url in [
@@ -274,7 +284,8 @@ final class DocumentPreviewLoaderTests: XCTestCase {
             against: base
         ))
         XCTAssertEqual(
-            DocumentPreviewLoader.resolve("https://h.example.com/p", against: URL(string: "https://h.example.com:443")!)?.host,
+            try DocumentPreviewLoader.resolve("https://h.example.com/p", against: XCTUnwrap(URL(string: "https://h.example.com:443")))?
+                .host,
             "h.example.com"
         )
     }
@@ -290,7 +301,7 @@ final class DocumentPreviewLoaderTests: XCTestCase {
         XCTAssertEqual(session.requests.count, 1)
     }
 
-    func testDiskCopySurvivesANewCacheAndRemoveAllClearsIt() async throws {
+    func testDiskCopySurvivesANewCacheAndRemoveAllClearsIt() async {
         let key = DocumentPreviewCache.key(gateway: base, path: "/documents/doc-1/preview")
         let entry = DocumentPreviewCache.Entry(data: imageBytes, etag: "\"v1\"", capturedAt: "c1")
         await DocumentPreviewCache(directory: directory).store(entry, for: key)
@@ -304,9 +315,12 @@ final class DocumentPreviewLoaderTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
 
-    func testKeysAreScopedToTheGateway() {
+    func testKeysAreScopedToTheGateway() throws {
         let one = DocumentPreviewCache.key(gateway: base, path: "/documents/doc-1/preview")
-        let other = DocumentPreviewCache.key(gateway: URL(string: "https://other.example.com")!, path: "/documents/doc-1/preview")
+        let other = try DocumentPreviewCache.key(
+            gateway: XCTUnwrap(URL(string: "https://other.example.com")),
+            path: "/documents/doc-1/preview"
+        )
         XCTAssertNotEqual(one, other)
     }
 

@@ -1758,7 +1758,11 @@ final class PreviewSnapshotTests: XCTestCase {
     func testDocumentDetailWithPreview() {
         PreviewMocks.primeDocumentPreviewImages()
         let view = NavigationStack {
-            DocumentDetailPreviewWrapper(doc: PreviewMocks.documentDetailWithPreview, meta: "Web · Page · 5h ago")
+            DocumentDetailPreviewWrapper(
+                doc: PreviewMocks.documentDetailWithPreview,
+                meta: "Web · Page · 5h ago",
+                annotations: []
+            )
         }
         .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
         snapshot(view.environment(AppStore.preview()), name: "30p-document-detail-preview", size: CGSize(width: 393, height: 1000))
