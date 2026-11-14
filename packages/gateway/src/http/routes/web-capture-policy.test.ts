@@ -23,6 +23,7 @@ import { SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE_ALL, SourceType, writeScope } from
 import { SourceId, type Scope } from "@omnesis/types";
 import { createDatabase } from "../../db.js";
 import { createServer } from "../../server.js";
+import { DocumentPreviewStore } from "../../previews/store.js";
 import { AnalyticsDb } from "../../analytics-db.js";
 import { resetOwnedWebDomains, setOwnedWebDomains } from "../../owned-web-domains.js";
 import { createDevice } from "../../data/repositories/DeviceRepository.js";
@@ -39,6 +40,8 @@ let app: ReturnType<typeof createServer>;
 let dbPath: string;
 let analyticsPath: string;
 let analyticsDb: AnalyticsDb;
+let previewPath: string;
+let previewStore: DocumentPreviewStore;
 let browserToken: string;
 let adminToken: string;
 
@@ -109,7 +112,9 @@ beforeEach(async () => {
   db = createDatabase(dbPath);
   analyticsDb = new AnalyticsDb(analyticsPath);
   await analyticsDb.open();
-  app = createServer(db, undefined, { analyticsDb });
+  previewPath = `/tmp/omnesis-capture-policy-test-${randomUUID()}.previews.db`;
+  previewStore = DocumentPreviewStore.open(previewPath, null);
+  app = createServer(db, undefined, { analyticsDb, previewStore });
   resetOwnedWebDomains();
   browserToken = mintToken("browser", [writeScope(SourceType("web"))]);
   adminToken = mintToken("cli", [SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE_ALL]);
@@ -117,6 +122,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await analyticsDb.close();
+  previewStore.close();
+  cleanupDb(previewPath);
   db.close();
   cleanupDb(dbPath);
   rmSync(analyticsPath, { force: true });
@@ -132,6 +139,7 @@ describe("GET /web-capture-policy", () => {
       updatedAt: "",
       pause: null,
       excludedDomains: [],
+      screenshots: { enabled: false },
       ownedDomains: ["mail.example.com", "notes.example"],
       ownSites: [],
       rules: DEFAULT_WEB_CAPTURE_RULES,
@@ -162,6 +170,59 @@ describe("GET /web-capture-policy", () => {
       "bank.example",
       "shop.example",
     ]);
+  });
+});
+
+describe("page screenshots", () => {
+  test("are off by default and switched on and off for every browser by one edit", async () => {
+    expect((await policyFor(browserToken)).screenshots).toEqual({ enabled: false });
+    const on = await call("/web-capture-policy/screenshots", browserToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as WebCapturePolicy).screenshots).toEqual({ enabled: true });
+    const other = mintToken("browser", [writeScope(SourceType("web"))]);
+    expect((await policyFor(other)).screenshots).toEqual({ enabled: true });
+    expect(getSource(db, SourceId("web"))?.config).toMatchObject({
+      capture: { screenshots: { enabled: true } },
+    });
+
+    const off = await call("/web-capture-policy/screenshots", adminToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(off.status).toBe(200);
+    expect((await policyFor(browserToken)).screenshots).toEqual({ enabled: false });
+  });
+
+  test("an edit keeps the other settings and a malformed body is refused", async () => {
+    await call("/web-capture-policy/excluded-domains", browserToken, {
+      method: "POST",
+      body: JSON.stringify({ domain: "bank.example" }),
+    });
+    await call("/web-capture-policy/screenshots", browserToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect((await policyFor(browserToken)).excludedDomains).toEqual(["bank.example"]);
+    const bad = await call("/web-capture-policy/screenshots", browserToken, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: "yes" }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  test("refuses a read-only token and a write token for another source", async () => {
+    const readOnly = mintToken("cli", [SCOPE_READ]);
+    const otherWriter = mintToken("cli", [writeScope(SourceType("gmail"))]);
+    for (const token of [readOnly, otherWriter]) {
+      const res = await call("/web-capture-policy/screenshots", token, {
+        method: "PUT",
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(res.status).toBe(403);
+    }
   });
 });
 

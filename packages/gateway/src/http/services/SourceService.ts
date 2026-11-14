@@ -166,6 +166,8 @@ const SOURCE_WIRE_UPGRADE_REMEDIATION = {
 export interface SourceServiceDeps {
   db: Db;
   writeGate: WriteGate;
+  /** Removes what other stores keep per document once a removed source's documents go. */
+  onDocumentsDeleted?: (documentIds: readonly string[]) => Promise<void>;
   statusCache: StatusCache;
   wsServer?: DeviceWsServer;
   syncStatus?: SyncStatusRegistry;
@@ -2629,6 +2631,7 @@ export class SourceService {
       // document transaction committed. New annotation writes also reject the
       // removal tombstone; this second pass covers every other cognition arm.
       await cascadeCognitiveStateThroughGate(db, w, doomedDocIds);
+      await this.deps.onDocumentsDeleted?.(doomedDocIds);
       if (!stillOurs()) return;
       await sourceDataRemoval.purgeAnalyticsForSource(id);
       // The index deletion routes through the indexer worker (see

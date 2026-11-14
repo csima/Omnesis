@@ -130,6 +130,7 @@ describe("writeOfflineBackup", () => {
       "omnesis.db",
       "index.db",
       "watch.db",
+      "previews.db",
       "analytics.db",
     ]);
     const { path } = writeOfflineBackup({

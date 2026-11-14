@@ -33,15 +33,36 @@ export interface WebCaptureRules {
   skipPathSegments: string[];
 }
 
+/**
+ * The shared page-screenshot setting. When enabled, a browser saves a
+ * screenshot of the visible part of each page it captures as that page's
+ * preview. Off unless someone turns it on.
+ */
+export interface WebCaptureScreenshots {
+  enabled: boolean;
+  /**
+   * `false` when the gateway cannot keep screenshots at all (its preview store
+   * is unavailable); `enabled` then reads false whatever was chosen. Absent
+   * otherwise.
+   */
+  available?: false;
+}
+
 /** The operator-editable half of the policy, as the gateway stores it. */
 export interface WebCaptureSettings {
   pause: WebCapturePause | null;
   /** Bare lowercase hostnames; an entry also covers every subdomain. */
   excludedDomains: string[];
+  screenshots: WebCaptureScreenshots;
 }
 
-/** The wire shape of `GET /web-capture-policy`. */
-export interface WebCapturePolicy extends WebCaptureSettings {
+/**
+ * The wire shape of `GET /web-capture-policy`. `screenshots` is optional on
+ * the type only because a browser may hold a policy from a gateway that
+ * predates it; every current gateway sends it.
+ */
+export interface WebCapturePolicy extends Omit<WebCaptureSettings, "screenshots"> {
+  screenshots?: WebCaptureScreenshots;
   /** ISO time the settings last changed; empty when they were never edited. */
   updatedAt: string;
   /** Hosts a dedicated source already covers; the gateway aggregates them from the collector. */
@@ -60,7 +81,20 @@ export interface WebCapturePolicy extends WebCaptureSettings {
   removedPagesTruncated: boolean;
 }
 
-export const EMPTY_WEB_CAPTURE_SETTINGS: WebCaptureSettings = { pause: null, excludedDomains: [] };
+export const EMPTY_WEB_CAPTURE_SETTINGS: WebCaptureSettings = {
+  pause: null,
+  excludedDomains: [],
+  screenshots: { enabled: false },
+};
+
+/**
+ * Whether the policy asks browsers to save page screenshots. A policy from a
+ * gateway that predates the setting carries no `screenshots` block and reads
+ * as off.
+ */
+export function screenshotsEnabled(policy: Pick<WebCapturePolicy, "screenshots">): boolean {
+  return policy.screenshots?.enabled === true && policy.screenshots.available !== false;
+}
 
 /**
  * Conservative defaults: path segments that name authentication, payment,
@@ -563,6 +597,16 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function isScreenshots(value: unknown): value is WebCaptureScreenshots | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const screenshots = value as { enabled?: unknown; available?: unknown };
+  return (
+    typeof screenshots.enabled === "boolean" &&
+    (screenshots.available === undefined || screenshots.available === false)
+  );
+}
+
 function isPause(value: unknown): value is WebCapturePause | null {
   if (value === null) return true;
   if (typeof value !== "object") return false;
@@ -588,6 +632,7 @@ export function isWebCapturePolicy(value: unknown): value is WebCapturePolicy {
     (policy.ownSites === undefined || isStringArray(policy.ownSites)) &&
     isWebCaptureRules(policy.rules) &&
     isStringArray(policy.removedPages) &&
-    typeof policy.removedPagesTruncated === "boolean"
+    typeof policy.removedPagesTruncated === "boolean" &&
+    isScreenshots(policy.screenshots)
   );
 }

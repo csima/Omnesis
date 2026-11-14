@@ -83,14 +83,15 @@ vector results; the agent and the CLI/portal read through the same query APIs.
 
 ### The stores
 
-The gateway owns four on-disk stores under `~/.config/omnesis/`:
+The gateway owns these on-disk stores under `~/.config/omnesis/`:
 
-| File            | Engine       | Holds                                                                    |
-| --------------- | ------------ | ------------------------------------------------------------------------ |
-| `omnesis.db`    | SQLite       | Documents, sources, devices, tokens, people graph, reference-graph links |
-| `index.db`      | SQLite       | Search index — chunk text, FTS (BM25), raw embeddings                    |
-| `index.usearch` | usearch HNSW | Vector ANN index, sits beside `index.db`                                 |
-| `analytics.db`  | DuckDB       | Structured/tabular source data for SQL analytics                         |
+| File            | Engine       | Holds                                                                        |
+| --------------- | ------------ | ---------------------------------------------------------------------------- |
+| `omnesis.db`    | SQLite       | Documents, sources, devices, tokens, people graph, reference-graph links     |
+| `index.db`      | SQLite       | Search index — chunk text, FTS (BM25), raw embeddings                        |
+| `index.usearch` | usearch HNSW | Vector ANN index, sits beside `index.db`                                     |
+| `analytics.db`  | DuckDB       | Structured/tabular source data for SQL analytics                             |
+| `previews.db`   | SQLite       | One preview image per document (e.g. a page screenshot), kept off the writer |
 
 The main SQLite schema is versioned with `PRAGMA user_version`; migrations are
 append-only, contiguous, and run on startup before the first sync (see the

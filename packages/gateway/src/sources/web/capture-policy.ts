@@ -30,8 +30,8 @@ const log = createLogger("gateway").child("web-capture-policy");
 /**
  * The gateway-owned capture policy of the Web Pages source.
  *
- * The operator-editable settings — the shared pause and the excluded domains —
- * live under `capture` in the web source's own `sources.config` row, so they
+ * The operator-editable settings — the shared pause, the excluded domains and
+ * the page-screenshot switch — live under `capture` in the web source's own `sources.config` row, so they
  * survive with the source and every paired browser reads the same values. The
  * rest of the policy is derived on read: the hosts other sources own (pushed by
  * the collector), the operator's own sites (the `webCapture.ownSites` setting),
@@ -52,6 +52,7 @@ const MAX_EXCLUDED_DOMAINS = 1_000;
 const storedSettingsSchema = z.object({
   pause: z.object({ until: z.number().finite().nullable() }).nullable().default(null),
   excludedDomains: z.array(z.string().max(MAX_CAPTURE_DOMAIN_CHARS)).default([]),
+  screenshots: z.object({ enabled: z.boolean() }).default({ enabled: false }),
   updatedAt: z.string().default(""),
 });
 type StoredSettings = z.infer<typeof storedSettingsSchema>;
@@ -65,6 +66,12 @@ export interface WebCapturePolicyDeps {
   ownedDomains: () => readonly string[];
   /** The operator's `webCapture.ownSites`, read live so a config edit applies on the next read. */
   ownSites?: () => readonly string[] | undefined;
+  /**
+   * Whether the gateway can keep page screenshots at all. While it cannot (its
+   * preview store did not open), the policy reports screenshots off and
+   * unavailable, so browsers stop taking shots nothing would store.
+   */
+  screenshotsAvailable?: () => boolean;
   /**
    * Invalidates cached source listings after the source row changed. No
    * `source.updated` command is sent: no collector hosts the web source, and
@@ -118,6 +125,10 @@ export class WebCapturePolicyService {
       // A lapsed timed pause reads as resumed so clients need no clock of their own.
       pause: pauseActive(stored.pause, this.now()) ? stored.pause : null,
       excludedDomains: stored.excludedDomains,
+      screenshots:
+        this.deps.screenshotsAvailable?.() === false
+          ? { enabled: false, available: false }
+          : { enabled: stored.screenshots.enabled },
       ownedDomains: [...this.deps.ownedDomains()],
       ownSites: this.ownSites(),
       rules: DEFAULT_WEB_CAPTURE_RULES,
@@ -166,6 +177,14 @@ export class WebCapturePolicyService {
       throw new BadRequestError("The pause deadline is already in the past");
     }
     await this.edit(auth, (stored) => ({ ...stored, pause: { until } }));
+    return this.read();
+  }
+
+  /** Turn page screenshots on or off for every paired browser. */
+  async setScreenshots(enabled: boolean, auth: PolicyAuth): Promise<WebCapturePolicy> {
+    await this.edit(auth, (stored) =>
+      stored.screenshots.enabled === enabled ? null : { ...stored, screenshots: { enabled } },
+    );
     return this.read();
   }
 
@@ -231,6 +250,7 @@ export class WebCapturePolicyService {
     const capture: StoredSettings = {
       pause: settings.pause,
       excludedDomains: settings.excludedDomains,
+      screenshots: settings.screenshots,
       updatedAt: new Date(this.now()).toISOString(),
     };
     const updated = await this.deps.writeGate.updateSource(WEB_SOURCE, {

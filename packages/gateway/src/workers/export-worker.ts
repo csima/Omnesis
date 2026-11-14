@@ -22,7 +22,8 @@
  * the live store.
  */
 
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { once } from "node:events";
 import { parentPort, workerData } from "node:worker_threads";
 import Database from "better-sqlite3";
@@ -186,8 +187,105 @@ async function run(input: ExportWorkerInput): Promise<void> {
     db.close();
   }
 
+  const previewFiles = input.previewDbPath ? exportPreviews(input) : [];
+
   const { statSync } = await import("node:fs");
-  post({ type: "done", documents: total, bytes: statSync(input.destPath).size, perSource });
+  post({
+    type: "done",
+    documents: total,
+    bytes: statSync(input.destPath).size,
+    perSource,
+    previewFiles,
+  });
+}
+
+interface PreviewRow {
+  document_id: string;
+  source_id: string;
+  content_type: string;
+  width: number;
+  height: number;
+  captured_at: string;
+  image: Buffer;
+}
+
+/** Previews ride in the export as files, one per document, with a JSONL index. */
+const PREVIEWS_INDEX = "previews.jsonl";
+const PREVIEWS_DIR = "previews";
+
+/**
+ * Write the previews of the exported documents: one image file per document
+ * under `previews/`, named by the document id, and one `previews.jsonl` line
+ * per file saying which document it belongs to and what it is. A preview
+ * whose document is gone is left out.
+ */
+function exportPreviews(input: ExportWorkerInput): string[] {
+  const path = input.previewDbPath!;
+  if (!existsSync(path)) return [];
+  const previews: Db = input.previewDbKeyHex
+    ? (openEncryptedSqlite(path, {
+        key: Buffer.from(input.previewDbKeyHex, "hex"),
+        readonly: true,
+        fileMustExist: true,
+        migratePlaintext: false,
+      }) as unknown as Db)
+    : new Database(path, { readonly: true, fileMustExist: true });
+  const documents: Db = input.gatewayDbKeyHex
+    ? (openEncryptedSqlite(input.gatewayDbPath, {
+        key: Buffer.from(input.gatewayDbKeyHex, "hex"),
+        readonly: true,
+        fileMustExist: true,
+        migratePlaintext: false,
+      }) as unknown as Db)
+    : new Database(input.gatewayDbPath, { readonly: true, fileMustExist: true });
+  const exportDir = dirname(input.destPath);
+  const files: string[] = [];
+  const index: string[] = [];
+  try {
+    previews.exec("PRAGMA busy_timeout = 30000");
+    documents.exec("PRAGMA busy_timeout = 30000");
+    const page = previews.prepare<(string | number)[], PreviewRow>(
+      `SELECT document_id, source_id, content_type, width, height, captured_at, image
+         FROM document_previews
+        WHERE document_id > ?${input.sourceId ? " AND source_id = ?" : ""}
+        ORDER BY document_id LIMIT ?`,
+    );
+    const exists = documents.prepare<[string], { one: number }>(
+      "SELECT 1 AS one FROM documents WHERE id = ?",
+    );
+    let after = "";
+    for (;;) {
+      const rows = page.all(...(input.sourceId ? [after, input.sourceId, 100] : [after, 100]));
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        if (!exists.get(row.document_id)) continue;
+        const extension = row.content_type === "image/jpeg" ? "jpg" : "webp";
+        const file = `${PREVIEWS_DIR}/${row.document_id}.${extension}`;
+        mkdirSync(join(exportDir, PREVIEWS_DIR), { recursive: true });
+        writeFileSync(join(exportDir, file), row.image);
+        files.push(file);
+        index.push(
+          JSON.stringify({
+            documentId: row.document_id,
+            sourceId: row.source_id,
+            file,
+            contentType: row.content_type,
+            width: row.width,
+            height: row.height,
+            capturedAt: row.captured_at,
+          }),
+        );
+      }
+      after = rows[rows.length - 1].document_id;
+      if (rows.length < 100) break;
+    }
+  } finally {
+    previews.close();
+    documents.close();
+  }
+  if (files.length === 0) return [];
+  writeFileSync(join(exportDir, PREVIEWS_INDEX), `${index.join("\n")}\n`);
+  return [PREVIEWS_INDEX, ...files];
 }
 
 run(workerData as ExportWorkerInput).catch((err) => {

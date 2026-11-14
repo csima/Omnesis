@@ -13,6 +13,12 @@ export type DeliveryOutcome =
       network?: boolean;
       reason?: string;
       status?: number;
+      /**
+       * The failure is this item's alone — a page screenshot the gateway could
+       * not store — so it retries on its own schedule and never holds back the
+       * items behind it.
+       */
+      itemOnly?: boolean;
     }
   | { kind: "drop"; reason: string; status: number }
   | { kind: "rejected"; state: PushServerState["state"]; reason: string }

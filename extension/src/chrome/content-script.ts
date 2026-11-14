@@ -27,6 +27,7 @@ import {
 import { CaptureActivation } from "./capture-activation.js";
 import { attachCaptureStatusListener } from "./content-status.js";
 import { applyCaptureStorageAction, captureStorageAction } from "./capture-storage-change.js";
+import { checkScreenshot, isScreenshotCheckMessage } from "./screenshot-check.js";
 
 /**
  * Content-script glue — the thin boundary that wires the browser (DOM, History
@@ -121,6 +122,8 @@ export function startContentScript(env: ContentScriptEnvironment): void {
   let pageCaptureReason: CaptureContentStatus["reason"];
   /** The policy's sensitive-field rule as the worker last reported it; on by default. */
   let skipPasswordForms = true;
+  /** The content hash of the last capture this page emitted, which a screenshot illustrates. */
+  let lastEmittedHash: string | null = null;
   const contentInstanceId = crypto.randomUUID();
   const handoffBindings = new WeakMap<CaptureEmission, Promise<HandoffBinding | null>>();
   let handoffSequence = 0;
@@ -314,7 +317,10 @@ export function startContentScript(env: ContentScriptEnvironment): void {
         return false;
       }
     },
-    emit: (emission) => handoff.enqueue(emission),
+    emit: (emission) => {
+      lastEmittedHash = emission.contentHash;
+      return handoff.enqueue(emission);
+    },
   });
 
   /**
@@ -367,6 +373,23 @@ export function startContentScript(env: ContentScriptEnvironment): void {
       }) satisfies CaptureContentStatus,
     chrome.runtime.onMessage,
   );
+
+  // The worker asks just before it screenshots this tab whether the page is
+  // still the capture it is about to illustrate, and safe to shoot.
+  const onScreenshotCheck = (
+    message: unknown,
+    _sender: chrome.runtime.MessageSender,
+    sendResponse: (response?: unknown) => void,
+  ): boolean => {
+    if (!isScreenshotCheckMessage(message)) return false;
+    sendResponse(
+      torndown
+        ? { ok: false, reason: "navigated" }
+        : checkScreenshot({ document, location, lastEmittedHash }, message),
+    );
+    return false;
+  };
+  chrome.runtime.onMessage?.addListener(onScreenshotCheck);
 
   // --- Wire browser events into the state machine -----------------------------
 
@@ -463,6 +486,11 @@ export function startContentScript(env: ContentScriptEnvironment): void {
     // may already be invalid. Detach the popup responder first so a throwing
     // storage API cannot prevent the more important status cleanup.
     detachCaptureStatus();
+    try {
+      chrome.runtime.onMessage?.removeListener(onScreenshotCheck);
+    } catch {
+      // Extension reload invalidated the context before teardown ran.
+    }
     try {
       chrome.storage.onChanged.removeListener(onStorageChanged);
     } catch {

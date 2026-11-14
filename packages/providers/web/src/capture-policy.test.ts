@@ -12,6 +12,7 @@ import {
   pathIsSecretLink,
   pauseActive,
   pauseRemainingMs,
+  screenshotsEnabled,
   type WebCapturePolicy,
 } from "./capture-policy.js";
 
@@ -427,5 +428,30 @@ describe("the path corpus", () => {
   });
   it.each(CREDENTIAL_PAGES)("refuses the credential page %s", (url) => {
     expect(judgeCaptureUrl(policy(), url, context).allowed).toBe(false);
+  });
+});
+
+describe("the screenshots block", () => {
+  it("accepts a policy with or without the screenshots block, and refuses a malformed one", () => {
+    expect(isWebCapturePolicy(policy({ screenshots: { enabled: true } }))).toBe(true);
+    expect(isWebCapturePolicy({ ...policy(), screenshots: { enabled: "yes" } })).toBe(false);
+    expect(isWebCapturePolicy({ ...policy(), screenshots: null })).toBe(false);
+    expect(isWebCapturePolicy(policy({ screenshots: { enabled: false, available: false } }))).toBe(
+      true,
+    );
+    expect(
+      isWebCapturePolicy({ ...policy(), screenshots: { enabled: true, available: true } }),
+    ).toBe(false);
+  });
+});
+
+describe("screenshotsEnabled", () => {
+  it("is on only when the policy says so, and off for a gateway that predates the setting", () => {
+    expect(screenshotsEnabled(policy({ screenshots: { enabled: true } }))).toBe(true);
+    expect(screenshotsEnabled(policy({ screenshots: { enabled: false } }))).toBe(false);
+    expect(screenshotsEnabled(policy())).toBe(false);
+    expect(screenshotsEnabled(policy({ screenshots: { enabled: true, available: false } }))).toBe(
+      false,
+    );
   });
 });

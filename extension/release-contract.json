@@ -47,6 +47,11 @@
       "authenticated": true
     },
     {
+      "method": "PUT",
+      "path": "/web-capture-policy/screenshots",
+      "authenticated": true
+    },
+    {
       "method": "POST",
       "path": "/documents",
       "authenticated": true
@@ -54,6 +59,11 @@
     {
       "method": "POST",
       "path": "/analytics/ingest",
+      "authenticated": true
+    },
+    {
+      "method": "PUT",
+      "path": "/documents/preview",
       "authenticated": true
     },
     {

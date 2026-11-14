@@ -22,6 +22,7 @@ import { FileTypeIcon, fileTypeKind, fileTypeLabel } from "../lib/file-type-icon
 import { MetadataPanel } from "../components/metadata-panel.js";
 import { GraphTimelinePanel } from "../components/graph-card.js";
 import { ConfirmModal } from "../components/confirm-modal.js";
+import { DocumentPreview } from "../components/document-preview.js";
 import { navigate } from "../lib/router.js";
 import { useCursorPage } from "../lib/use-cursor-page.js";
 
@@ -234,7 +235,10 @@ export function DocumentView({ id }) {
         `}
       </div>
       <div class="doc-layout">
-        <div class="doc-content" dangerouslySetInnerHTML=${{ __html: contentHtml }}></div>
+        <div class="doc-main">
+          <${DocumentPreview} preview=${doc.preview} title=${doc.title} />
+          <div class="doc-content" dangerouslySetInnerHTML=${{ __html: contentHtml }}></div>
+        </div>
         <div class="doc-side-rail">
           <${MetadataPanel}
             document=${doc}

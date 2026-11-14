@@ -33,6 +33,7 @@ import { navigate } from "../lib/router.js";
 import { accessLevels, accessRules, errorMessage, overviewPolicies } from "./access/shared.js";
 import { answerPrivacySummary, reachSummary } from "./access/terms.js";
 import { CHROME_WEB_STORE_URL } from "../lib/extension-links.js";
+import { BrowserCaptureSettings, hasPairedBrowser } from "../components/browser-capture-settings.js";
 import { KindIcon, PairKindIcon } from "../lib/device-kind-icon.js";
 import { useVisiblePoll } from "../lib/use-visible-poll.js";
 import { DoctorReportView } from "./doctor.js";
@@ -1906,6 +1907,7 @@ export function DevicesView({ pairKindRequest = null, focusDeviceId = null } = {
                   ${showOther && html`<div class="devices-cards">${other.map(renderCard)}</div>`}
                 </section>
               `}
+              ${hasPairedBrowser(devices) && html`<${BrowserCaptureSettings} />`}
             </div>
           `}
 

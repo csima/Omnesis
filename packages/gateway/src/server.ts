@@ -116,6 +116,9 @@ import {
 import { mountDevAnnotationsRoutes } from "./http/routes/dev-annotations.js";
 import { mountWebCapturePolicyRoutes } from "./http/routes/web-capture-policy.js";
 import { WebCapturePolicyService } from "./sources/web/capture-policy.js";
+import { registerWebPreviewAdmission } from "./sources/web/preview-admission.js";
+import { DocumentPreviewService, deletePreviewsSafely } from "./previews/service.js";
+import { mountDocumentPreviewRoutes } from "./http/routes/document-previews.js";
 import { getOwnedWebDomains } from "./owned-web-domains.js";
 import { mountWatchV2Routes } from "./http/routes/watch.js";
 import { mountDocumentGraphRoute } from "./http/routes/document-graph.js";
@@ -178,6 +181,7 @@ import type { SemanticSearchStatus } from "@omnesis/source-sdk";
 import type { DiskUsageSnapshot } from "@omnesis/core/doctor";
 import type { TlsLifecyclePort } from "./http/routes/admin/internals.js";
 import type { AgentCertificateTrust } from "./tls-lifecycle/agent-trust.js";
+import type { DocumentPreviewStore } from "./previews/store.js";
 import type { PushPlan } from "@omnesis/core/push";
 import type Database from "better-sqlite3";
 import type { BootstrapSettingsView } from "./brain/bootstrap-status.js";
@@ -257,6 +261,11 @@ export function createServer(
       quiescePeriodics(): void;
       beginUserAdmission?(): import("./scheduler/admission.js").AdmissionHold;
     };
+    /**
+     * The document preview store (`previews.db`). Without it previews are
+     * neither accepted nor served, and documents carry no `preview`.
+     */
+    previewStore?: DocumentPreviewStore;
     /**
      * Optional background-jobs registry.
      */
@@ -806,19 +815,28 @@ export function createServer(
   // One removal service for every multi-store wipe: the document routes'
   // source/provider wipes and SourceService's stream removals on detach,
   // move and per-device resync.
+  // A document's preview goes wherever the document goes: every delete path
+  // below hands its deleted ids here beside the cognitive-state cascade.
+  const previewStore = opts?.previewStore;
+  const deletePreviewsFor = (documentIds: readonly string[]): Promise<void> =>
+    deletePreviewsSafely(previewStore, documentIds);
   const sourceDataRemoval = new SourceDataRemovalService({
     db,
     writeGate: w,
     indexWriteGate,
     analyticsDb: opts?.analyticsDb,
     sourceWriteEpochFence,
-    cascadeCognitionFor: (documentIds) => cascadeCognitiveStateThroughGate(db, w, documentIds),
+    cascadeCognitionFor: async (documentIds) => {
+      await cascadeCognitiveStateThroughGate(db, w, documentIds);
+      await deletePreviewsFor(documentIds);
+    },
   });
   // Bound once the capture policy service exists below; it needs this service to purge.
   const webCapturePolicyRef: { current?: WebCapturePolicyService } = {};
   const documentService = new DocumentService({
     db,
     writeGate: w,
+    onDocumentsDeleted: deletePreviewsFor,
     events: eventService,
     webCapturePolicy: () => webCapturePolicyRef.current?.ingestPolicy() ?? null,
     ingestYieldBatch: opts?.ingestYieldBatch,
@@ -1263,6 +1281,7 @@ export function createServer(
   const sourceService = new SourceService({
     db,
     writeGate: w,
+    onDocumentsDeleted: deletePreviewsFor,
     statusCache,
     wsServer: opts?.wsServer,
     syncStatus: opts?.syncStatus,
@@ -1579,6 +1598,17 @@ export function createServer(
     watermarkService,
   });
 
+  // Document previews: stored and served generically; each source that keeps
+  // them registers its own admission rule.
+  const previewService = previewStore
+    ? new DocumentPreviewService({
+        db,
+        store: previewStore,
+        gatePush: (sourceIds, auth) => sourceService.gatePush(sourceIds, auth),
+        streamFor: (sourceId, auth) => sourceService.streamFor(sourceId, auth),
+      })
+    : undefined;
+
   // Documents core (CRUD, count/stats/recent, list/ids/exists).
   mountDocumentCoreRoutes(app, {
     db,
@@ -1586,6 +1616,7 @@ export function createServer(
     documentService,
     sourceService,
     indexDb: opts?.indexDb,
+    ...(previewService ? { previews: previewService } : {}),
   });
 
   // The capture policy every paired browser enforces (shared pause, excluded
@@ -1598,10 +1629,14 @@ export function createServer(
     documentService,
     ownedDomains: getOwnedWebDomains,
     ownSites: () => (opts?.configStore?.get() ?? opts?.config)?.webCapture?.ownSites,
+    screenshotsAvailable: () => previewService !== undefined,
     onChanged: () => statusCache.bump(),
   });
   webCapturePolicyRef.current = webCapturePolicy;
   mountWebCapturePolicyRoutes(app, webCapturePolicy);
+
+  if (previewService) registerWebPreviewAdmission(previewService, webCapturePolicy);
+  mountDocumentPreviewRoutes(app, previewService);
 
   // Developer annotations (OMNESIS_DEV_MODE): the operator → engineer
   // data-quality feedback channel. Each handler 404s unless dev mode is on.
@@ -1622,6 +1657,7 @@ export function createServer(
     indexerReadiness: opts?.indexerReadiness,
     // Read-worker gate — routes the legacy LIKE scan off the main event loop.
     ioGate: opts?.ioGate,
+    ...(previewService ? { previews: previewService } : {}),
   });
 
   // Canonical Direct MCP tools are built independently of the configured
@@ -1751,7 +1787,7 @@ export function createServer(
   // /documents/:id catch-all — registered AFTER people routes in the
   // original (line 3007), so the greedy :id matcher doesn't intercept
   // /documents/:id/refs etc.
-  mountDocumentByIdRoute(app, { db });
+  mountDocumentByIdRoute(app, { db, ...(previewService ? { previews: previewService } : {}) });
 
   // /sync-state/:sourceId GET + POST.
   mountSyncStateRoutes(app, { documentService, sourceService });

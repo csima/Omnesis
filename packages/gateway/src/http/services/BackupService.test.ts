@@ -738,3 +738,17 @@ describe("the watch journal", () => {
     expect(manifest.files.map((f) => f.name)).not.toContain("watch.db");
   });
 });
+
+describe("the preview store", () => {
+  test("is captured, because a page screenshot cannot be taken again", async () => {
+    const previewDbPath = join(configDir, "previews.db");
+    makeSqliteDb(previewDbPath, ["preview-1"]);
+    const manifest = await runBackup(makeService({ previewDbPath }));
+    expect(manifest.files.map((f) => f.name)).toContain("previews.db");
+  });
+
+  test("is skipped when the gateway runs without one", async () => {
+    const manifest = await runBackup(makeService());
+    expect(manifest.files.map((f) => f.name)).not.toContain("previews.db");
+  });
+});

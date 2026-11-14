@@ -31,6 +31,7 @@ import {
 } from "./ws-messages.js";
 import { PAIRING_PROTOCOL_MIN_VERSION, PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.js";
 import { MINIMUM_CLIENT_VERSIONS } from "./client-version.js";
+import { PREVIEW_STORE_SCHEMA_VERSION } from "./utils.js";
 import {
   PUSH_RELAY_PROTOCOL_MAX_VERSION,
   PUSH_RELAY_PROTOCOL_MIN_VERSION,
@@ -104,6 +105,12 @@ export interface CompatManifest {
     readonly config: StoreCompat;
     /** Per-source sync cursors and provider-local stores. */
     readonly cursors: StoreCompat;
+    /**
+     * `previews.db` — one image per document. Not derivable (a screenshot
+     * cannot be taken again after the fact), so it carries its own numbered
+     * schema in `user_version`, upgraded forward on open.
+     */
+    readonly previewDb: StoreCompat;
   };
   readonly protocols: {
     /** Device WebSocket protocol — exact-match gate (lockstep). */
@@ -174,6 +181,7 @@ export function buildCompatManifest(args: {
       analyticsDb: { policy: "source-schema-evolved", version: null },
       config: { policy: "in-place", version: CONFIG_SCHEMA_VERSION },
       cursors: { policy: "provider-owned", version: null },
+      previewDb: { policy: "numbered-migrations", version: PREVIEW_STORE_SCHEMA_VERSION },
     },
     protocols: {
       ws: PROTOCOL_VERSION,

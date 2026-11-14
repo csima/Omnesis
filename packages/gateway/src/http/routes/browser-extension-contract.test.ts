@@ -35,6 +35,7 @@ import { createToken } from "../../data/repositories/TokenRepository.js";
 import { createDatabase } from "../../db.js";
 import { resetOwnedWebDomains } from "../../owned-web-domains.js";
 import { createServer } from "../../server.js";
+import { DocumentPreviewStore } from "../../previews/store.js";
 import type Database from "better-sqlite3";
 
 type Db = Database.Database;
@@ -87,6 +88,8 @@ let app: ReturnType<typeof createServer>;
 let dbPath: string;
 let analyticsPath: string;
 let analyticsDb: AnalyticsDb;
+let previewPath: string;
+let previewStore: DocumentPreviewStore;
 let browserToken: string;
 let notesToken: string;
 let findToken: string;
@@ -312,6 +315,67 @@ const recipes: Record<RouteKey, Recipe> = {
     build: () => ({ path: "/web-capture-policy/pause", init: { method: "DELETE" } }),
     expected: 200,
   },
+  "PUT /web-capture-policy/screenshots": {
+    build: () => ({
+      path: "/web-capture-policy/screenshots",
+      init: json("PUT", { enabled: true }),
+    }),
+    expected: 200,
+  },
+  // A page's screenshot, after the page itself was accepted and with screenshots on.
+  "PUT /documents/preview": {
+    build: async () => {
+      const url = "https://news.example.com/invented-story";
+      const externalId = `contract-${randomUUID()}`;
+      expect(
+        (
+          await call(
+            "/web-capture-policy/screenshots",
+            browserToken,
+            json("PUT", { enabled: true }),
+          )
+        ).status,
+      ).toBe(200);
+      const pushed = await call(
+        "/documents",
+        browserToken,
+        json("POST", {
+          documents: [
+            {
+              providerId: "web",
+              sourceId: "web",
+              externalId,
+              documentType: "webpage",
+              title: "An invented story",
+              content: "Invented readable text of a fictional page.",
+              contentHash: `hash-${externalId}`,
+              metadata: { sourceUrl: url },
+              sourceCreatedAt: "2026-01-15T10:00:00Z",
+              sourceUpdatedAt: "2026-01-15T10:00:00Z",
+            },
+          ],
+        }),
+      );
+      expect(pushed.status).toBe(200);
+      const image = Buffer.alloc(32);
+      image.write("RIFF", 0, "ascii");
+      image.write("WEBP", 8, "ascii");
+      return {
+        path: "/documents/preview",
+        init: json("PUT", {
+          providerId: "web",
+          sourceId: "web",
+          externalId,
+          contentType: "image/webp",
+          width: 1280,
+          height: 720,
+          capturedAt: "2026-01-15T10:00:05.000Z",
+          image: image.toString("base64"),
+        }),
+      };
+    },
+    expected: 200,
+  },
   // An empty batch is the extension's own auth probe after pairing.
   "POST /documents": {
     build: () => ({ path: "/documents", init: json("POST", { documents: [] }) }),
@@ -345,9 +409,12 @@ beforeEach(async () => {
   db = createDatabase(dbPath);
   analyticsDb = new AnalyticsDb(analyticsPath);
   await analyticsDb.open();
+  previewPath = `/tmp/omnesis-extension-contract-${randomUUID()}.previews.db`;
+  previewStore = DocumentPreviewStore.open(previewPath, null);
   notesRuntime = undefined;
   app = createServer(db, undefined, {
     analyticsDb,
+    previewStore,
     onOmnesisNotesRuntime: (runtime) => {
       notesRuntime = runtime;
     },
@@ -365,6 +432,8 @@ afterEach(async () => {
   await notesRuntime?.flushAll();
   notesRuntime?.dispose();
   await analyticsDb.close();
+  previewStore.close();
+  cleanupDb(previewPath);
   db.close();
   cleanupDb(dbPath);
   rmSync(analyticsPath, { force: true });

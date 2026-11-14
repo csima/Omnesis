@@ -26,6 +26,7 @@ import { GATEWAY_VERSION } from "../../version.js";
 import { createDatabase } from "../../db.js";
 import { AnalyticsDb } from "../../analytics-db.js";
 import { ConflictError, ServiceUnavailableError } from "../errors.js";
+import { DocumentPreviewStore } from "../../previews/store.js";
 import { ExportService, exportManifestSchema, type ExportServiceOptions } from "./ExportService.js";
 import type Database from "better-sqlite3";
 import type { AnalyticsTableSchema } from "@omnesis/source-sdk";
@@ -502,3 +503,79 @@ function parseCsv(text: string): string[][] {
   }
   return rows;
 }
+
+describe("ExportService previews", () => {
+  function previewStoreWith(entries: Array<{ documentId: string; sourceId: string }>): string {
+    const previewDbPath = join(configDir, "previews.db");
+    const store = DocumentPreviewStore.open(previewDbPath, null);
+    for (const entry of entries) {
+      const bytes = new Uint8Array(24).fill(9);
+      bytes.set([0xff, 0xd8, 0xff], 0);
+      store.put({
+        ...entry,
+        contentType: "image/jpeg",
+        width: 800,
+        height: 450,
+        capturedAt: "2026-01-12T09:00:05.000Z",
+        bytes,
+      });
+    }
+    store.close();
+    return previewDbPath;
+  }
+
+  function idOf(externalId: string): string {
+    return db
+      .prepare<[string], { id: string }>("SELECT id FROM documents WHERE external_id = ?")
+      .get(externalId)!.id;
+  }
+
+  test("writes each exported document's preview beside a JSONL index, leaving orphans out", async () => {
+    const pageId = idOf("page-9");
+    const previewDbPath = previewStoreWith([
+      { documentId: pageId, sourceId: "notion:workspace-7" },
+      { documentId: "no-such-document", sourceId: "notion:workspace-7" },
+    ]);
+    const service = makeService({ previewDbPath });
+    service.start();
+    await service.whenIdle();
+    expect(service.getStatus().lastResult?.ok).toBe(true);
+
+    const dir = singleExportDir();
+    const index = readFileSync(join(dir, "previews.jsonl"), "utf8").trim().split("\n");
+    expect(index.map((line) => JSON.parse(line) as Record<string, unknown>)).toEqual([
+      {
+        documentId: pageId,
+        sourceId: "notion:workspace-7",
+        file: `previews/${pageId}.jpg`,
+        contentType: "image/jpeg",
+        width: 800,
+        height: 450,
+        capturedAt: "2026-01-12T09:00:05.000Z",
+      },
+    ]);
+    expect(readFileSync(join(dir, "previews", `${pageId}.jpg`)).subarray(0, 3)).toEqual(
+      Buffer.from([0xff, 0xd8, 0xff]),
+    );
+    const manifest = exportManifestSchema.parse(
+      JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")),
+    );
+    expect(manifest.files).toContain("previews.jsonl");
+    expect(manifest.files).toContain(`previews/${pageId}.jpg`);
+  });
+
+  test("a source-scoped export carries only that source's previews", async () => {
+    const pageId = idOf("page-9");
+    const mailId = idOf("msg-1");
+    const previewDbPath = previewStoreWith([
+      { documentId: pageId, sourceId: "notion:workspace-7" },
+      { documentId: mailId, sourceId: "gmail:maya@example.com" },
+    ]);
+    const service = makeService({ previewDbPath });
+    service.start({ sourceId: "gmail:maya@example.com" });
+    await service.whenIdle();
+    const dir = singleExportDir();
+    expect(existsSync(join(dir, "previews", `${mailId}.jpg`))).toBe(true);
+    expect(existsSync(join(dir, "previews", `${pageId}.jpg`))).toBe(false);
+  });
+});

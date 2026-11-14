@@ -9,6 +9,7 @@
  *   - `omnesis.db`      — `VACUUM INTO` snapshot (always)
  *   - `index.db`        — `VACUUM INTO` snapshot (unless `includeIndex: false`)
  *   - `watch.db`        — `VACUUM INTO` snapshot of the watch journal
+ *   - `previews.db`     — `VACUUM INTO` snapshot of the document preview store
  *   - `analytics.db`    — DuckDB online copy via the injected `analyticsBackup`
  *                         port (the live `AnalyticsDb` pool holds the file
  *                         lock, so a second DuckDB instance cannot open it —
@@ -57,6 +58,7 @@ import {
   BACKUP_RECOVERY_ENVELOPE_NAME,
   DEFAULT_PRE_UPDATE_BACKUP_COUNT,
   ENCRYPTED_ARTIFACT_SUFFIX,
+  GATEWAY_PREVIEW_STORE_FILE,
   backupConfigCopyNames,
   createBackupDir,
   createLogger,
@@ -159,6 +161,12 @@ export interface BackupServiceOptions {
    */
   watchDbPath: string;
   watchDbKeyHex?: string;
+  /**
+   * The document preview store. Copied because a page screenshot cannot be
+   * taken again after the fact; absent when the gateway runs without one.
+   */
+  previewDbPath?: string;
+  previewDbKeyHex?: string;
   analyticsDbPath: string;
   /**
    * Online copy of the live DuckDB analytics database into `destPath`.
@@ -299,6 +307,7 @@ export class BackupService {
       this.opts.gatewayDbPath,
       this.opts.analyticsDbPath,
       this.opts.watchDbPath,
+      ...(this.opts.previewDbPath ? [this.opts.previewDbPath] : []),
       ...(includeIndex ? [this.opts.indexDbPath] : []),
     ];
     let requiredBytes = 0;
@@ -356,6 +365,14 @@ export class BackupService {
           destPath: join(cur.path, WATCH_JOURNAL_FILENAME),
           ...(this.opts.watchDbKeyHex ? { keyHex: this.opts.watchDbKeyHex } : {}),
           name: WATCH_JOURNAL_FILENAME,
+        });
+      }
+      if (this.opts.previewDbPath && existsSync(this.opts.previewDbPath)) {
+        vacuums.push({
+          sourcePath: this.opts.previewDbPath,
+          destPath: join(cur.path, GATEWAY_PREVIEW_STORE_FILE),
+          ...(this.opts.previewDbKeyHex ? { keyHex: this.opts.previewDbKeyHex } : {}),
+          name: GATEWAY_PREVIEW_STORE_FILE,
         });
       }
       await this.runWorker({ vacuums, copies: this.collectConfigCopies(cur.path) }, cur);
