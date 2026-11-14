@@ -1711,6 +1711,7 @@ public final class AppStore {
     /// preferences survive, matching an intentional re-pair.
     private func tearDownAfterPairingLoss(wipeBuffer: Bool) async {
         TranscriptionVocabularyCache.shared.clear()
+        clearDocumentPreviewCaches()
         adminCoord.stopAdmin()
         agentCoord.teardown()
         notesCoord.teardown()
@@ -1775,6 +1776,7 @@ public final class AppStore {
         let stagedRevocation = pairingCoord.stageUnpair()
         guard stagedRevocation != nil || pairingCoord.pairing == nil else { return }
         TranscriptionVocabularyCache.shared.clear()
+        clearDocumentPreviewCaches()
         adminCoord.stopAdmin()
         agentCoord.teardown()
         NotificationClaimCredentials.clear()

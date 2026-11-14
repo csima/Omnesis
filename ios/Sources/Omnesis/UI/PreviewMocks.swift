@@ -7683,5 +7683,284 @@ extension PreviewMocks {
         session.replyFailure = RealtimeCallFailure(code: "rate_limited", fatal: false, retryable: true)
         return session
     }
+
+    // MARK: - Document previews
+
+    /// A desktop-browser viewport capture of an invented workshop page.
+    static let webPagePreview = DocumentPreview(
+        url: "/documents/web-ceramics/preview",
+        contentType: "image/jpeg",
+        width: 1440,
+        height: 900,
+        capturedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600 * 5))
+    )
+
+    /// A phone-shaped capture, taller than it is wide, of an invented trail guide.
+    static let tallPagePreview = DocumentPreview(
+        url: "/documents/web-trail/preview",
+        contentType: "image/jpeg",
+        width: 780,
+        height: 1688,
+        capturedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 2))
+    )
+
+    /// A preview the gateway describes but no longer serves (the source answers 404).
+    static let missingPagePreview = DocumentPreview(
+        url: "/documents/web-soup/preview",
+        contentType: "image/webp",
+        width: 1280,
+        height: 800,
+        capturedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 6))
+    )
+
+    /// Encoded placeholder images for the fixtures above, drawn in code.
+    static let documentPreviewImageData: [String: Data] = [
+        webPagePreview.url: PreviewPageArt.landscape.jpeg(width: webPagePreview.width, height: webPagePreview.height),
+        tallPagePreview.url: PreviewPageArt.tall.jpeg(width: tallPagePreview.width, height: tallPagePreview.height),
+    ]
+
+    /// Serves `documentPreviewImageData` and answers 404 for anything else.
+    static let documentPreviewSource: any DocumentPreviewImageSource = PreviewDocumentPreviewSource()
+
+    /// Decode every fixture image into the shared decoded-image cache at each
+    /// surface's size, so a synchronous snapshot render shows them on its
+    /// first frame.
+    static func primeDocumentPreviewImages() {
+        for preview in [webPagePreview, tallPagePreview] {
+            guard let data = documentPreviewImageData[preview.url] else { continue }
+            for size in [
+                DocumentPreviewPixelSize.thumbnail,
+                DocumentPreviewPixelSize.banner,
+                DocumentPreviewPixelSize.full,
+            ] {
+                if let image = DocumentPreviewDecoder.image(from: data, maxPixelSize: size) {
+                    DocumentPreviewImageCache.shared.insert(image, for: preview, maxPixelSize: size)
+                }
+            }
+        }
+    }
+
+    /// Search hits with and without previews: a landscape capture, a tall
+    /// capture, one whose image is gone, and a document with none.
+    static let searchResultsWithPreviews: [SearchResultItem] = [
+        SearchResultItem(
+            documentId: "web-ceramics",
+            sourceId: "web",
+            documentType: "page",
+            title: "Spring ceramics workshops — Studio Northstar",
+            sourceUrl: "https://studio-northstar.example.com/workshops",
+            appUrl: nil,
+            sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600 * 5)),
+            author: nil,
+            chunkText: "Six evening sessions on the wheel, from centring clay to glazing. Beginners welcome; tools and firing included.",
+            score: 0.88,
+            refCount: nil,
+            scoreBreakdown: nil,
+            preview: webPagePreview
+        ),
+        SearchResultItem(
+            documentId: "web-trail",
+            sourceId: "web",
+            documentType: "page",
+            title: "Riverside Estate trail guide",
+            sourceUrl: "https://riverside-estate.example.org/trails",
+            appUrl: nil,
+            sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 2)),
+            author: nil,
+            chunkText: "The lakeside loop is 6.4 km and mostly flat. Dogs on leads past the boathouse.",
+            score: 0.81,
+            refCount: nil,
+            scoreBreakdown: nil,
+            preview: tallPagePreview
+        ),
+        SearchResultItem(
+            documentId: "web-soup",
+            sourceId: "web",
+            documentType: "page",
+            title: "Weeknight lentil soup",
+            sourceUrl: "https://kitchen-notes.example.com/lentil-soup",
+            appUrl: nil,
+            sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 6)),
+            author: nil,
+            chunkText: "Red lentils, one onion, cumin and a squeeze of lemon. Ready in thirty minutes.",
+            score: 0.74,
+            refCount: nil,
+            scoreBreakdown: nil,
+            preview: missingPagePreview
+        ),
+        searchResults[0],
+    ]
+
+    static let recentDocumentsWithPreviews: [RecentDocument] = [
+        RecentDocument(
+            id: "web-ceramics",
+            sourceId: "web",
+            externalId: "https://studio-northstar.example.com/workshops",
+            title: "Spring ceramics workshops — Studio Northstar",
+            contentPreview: "Six evening sessions on the wheel, from centring clay to glazing.",
+            documentType: "page",
+            relevanceScore: nil,
+            sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600 * 5)),
+            sourceUpdatedAt: nil,
+            preview: webPagePreview
+        ),
+        RecentDocument(
+            id: "web-trail",
+            sourceId: "web",
+            externalId: "https://riverside-estate.example.org/trails",
+            title: "Riverside Estate trail guide",
+            contentPreview: "The lakeside loop is 6.4 km and mostly flat.",
+            documentType: "page",
+            relevanceScore: nil,
+            sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 2)),
+            sourceUpdatedAt: nil,
+            preview: tallPagePreview
+        ),
+        RecentDocument(
+            id: "web-notes",
+            sourceId: "web",
+            externalId: "https://kitchen-notes.example.com/",
+            title: "Kitchen notes",
+            contentPreview: "Recipes for busy weeknights.",
+            documentType: "page",
+            relevanceScore: nil,
+            sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 4)),
+            sourceUpdatedAt: nil
+        ),
+    ]
+
+    /// A captured web page decoded from the wire shape, `preview` block included.
+    static let documentDetailWithPreview: DocumentDetail = {
+        let json = """
+        {
+          "id": "web-ceramics",
+          "provider_id": "web",
+          "source_id": "web",
+          "external_id": "https://studio-northstar.example.com/workshops",
+          "title": "Spring ceramics workshops — Studio Northstar",
+          "content": "# Spring ceramics workshops\\n\\nSix evening sessions on the wheel, from centring clay to glazing.\\n\\n- Tuesdays, 7–9 pm\\n- Beginners welcome\\n- Tools and firing included",
+          "content_hash": "sha256:preview-web",
+          "metadata": "{\\"documentType\\":\\"page\\",\\"sourceUrl\\":\\"https://studio-northstar.example.com/workshops\\"}",
+          "source_created_at": "2026-11-14T08:00:00Z",
+          "source_updated_at": "2026-11-14T08:00:00Z",
+          "ingested_at": "2026-11-14T08:00:05Z",
+          "updated_at": "2026-11-14T08:00:05Z",
+          "preview": {
+            "url": "\(webPagePreview.url)",
+            "contentType": "image/jpeg",
+            "width": 1440,
+            "height": 900,
+            "capturedAt": "\(webPagePreview.capturedAt)"
+          }
+        }
+        """
+        return try! JSONDecoder().decode(DocumentDetail.self, from: Data(json.utf8))
+    }()
+}
+
+@available(iOS 17.0, *)
+private struct PreviewDocumentPreviewSource: DocumentPreviewImageSource {
+    func imageData(for preview: DocumentPreview) async throws -> Data {
+        guard let data = PreviewMocks.documentPreviewImageData[preview.url] else {
+            throw GatewayClient.Error.notFound
+        }
+        return data
+    }
+}
+
+/// Placeholder "web page" art for preview fixtures: an invented site drawn
+/// with plain shapes and text, never a real page.
+enum PreviewPageArt {
+    case landscape
+    case tall
+
+    func jpeg(width: Int, height: Int) -> Data {
+        let size = CGSize(width: width, height: height)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            draw(in: context.cgContext, size: size)
+        }
+        return image.jpegData(compressionQuality: 0.8) ?? Data()
+    }
+
+    private func draw(in cg: CGContext, size: CGSize) {
+        let ink = UIColor(red: 0.12, green: 0.14, blue: 0.2, alpha: 1)
+        let clay = UIColor(red: 0.85, green: 0.45, blue: 0.28, alpha: 1)
+        let paper = UIColor(red: 0.98, green: 0.96, blue: 0.93, alpha: 1)
+        let rule = UIColor(red: 0.86, green: 0.83, blue: 0.79, alpha: 1)
+        paper.setFill()
+        cg.fill(CGRect(origin: .zero, size: size))
+        let unit = self == .landscape ? size.width / 24 : size.width / 12
+        let bar = unit * (self == .landscape ? 1.2 : 2.2)
+        ink.setFill()
+        cg.fill(CGRect(x: 0, y: 0, width: size.width, height: bar))
+        clay.setFill()
+        cg.fillEllipse(in: CGRect(x: unit * 0.6, y: bar * 0.25, width: bar * 0.5, height: bar * 0.5))
+        let brand = self == .landscape ? "Studio Northstar" : "Riverside Estate"
+        text(brand, at: CGPoint(x: unit * 0.6 + bar * 0.7, y: bar * 0.3), size: bar * 0.32, color: .white, bold: true)
+        if self == .landscape {
+            for (index, item) in ["Workshops", "Gallery", "Visit"].enumerated() {
+                text(item, at: CGPoint(x: size.width - unit * (8 - CGFloat(index) * 2.4), y: bar * 0.34), size: bar * 0.26, color: .white)
+            }
+        }
+        let column = self == .landscape ? size.width * 0.5 : size.width
+        let headline = self == .landscape ? "Spring ceramics\nworkshops" : "Trail guide"
+        let headlineSize = unit * (self == .landscape ? 1.5 : 1.3)
+        text(headline, at: CGPoint(x: unit, y: bar + unit * 1.4), size: headlineSize, color: ink, bold: true)
+        let lines = self == .landscape ? 2 : 1
+        let subY = bar + unit * 1.6 + headlineSize * 1.25 * CGFloat(lines)
+        let sub = self == .landscape ? "Six evening sessions · Beginners welcome" : "Lakeside loop · 6.4 km · Mostly flat"
+        text(sub, at: CGPoint(x: unit, y: subY), size: unit * 0.55, color: ink.withAlphaComponent(0.7))
+        clay.setFill()
+        let button = CGRect(x: unit, y: subY + unit * 1.3, width: unit * 5, height: unit * 1.3)
+        cg.addPath(UIBezierPath(roundedRect: button, cornerRadius: unit * 0.3).cgPath)
+        cg.fillPath()
+        text(
+            self == .landscape ? "Book a place" : "Download map",
+            at: CGPoint(x: button.minX + unit * 0.7, y: button.minY + unit * 0.35),
+            size: unit * 0.5,
+            color: .white,
+            bold: true
+        )
+        let art = self == .landscape
+            ? CGRect(x: column + unit, y: bar + unit, width: column - unit * 2, height: size.height * 0.5)
+            : CGRect(x: unit, y: button.maxY + unit, width: size.width - unit * 2, height: size.width * 0.75)
+        let colors = [clay.cgColor, UIColor(red: 0.95, green: 0.78, blue: 0.55, alpha: 1).cgColor] as CFArray
+        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+            cg.saveGState()
+            cg.addPath(UIBezierPath(roundedRect: art, cornerRadius: unit * 0.4).cgPath)
+            cg.clip()
+            cg.drawLinearGradient(gradient, start: art.origin, end: CGPoint(x: art.maxX, y: art.maxY), options: [])
+            cg.restoreGState()
+        }
+        let cardTop = max(art.maxY, button.maxY) + unit
+        let cards = self == .landscape ? 3 : 1
+        let gap = unit * 0.6
+        let cardWidth = (size.width - unit * 2 - gap * CGFloat(cards - 1)) / CGFloat(cards)
+        var rowTop = cardTop
+        while rowTop < size.height {
+            for index in 0 ..< cards {
+                let card = CGRect(x: unit + CGFloat(index) * (cardWidth + gap), y: rowTop, width: cardWidth, height: unit * 3)
+                UIColor.white.setFill()
+                cg.addPath(UIBezierPath(roundedRect: card, cornerRadius: unit * 0.3).cgPath)
+                cg.fillPath()
+                rule.setFill()
+                cg.fill(CGRect(x: card.minX + unit * 0.5, y: card.minY + unit * 0.6, width: card.width * 0.6, height: unit * 0.35))
+                cg.fill(CGRect(x: card.minX + unit * 0.5, y: card.minY + unit * 1.3, width: card.width * 0.8, height: unit * 0.25))
+                cg.fill(CGRect(x: card.minX + unit * 0.5, y: card.minY + unit * 1.8, width: card.width * 0.7, height: unit * 0.25))
+            }
+            rowTop += unit * 3 + gap
+        }
+    }
+
+    private func text(_ string: String, at point: CGPoint, size: CGFloat, color: UIColor, bold: Bool = false) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: size, weight: bold ? .bold : .regular),
+            .foregroundColor: color,
+        ]
+        NSAttributedString(string: string, attributes: attributes).draw(at: point)
+    }
 }
 #endif

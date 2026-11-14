@@ -268,8 +268,9 @@ struct SearchView: View {
     }
 }
 
-/// One search result row — title, source/type/date meta, and a chunk-text
-/// snippet. Mirrors the portal's `result-card.js`.
+/// One search result row — title, source/type/date meta, a chunk-text
+/// snippet, and the document's preview thumbnail when it has one. Mirrors
+/// the portal's `result-card.js`.
 @available(iOS 17.0, *)
 struct SearchResultRow: View {
     let item: SearchResultItem
@@ -295,6 +296,11 @@ struct SearchResultRow: View {
                     ScoreBreakdownStrip(breakdown: breakdown)
                         .padding(.top, 2)
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let preview = item.preview {
+                DocumentPreviewThumbnail(preview: preview)
+                    .padding(.top, 2)
             }
         }
         .padding(.vertical, 4)
@@ -669,6 +675,28 @@ struct SearchPipelineFooter: View {
         .background(Theme.bgPrimary.ignoresSafeArea())
         .navigationTitle("Search")
     }
+    .preferredColorScheme(.dark)
+}
+
+@available(iOS 17.0, *)
+#Preview("Search — results with previews") {
+    NavigationStack {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(PreviewMocks.searchResultsWithPreviews) { item in
+                    SearchResultRow(item: item, store: AppStore.preview())
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.vertical, 10)
+                    Divider().background(Theme.borderLight).padding(.leading, 44)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+        }
+        .background(Theme.bgPrimary.ignoresSafeArea())
+        .navigationTitle("Search")
+    }
+    .environment(AppStore.preview())
+    .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
     .preferredColorScheme(.dark)
 }
 
