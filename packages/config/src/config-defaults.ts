@@ -296,7 +296,7 @@ export const CONFIG_DEFAULTS = {
       interactionScores: { interval: "60s", idleDelay: "5m" },
       mergeRulesEval: { interval: "60s", idleDelay: "5m" },
       autoDetect: { interval: "5m" },
-      mergeCandidates: { interval: "5m", idleDelay: "30m" },
+      mergeCandidates: { interval: "5m", idleDelay: "30m", judge: "off" },
     },
     sharedAddressDemotion: { nameThreshold: 15, maxEmails: 5 },
     reauthReminders: {

@@ -1174,6 +1174,12 @@ const backfillMergeCandidates = z
     idleDelay: duration
       .describe("Idle backoff once the merge-candidate graph stabilises. Default 30m.")
       .optional(),
+    judge: z
+      .enum(["off", "shadow", "enforce"])
+      .describe(
+        "Ask the decision model whether each suggested merge is the same person. 'shadow' logs its verdict without acting on it; 'enforce' merges the ones it judges the same person (reversibly), dismisses the ones it judges different people, and leaves the rest for you. While enforced, name matching alone no longer merges anyone. Needs the decision model assigned. Default off.",
+      )
+      .optional(),
   })
   .strict();
 

@@ -157,6 +157,7 @@ const EXPECTED_INVENTORY = [
   "/gateway/backfill/links/interval [duration]",
   "/gateway/backfill/mergeCandidates/idleDelay [duration]",
   "/gateway/backfill/mergeCandidates/interval [duration]",
+  "/gateway/backfill/mergeCandidates/judge [enum]",
   "/gateway/backfill/mergePass/interval [duration]",
   "/gateway/backfill/mergeRulesEval/idleDelay [duration]",
   "/gateway/backfill/mergeRulesEval/interval [duration]",
