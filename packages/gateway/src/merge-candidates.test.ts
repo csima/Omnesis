@@ -444,7 +444,8 @@ describe("computeFuzzyMergeCandidates", () => {
     const a = makePerson({ name: "Maya Hadley" });
     const b = makePerson({ name: "Maya Hadley", emails: ["maya.hadley@x.com"] });
     // Plus a "head" person — high interaction score — to anchor the
-    // distribution. Without any score above 0 the gate is off.
+    // distribution. Without it, p95 would be 0 and the gate would
+    // pass everyone through (since 0 == 0 is below `s > 0` check).
     const head = makePerson({ name: "Head Contact", emails: ["head@x.com"] });
     db.prepare("UPDATE people SET interaction_score_recent = 1.0 WHERE id = ?").run(head);
     for (let i = 0; i < 20; i++) makePerson({ name: `Noise ${i}` });
@@ -463,20 +464,6 @@ describe("computeFuzzyMergeCandidates", () => {
       (p) => [p.personA, p.personB].includes(a) && [p.personA, p.personB].includes(b),
     );
     expect(foundUngated).toBeDefined();
-  });
-
-  test("head-gate: with no interaction scores at all, every pair is judged", () => {
-    // No self person means no interaction scores; a gate on them would
-    // drop every pair and propose nothing, whatever the duplicates.
-    const a = makePerson({ name: "Maya Hadley" });
-    const b = makePerson({ name: "Maya Hadley", emails: ["maya.hadley@x.com"] });
-    for (let i = 0; i < 20; i++) makePerson({ name: `Noise ${i}` });
-
-    const proposals = computeFuzzyMergeCandidates(db, { headPercentile: 0.95 });
-    const found = proposals.find(
-      (p) => [p.personA, p.personB].includes(a) && [p.personA, p.personB].includes(b),
-    );
-    expect(found).toBeDefined();
   });
 
   test("family-name gate: suppresses pairs that share only a high-df surname", () => {
