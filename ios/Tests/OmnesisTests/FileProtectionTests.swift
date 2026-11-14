@@ -31,6 +31,12 @@ final class FileProtectionTests: XCTestCase {
         XCTAssertEqual(ProtectedStore.pendingNotes.protectionLevel, .completeUnlessOpen)
     }
 
+    func testDocumentPreviewsAreForegroundOnly() {
+        // Only on-screen views read and write preview images, and a lost
+        // one costs a refetch, so they stay sealed while the phone is locked.
+        XCTAssertEqual(ProtectedStore.documentPreviews.protectionLevel, .complete)
+    }
+
     func testEveryStoreWritesAtomically() {
         for store in ProtectedStore.allCases {
             XCTAssertTrue(

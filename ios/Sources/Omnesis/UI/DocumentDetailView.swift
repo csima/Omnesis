@@ -61,6 +61,9 @@ struct DocumentDetailView: View {
                     )
                     .frame(minHeight: GatewayErrorView.minScrollHeight)
                 } else if let doc {
+                    if let preview = doc.preview {
+                        DocumentPreviewBanner(preview: preview)
+                    }
                     header(doc: doc)
                     quickFacts(doc: doc)
                     if !doc.content.isEmpty {
@@ -544,6 +547,15 @@ struct DocumentDetailView: View {
 }
 
 @available(iOS 17.0, *)
+#Preview("Document detail — with preview") {
+    NavigationStack {
+        DocumentDetailPreviewWrapper(doc: PreviewMocks.documentDetailWithPreview, meta: "Web · Page · 5h ago", annotations: [])
+            .environment(AppStore.preview())
+            .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+    }
+}
+
+@available(iOS 17.0, *)
 #Preview("Document detail — load error") {
     NavigationStack {
         GatewayErrorView(
@@ -565,18 +577,23 @@ struct DocumentDetailView: View {
 @available(iOS 17.0, *)
 struct DocumentDetailPreviewWrapper: View {
     @Environment(AppStore.self) private var store
+    var doc: DocumentDetail = PreviewMocks.documentDetail
+    var meta = "Gmail · Email · 3d ago"
+    var annotations = PreviewMocks.documentAnnotations
 
     var body: some View {
-        let doc = PreviewMocks.documentDetail
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                if let preview = doc.preview {
+                    DocumentPreviewBanner(preview: preview)
+                }
                 HStack(alignment: .top, spacing: 10) {
                     SourceIconView(sourceId: doc.sourceId, store: store, size: 32)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(doc.title)
                             .font(.title3.bold())
                             .foregroundStyle(Theme.textPrimary)
-                        Text("Gmail · Email · 3d ago")
+                        Text(meta)
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.textSecondary)
                     }
@@ -598,12 +615,14 @@ struct DocumentDetailPreviewWrapper: View {
                 FlatSection("Content") {
                     MarkdownView(text: doc.content)
                 }
-                AnnotationsSection(title: "Enriched by Omnesis", annotations: PreviewMocks.documentAnnotations)
+                if !annotations.isEmpty {
+                    AnnotationsSection(title: "Enriched by Omnesis", annotations: annotations)
+                }
             }
             .padding(Theme.Spacing.lg)
         }
         .background(Theme.bgPrimary.ignoresSafeArea())
-        .navigationTitle("Re: Stripe invoice for March")
+        .navigationTitle(doc.title)
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.dark)
     }

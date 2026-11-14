@@ -1697,6 +1697,107 @@ final class PreviewSnapshotTests: XCTestCase {
         snapshot(body.environment(store), name: "11-search-results", size: CGSize(width: 393, height: 1400))
     }
 
+    // MARK: - Document previews
+
+    private func searchRows(_ items: [SearchResultItem], store: AppStore) -> some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                        SearchResultRow(item: item, store: store)
+                            .padding(.horizontal, Theme.Spacing.md)
+                            .padding(.vertical, 10)
+                        if idx < items.count - 1 {
+                            Divider().background(Theme.borderLight).padding(.leading, 44)
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.vertical, Theme.Spacing.sm)
+            }
+            .background(Theme.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Search")
+        }
+        .environment(store)
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+    }
+
+    /// Rows with a landscape and a tall thumbnail, one whose image is still
+    /// loading on the first frame, and one without a preview, side by side.
+    func testSearchResultsWithPreviews() {
+        PreviewMocks.primeDocumentPreviewImages()
+        snapshot(
+            searchRows(PreviewMocks.searchResultsWithPreviews, store: AppStore.preview()),
+            name: "11p-search-results-previews"
+        )
+    }
+
+    /// After loading settles, the row whose image the gateway no longer
+    /// serves keeps its tile, with a muted glyph, and the same height.
+    func testSearchResultsPreviewFailure() {
+        PreviewMocks.primeDocumentPreviewImages()
+        for scheme in [ColorScheme.dark, .light] {
+            renderInWindow(
+                searchRows(PreviewMocks.searchResultsWithPreviews, store: AppStore.preview()),
+                name: scheme == .dark ? "11q-search-results-preview-failed" : "11q-search-results-preview-failed-light",
+                scheme: scheme,
+                size: CGSize(width: 393, height: 852)
+            )
+        }
+    }
+
+    func testSourceRecentDocumentsWithPreviews() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let view = NavigationStack {
+            SourceRecentPreviewWrapper(arm: .documents(PreviewMocks.recentDocumentsWithPreviews))
+        }
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+        snapshot(view.environment(AppStore.preview()), name: "40p-source-recent-documents-previews")
+    }
+
+    func testDocumentDetailWithPreview() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let view = NavigationStack {
+            DocumentDetailPreviewWrapper(
+                doc: PreviewMocks.documentDetailWithPreview,
+                meta: "Web · Page · 5h ago",
+                annotations: []
+            )
+        }
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+        snapshot(view.environment(AppStore.preview()), name: "30p-document-detail-preview", size: CGSize(width: 393, height: 1000))
+    }
+
+    /// A tall capture is shown from its top in a capped frame, and before
+    /// the image arrives the frame already has the preview's shape.
+    func testDocumentPreviewBannerShapes() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let view = ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                DocumentPreviewBanner(preview: PreviewMocks.tallPagePreview)
+                DocumentPreviewBanner(preview: DocumentPreview(
+                    url: "/documents/not-primed/preview",
+                    contentType: "image/webp",
+                    width: 1600,
+                    height: 1000,
+                    capturedAt: PreviewMocks.webPagePreview.capturedAt
+                ))
+            }
+            .padding(Theme.Spacing.lg)
+        }
+        .background(Theme.bgPrimary.ignoresSafeArea())
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+        snapshot(view.environment(AppStore.preview()), name: "30q-document-preview-banner-shapes", size: CGSize(width: 393, height: 1100))
+    }
+
+    func testDocumentPreviewFullScreen() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let view = DocumentPreviewFullScreen(preview: PreviewMocks.webPagePreview)
+            .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+            .environment(AppStore.preview())
+        snapshot(view, name: "30r-document-preview-full-screen")
+    }
+
     func testSearchBreadcrumbs() {
         let store = AppStore.preview()
         let view = NavigationStack {

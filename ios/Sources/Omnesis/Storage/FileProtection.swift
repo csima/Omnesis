@@ -83,12 +83,20 @@ public enum ProtectedStore: CaseIterable, Sendable, Equatable {
     /// retried on the next foreground.
     case pendingNotes
 
+    /// Document preview images (`Caches/Omnesis/document-previews/`): the
+    /// screenshots and other preview images the gateway serves for
+    /// documents, cached so lists and document screens can show them
+    /// again without a fetch. Only foreground views read or write them, and
+    /// losing one costs one refetch → `.complete`.
+    case documentPreviews
+
     /// The protection class this store's files carry.
     public var protectionLevel: FileProtectionLevel {
         switch self {
         case .offlineBuffer: .completeUnlessOpen
         case .photosAssetIndex: .completeUnlessOpen
         case .pendingNotes: .completeUnlessOpen
+        case .documentPreviews: .complete
         }
     }
 
