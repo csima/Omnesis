@@ -32,6 +32,7 @@ import { type OmnesisConfig } from "@omnesis/config";
 import { Ontology } from "@omnesis/watch";
 import { setActivityMarker } from "@omnesis/agent";
 import { DocumentPreviewStore } from "./previews/store.js";
+import { deletePreviewsSafely } from "./previews/service.js";
 import { scheduleOrphanPreviewSweep } from "./previews/orphan-sweep.js";
 import { dotEnvKeysAtBoot } from "./load-env.js";
 import {
@@ -3491,8 +3492,7 @@ const absenceSweepBundle = createAbsenceSweepTask(
     analyticsDb,
     cascadeCognitionFor: async (documentIds) => {
       await cascadeCognitiveStateThroughGate(db, writeGate, documentIds);
-      if (previewStore && documentIds.length > 0)
-        await previewStore.deleteForDocuments(documentIds);
+      await deletePreviewsSafely(previewStore, documentIds);
     },
     getMinObservations: () =>
       resolveRuntimeSettings(configStore.get()).snapshotAbsenceMinObservations,

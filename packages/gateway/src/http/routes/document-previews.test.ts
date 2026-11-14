@@ -436,3 +436,68 @@ describe("a preview leaves with its document", () => {
     expect(store.describe(id)).toBeNull();
   });
 });
+
+describe("a gateway whose preview store is unavailable", () => {
+  test("refuses uploads with a code a client does not retry, and reports screenshots unavailable", async () => {
+    const without = createServer(db, undefined, { analyticsDb });
+    const send = (path: string, init: RequestInit = {}) =>
+      without.request(path, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${browserToken}`,
+          ...(init.headers ?? {}),
+        },
+      });
+    await pushPage("https://news.example.com/story");
+    const on = await send("/web-capture-policy/screenshots", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as { screenshots: unknown }).screenshots).toEqual({
+      enabled: false,
+      available: false,
+    });
+    expect(
+      ((await (await send("/web-capture-policy")).json()) as { screenshots: unknown }).screenshots,
+    ).toEqual({ enabled: false, available: false });
+
+    const upload = await send("/documents/preview", {
+      method: "PUT",
+      body: JSON.stringify(uploadBody("https://news.example.com/story")),
+    });
+    expect(upload.status).toBe(409);
+    expect(((await upload.json()) as { code: string }).code).toBe("PREVIEWS_UNAVAILABLE");
+
+    const id = documentIdFor("https://news.example.com/story");
+    expect(
+      (
+        await without.request(`/documents/${id}/preview`, {
+          headers: { Authorization: `Bearer ${readToken}` },
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  test("a store that fails at runtime costs only the previews", async () => {
+    await setScreenshots(true);
+    await pushPage("https://news.example.com/story");
+    expect((await upload("https://news.example.com/story")).status).toBe(200);
+    const id = documentIdFor("https://news.example.com/story");
+    store.close();
+
+    const shown = await call(`/documents/${id}`, readToken);
+    expect(shown.status).toBe(200);
+    expect(await shown.json()).not.toHaveProperty("preview");
+    const recent = await call("/sources/web/recent?limit=10", readToken);
+    expect(recent.status).toBe(200);
+    expect((await call(`/documents/${id}/preview`, readToken)).status).toBe(404);
+
+    const deleted = await call(`/documents/${id}`, browserToken, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(db.prepare("SELECT 1 FROM documents WHERE id = ?").get(id)).toBeUndefined();
+
+    store = DocumentPreviewStore.open(previewPath, null);
+  });
+});

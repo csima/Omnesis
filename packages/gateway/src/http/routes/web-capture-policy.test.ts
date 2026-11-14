@@ -23,6 +23,7 @@ import { SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE_ALL, SourceType, writeScope } from
 import { SourceId, type Scope } from "@omnesis/types";
 import { createDatabase } from "../../db.js";
 import { createServer } from "../../server.js";
+import { DocumentPreviewStore } from "../../previews/store.js";
 import { AnalyticsDb } from "../../analytics-db.js";
 import { resetOwnedWebDomains, setOwnedWebDomains } from "../../owned-web-domains.js";
 import { createDevice } from "../../data/repositories/DeviceRepository.js";
@@ -38,6 +39,8 @@ let app: ReturnType<typeof createServer>;
 let dbPath: string;
 let analyticsPath: string;
 let analyticsDb: AnalyticsDb;
+let previewPath: string;
+let previewStore: DocumentPreviewStore;
 let browserToken: string;
 let adminToken: string;
 
@@ -108,7 +111,9 @@ beforeEach(async () => {
   db = createDatabase(dbPath);
   analyticsDb = new AnalyticsDb(analyticsPath);
   await analyticsDb.open();
-  app = createServer(db, undefined, { analyticsDb });
+  previewPath = `/tmp/omnesis-capture-policy-test-${randomUUID()}.previews.db`;
+  previewStore = DocumentPreviewStore.open(previewPath, null);
+  app = createServer(db, undefined, { analyticsDb, previewStore });
   resetOwnedWebDomains();
   browserToken = mintToken("browser", [writeScope(SourceType("web"))]);
   adminToken = mintToken("cli", [SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE_ALL]);
@@ -116,6 +121,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await analyticsDb.close();
+  previewStore.close();
+  cleanupDb(previewPath);
   db.close();
   cleanupDb(dbPath);
   rmSync(analyticsPath, { force: true });

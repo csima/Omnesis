@@ -193,7 +193,8 @@ export function initPopup(document: Document, chrome: PopupChrome): void {
     const cached = await readCachedPolicy(chromeLocalStore);
     screenshotGrant = await hasScreenshotPermission().catch(() => false);
     const enabled = cached !== null && screenshotsEnabled(cached.policy);
-    $("screenshots-wrap").hidden = cached === null;
+    $("screenshots-wrap").hidden =
+      cached === null || cached.policy.screenshots?.available === false;
     ($("screenshots-toggle") as HTMLInputElement).checked = enabled;
     $("screenshots-grant").hidden = !enabled || screenshotGrant;
   }

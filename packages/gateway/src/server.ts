@@ -116,7 +116,7 @@ import { mountDevAnnotationsRoutes } from "./http/routes/dev-annotations.js";
 import { mountWebCapturePolicyRoutes } from "./http/routes/web-capture-policy.js";
 import { WebCapturePolicyService } from "./sources/web/capture-policy.js";
 import { registerWebPreviewAdmission } from "./sources/web/preview-admission.js";
-import { DocumentPreviewService } from "./previews/service.js";
+import { DocumentPreviewService, deletePreviewsSafely } from "./previews/service.js";
 import { mountDocumentPreviewRoutes } from "./http/routes/document-previews.js";
 import { getOwnedWebDomains } from "./owned-web-domains.js";
 import { mountWatchV2Routes } from "./http/routes/watch.js";
@@ -815,9 +815,8 @@ export function createServer(
   // A document's preview goes wherever the document goes: every delete path
   // below hands its deleted ids here beside the cognitive-state cascade.
   const previewStore = opts?.previewStore;
-  const deletePreviewsFor = async (documentIds: readonly string[]): Promise<void> => {
-    if (previewStore && documentIds.length > 0) await previewStore.deleteForDocuments(documentIds);
-  };
+  const deletePreviewsFor = (documentIds: readonly string[]): Promise<void> =>
+    deletePreviewsSafely(previewStore, documentIds);
   const sourceDataRemoval = new SourceDataRemovalService({
     db,
     writeGate: w,
@@ -1619,6 +1618,7 @@ export function createServer(
     sourceService,
     documentService,
     ownedDomains: getOwnedWebDomains,
+    screenshotsAvailable: () => previewService !== undefined,
     onChanged: () => statusCache.bump(),
   });
   mountWebCapturePolicyRoutes(app, webCapturePolicy);

@@ -24,7 +24,7 @@ import {
 interface MessageSender {
   id?: string;
   url?: string;
-  tab?: { id?: number; incognito?: boolean };
+  tab?: { id?: number; incognito?: boolean; url?: string };
 }
 
 type ExclusionMessage = Extract<
@@ -36,10 +36,13 @@ export interface BackgroundMessageDeps {
   runtimeId: string;
   popupUrl: string;
   optionsUrl: string;
-  /** `tabId` is the tab that emitted the capture, which a page screenshot is taken of. */
+  /**
+   * `tab` is the tab that emitted the capture and the exact frame address it
+   * was sent from, which a page screenshot must still show.
+   */
   handleCapture: (
     message: Extract<ContentToSwMessage, { type: "capture" }>,
-    tabId: number,
+    tab: { id: number; frameUrl: string | null },
   ) => Promise<CaptureAck>;
   drain: () => Promise<void>;
   judgeEligibility: (url: string) => Promise<CaptureEligibilityResponse>;
@@ -74,10 +77,15 @@ export function routeBackgroundMessage(
     isCaptureMessage(message)
   ) {
     respond(
-      deps.handleCapture(message, sender.tab.id).then((ack) => {
-        if (ack.ok && ack.accepted) runDetached(deps.drain());
-        return ack;
-      }),
+      deps
+        .handleCapture(message, {
+          id: sender.tab.id,
+          frameUrl: sender.url ?? sender.tab.url ?? null,
+        })
+        .then((ack) => {
+          if (ack.ok && ack.accepted) runDetached(deps.drain());
+          return ack;
+        }),
       sendResponse,
       () => ({ ok: false, reason: "queue-unavailable" }) satisfies CaptureAck,
     );

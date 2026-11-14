@@ -570,6 +570,25 @@ describe("options — page screenshots", () => {
     expect(state?.current()).toBe(false);
   });
 
+  it("says when the gateway cannot store screenshots, and offers no switch", async () => {
+    const options = openOptions(pairedStorage(), (chrome) => {
+      chrome.respond = (message) =>
+        message.type === "read-policy"
+          ? {
+              policy: policyBody({ screenshots: { enabled: false, available: false } }),
+              fetchedAt: 1,
+            }
+          : { ok: true, purged: 0 };
+    });
+    await vi.waitFor(() =>
+      expect(options.$("screenshots-hint").textContent).toBe(
+        "Your gateway cannot store screenshots right now, so none are taken.",
+      ),
+    );
+    expect(options.input("screenshots-toggle").disabled).toBe(true);
+    expect(options.$("allow-screenshots").hidden).toBe(true);
+  });
+
   it("offers this browser the grant when screenshots are already on for the others", async () => {
     const options = openOptions(pairedStorage(), (chrome) => {
       screenshotResponder(chrome, true);

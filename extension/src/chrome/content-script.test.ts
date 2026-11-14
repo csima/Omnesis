@@ -539,8 +539,40 @@ describe("content script — popup status responder", () => {
     const results = [...page.chrome.messageListeners].map((listener) =>
       listener({ type: "something-else" }, {}, respond),
     );
-    expect(results).toEqual([false]);
+    expect(results.every((result) => result === false)).toBe(true);
     expect(respond).not.toHaveBeenCalled();
+  });
+});
+
+describe("content script — screenshot confirmation", () => {
+  function ask(page: Page, url: string, contentHash: string): unknown {
+    let answer: unknown;
+    for (const listener of page.chrome.messageListeners) {
+      listener({ type: "screenshot-check", url, contentHash }, {}, (response) => {
+        answer ??= response;
+      });
+    }
+    return answer;
+  }
+
+  it("confirms the capture it emitted, and refuses once the page navigated on the same site", async () => {
+    const page = openPage();
+    await waitForState(page, "watching");
+    await page.clock.tick(5_000);
+    await vi.waitFor(() => expect(page.chrome.captures()).toHaveLength(1));
+    const { contentHash } = page.chrome.captures()[0]!.emission;
+
+    expect(ask(page, PAGE_URL, contentHash)).toEqual({ ok: true });
+    expect(ask(page, PAGE_URL, "f".repeat(64))).toEqual({ ok: false, reason: "other-capture" });
+
+    page.location.href = "https://news.example.com/account/billing";
+    expect(ask(page, PAGE_URL, contentHash)).toEqual({ ok: false, reason: "navigated" });
+  });
+
+  it("refuses before the page has emitted any capture", async () => {
+    const page = openPage();
+    await waitForState(page, "watching");
+    expect(ask(page, PAGE_URL, "a".repeat(64))).toEqual({ ok: false, reason: "other-capture" });
   });
 });
 
@@ -587,7 +619,7 @@ describe("content script — teardown on context invalidation", () => {
     await waitForState(page, "watching");
     expect(page.window.listenerCount()).toBe(4);
     expect(page.chrome.storageListeners.size).toBe(1);
-    expect(page.chrome.messageListeners.size).toBe(1);
+    expect(page.chrome.messageListeners.size).toBe(2);
 
     page.chrome.live.runtimeId = undefined;
     page.location.href = "https://news.example.com/after-reload";

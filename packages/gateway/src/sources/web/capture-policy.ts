@@ -63,6 +63,12 @@ export interface WebCapturePolicyDeps {
   /** The union of every source's `ownedWebDomains`, as the collector last pushed it. */
   ownedDomains: () => readonly string[];
   /**
+   * Whether the gateway can keep page screenshots at all. While it cannot (its
+   * preview store did not open), the policy reports screenshots off and
+   * unavailable, so browsers stop taking shots nothing would store.
+   */
+  screenshotsAvailable?: () => boolean;
+  /**
    * Invalidates cached source listings after the source row changed. No
    * `source.updated` command is sent: no collector hosts the web source, and
    * browsers read the policy over HTTP.
@@ -95,7 +101,10 @@ export class WebCapturePolicyService {
       // A lapsed timed pause reads as resumed so clients need no clock of their own.
       pause: pauseActive(stored.pause, this.now()) ? stored.pause : null,
       excludedDomains: stored.excludedDomains,
-      screenshots: { enabled: stored.screenshots.enabled },
+      screenshots:
+        this.deps.screenshotsAvailable?.() === false
+          ? { enabled: false, available: false }
+          : { enabled: stored.screenshots.enabled },
       ownedDomains: [...this.deps.ownedDomains()],
       rules: DEFAULT_WEB_CAPTURE_RULES,
       removedPages: removed.ids,

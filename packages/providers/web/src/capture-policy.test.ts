@@ -141,6 +141,12 @@ describe("isWebCapturePolicy", () => {
     expect(isWebCapturePolicy(policy({ screenshots: { enabled: true } }))).toBe(true);
     expect(isWebCapturePolicy({ ...policy(), screenshots: { enabled: "yes" } })).toBe(false);
     expect(isWebCapturePolicy({ ...policy(), screenshots: null })).toBe(false);
+    expect(isWebCapturePolicy(policy({ screenshots: { enabled: false, available: false } }))).toBe(
+      true,
+    );
+    expect(
+      isWebCapturePolicy({ ...policy(), screenshots: { enabled: true, available: true } }),
+    ).toBe(false);
   });
 });
 
@@ -149,5 +155,8 @@ describe("screenshotsEnabled", () => {
     expect(screenshotsEnabled(policy({ screenshots: { enabled: true } }))).toBe(true);
     expect(screenshotsEnabled(policy({ screenshots: { enabled: false } }))).toBe(false);
     expect(screenshotsEnabled(policy())).toBe(false);
+    expect(screenshotsEnabled(policy({ screenshots: { enabled: true, available: false } }))).toBe(
+      false,
+    );
   });
 });

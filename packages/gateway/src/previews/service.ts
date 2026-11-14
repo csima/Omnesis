@@ -36,6 +36,38 @@ type Db = Database.Database;
 
 const log = createLogger("gateway").child("previews");
 
+const reportedFailures = new Set<string>();
+
+/**
+ * Log a preview-store failure once per operation. A broken `previews.db`
+ * only ever costs the previews: every caller carries on without them, and the
+ * orphan sweep removes whatever a failed delete left behind.
+ */
+export function reportPreviewStoreFailure(operation: string, error: unknown): void {
+  if (reportedFailures.has(operation)) return;
+  reportedFailures.add(operation);
+  log.error(
+    `The preview store failed to ${operation}; carrying on without previews: ${error instanceof Error ? error.message : String(error)}`,
+  );
+}
+
+/**
+ * Delete the previews of `documentIds`, never throwing: the documents are
+ * already gone, and a preview a failure leaves behind is removed by the
+ * orphan sweep.
+ */
+export async function deletePreviewsSafely(
+  store: Pick<DocumentPreviewStore, "deleteForDocuments"> | undefined,
+  documentIds: readonly string[],
+): Promise<void> {
+  if (!store || documentIds.length === 0) return;
+  try {
+    await store.deleteForDocuments(documentIds);
+  } catch (error) {
+    reportPreviewStoreFailure("delete previews", error);
+  }
+}
+
 /** The document a preview is offered for, as the admission sees it. */
 export interface PreviewTarget {
   id: string;
@@ -140,7 +172,7 @@ export class DocumentPreviewService {
     // A delete that landed between the lookup and the put has already run its
     // preview cascade, so the row just written would outlive its document.
     if (!this.documentExists(target.id)) {
-      await this.deps.store.deleteForDocuments([target.id]);
+      await deletePreviewsSafely(this.deps.store, [target.id]);
       throw new HttpError(404, "PREVIEW_DOCUMENT_NOT_FOUND", "No such document");
     }
     log.debug(`Stored a ${meta.byteLength}-byte preview for ${target.id}`);
@@ -153,21 +185,36 @@ export class DocumentPreviewService {
       .prepare<[string], { source_id: string }>("SELECT source_id FROM documents WHERE id = ?")
       .get(documentId);
     if (!row || !isKnowledgeDocumentReadable(this.deps.db, documentId, row.source_id)) return null;
-    return this.deps.store.read(documentId);
+    try {
+      return this.deps.store.read(documentId);
+    } catch (error) {
+      reportPreviewStoreFailure("read a preview", error);
+      return null;
+    }
   }
 
-  /** The wire reference of a document's preview, or undefined. */
+  /** The wire reference of a document's preview, or undefined (also when the store fails). */
   refFor(documentId: string): DocumentPreviewRef | undefined {
-    const meta = this.deps.store.describe(documentId);
-    return meta ? previewRef(meta) : undefined;
+    try {
+      const meta = this.deps.store.describe(documentId);
+      return meta ? previewRef(meta) : undefined;
+    } catch (error) {
+      reportPreviewStoreFailure("describe a preview", error);
+      return undefined;
+    }
   }
 
-  /** Wire references for the documents of `documentIds` that have a preview. */
+  /** Wire references for the documents of `documentIds` that have a preview; none when the store fails. */
   refsFor(documentIds: readonly string[]): Map<string, DocumentPreviewRef> {
     const out = new Map<string, DocumentPreviewRef>();
     if (documentIds.length === 0) return out;
-    for (const [id, meta] of this.deps.store.describeMany(documentIds)) {
-      out.set(id, previewRef(meta));
+    try {
+      for (const [id, meta] of this.deps.store.describeMany(documentIds)) {
+        out.set(id, previewRef(meta));
+      }
+    } catch (error) {
+      reportPreviewStoreFailure("describe previews", error);
+      out.clear();
     }
     return out;
   }

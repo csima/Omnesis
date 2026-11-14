@@ -36,6 +36,12 @@ export interface WebCaptureRules {
  */
 export interface WebCaptureScreenshots {
   enabled: boolean;
+  /**
+   * `false` when the gateway cannot keep screenshots at all (its preview store
+   * is unavailable); `enabled` then reads false whatever was chosen. Absent
+   * otherwise.
+   */
+  available?: false;
 }
 
 /** The operator-editable half of the policy, as the gateway stores it. */
@@ -76,7 +82,7 @@ export const EMPTY_WEB_CAPTURE_SETTINGS: WebCaptureSettings = {
  * as off.
  */
 export function screenshotsEnabled(policy: Pick<WebCapturePolicy, "screenshots">): boolean {
-  return policy.screenshots?.enabled === true;
+  return policy.screenshots?.enabled === true && policy.screenshots.available !== false;
 }
 
 /**
@@ -222,10 +228,11 @@ function isStringArray(value: unknown): value is string[] {
 
 function isScreenshots(value: unknown): value is WebCaptureScreenshots | undefined {
   if (value === undefined) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const screenshots = value as { enabled?: unknown; available?: unknown };
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { enabled?: unknown }).enabled === "boolean"
+    typeof screenshots.enabled === "boolean" &&
+    (screenshots.available === undefined || screenshots.available === false)
   );
 }
 

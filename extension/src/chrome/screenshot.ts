@@ -14,16 +14,19 @@ import {
  * capture is emitted.
  *
  * `chrome.tabs.captureVisibleTab` shoots whatever the window shows, not a tab
- * by id, so a shot is only kept when the tab that emitted the capture is the
- * active tab of a focused, unminimized window both before and after the shot,
- * on the same address throughout. Anything else — the user switched tabs or
- * windows, the window lost focus, the tab navigated — and the shot is
- * dropped: an image of the wrong page must never become this page's preview.
- * The shot is of the visible viewport only, and is not redacted the way the
- * captured text is.
+ * by id, so a shot is kept only when everything still describes the page that
+ * emitted the capture: the tab is the active tab of a focused, unminimized
+ * window, its address is exactly the frame address the capture was sent from,
+ * both before and after the shot, and the page itself confirms — just before
+ * the shot — that it is still showing that capture, is focused and visible,
+ * carries no password, one-time-code or card field, and holds no focused
+ * editable element or typed form value. A page that does not answer promptly
+ * is not shot. Anything else, and the shot is dropped: an image of another
+ * page, even one on the same site, must never become this page's preview.
  *
- * The capture works with the HTTPS host access pairing already grants; no
- * further permission is needed.
+ * The shot is of the visible viewport only, and is not redacted the way the
+ * captured text is. Chrome allows it only with the optional `<all_urls>` host
+ * grant (see `host-permission.ts`), which the caller checks first.
  */
 
 /** The slice of `chrome.tabs` and `chrome.windows` a screenshot needs. */
@@ -52,41 +55,52 @@ export interface PageScreenshot {
 }
 
 /** Why no screenshot was kept, for tests and diagnostics. */
-export type ScreenshotSkip = "not-in-view" | "changed" | "capture-failed" | "too-large";
+export type ScreenshotSkip =
+  "not-in-view" | "unconfirmed" | "changed" | "capture-failed" | "too-large";
 
 interface InView {
   windowId: number;
-  url: string;
 }
 
 /**
- * Whether `tabId` is the active tab of a focused, visible window showing a
- * page of `pageUrl`'s origin. The capture key may be the page's canonical
- * address rather than the address bar's, but never of another origin.
+ * Whether `tabId` is the active tab of a focused, visible window showing
+ * exactly `frameUrl`, the address the capture was sent from.
  */
 async function inView(
   browser: ScreenshotBrowser,
   tabId: number,
-  pageUrl: string,
+  frameUrl: string,
 ): Promise<InView | null> {
   try {
     const tab = await browser.getTab(tabId);
-    if (!tab.active || tab.incognito || !tab.url) return null;
-    if (new URL(tab.url).origin !== new URL(pageUrl).origin) return null;
+    if (!tab.active || tab.incognito || tab.url !== frameUrl) return null;
     const window = await browser.getWindow(tab.windowId);
     if (!window.focused || window.state === "minimized") return null;
-    return { windowId: tab.windowId, url: tab.url };
+    return { windowId: tab.windowId };
   } catch {
     return null;
   }
 }
 
+export interface ScreenshotTarget {
+  tabId: number;
+  /** The exact frame address the capture message came from. */
+  frameUrl: string;
+  /**
+   * Ask the page whether it is still safe to shoot as this capture; resolves
+   * false (or rejects) when it is not, or when it does not answer in time.
+   */
+  confirm: () => Promise<boolean>;
+}
+
 export async function takePageScreenshot<Image extends DecodedImage>(
-  target: { tabId: number; pageUrl: string },
+  target: ScreenshotTarget,
   deps: { browser: ScreenshotBrowser; codec: ScreenshotCodec<Image>; now?: () => number },
 ): Promise<PageScreenshot | ScreenshotSkip> {
-  const before = await inView(deps.browser, target.tabId, target.pageUrl);
+  const before = await inView(deps.browser, target.tabId, target.frameUrl);
   if (!before) return "not-in-view";
+  const confirmed = await target.confirm().catch(() => false);
+  if (!confirmed) return "unconfirmed";
   const capturedAt = new Date((deps.now ?? Date.now)()).toISOString();
   let dataUrl: string;
   try {
@@ -97,8 +111,8 @@ export async function takePageScreenshot<Image extends DecodedImage>(
   } catch {
     return "capture-failed";
   }
-  const after = await inView(deps.browser, target.tabId, target.pageUrl);
-  if (!after || after.windowId !== before.windowId || after.url !== before.url) return "changed";
+  const after = await inView(deps.browser, target.tabId, target.frameUrl);
+  if (!after || after.windowId !== before.windowId) return "changed";
   let encoded;
   try {
     encoded = await encodeScreenshot(dataUrl, deps.codec);
@@ -114,6 +128,9 @@ export async function takePageScreenshot<Image extends DecodedImage>(
     image: bytesToBase64(encoded.bytes),
   };
 }
+
+/** How long the page has to confirm a screenshot before it is skipped. */
+export const SCREENSHOT_CONFIRM_TIMEOUT_MS = 1_000;
 
 /** The worker's codec: `createImageBitmap` to decode, `OffscreenCanvas` to scale and encode. */
 export const offscreenCodec: ScreenshotCodec<ImageBitmap> = {

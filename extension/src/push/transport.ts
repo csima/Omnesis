@@ -136,7 +136,9 @@ export class PushTransport {
    * switched off, the page excluded, paused or deleted since, the page not
    * stored, an image the gateway does not take — and the shot leaves the
    * queue silently as `suppressed`. A missing or revoked credential is kept
-   * for re-pair like any upload; congestion and outages retry.
+   * for re-pair like any upload, and congestion holds the queue back like any
+   * upload; a server error retries this shot alone, a few times, so a gateway
+   * that cannot store previews never stops pages syncing.
    */
   private async deliverPreview(
     item: Extract<QueueItem, { kind: "preview" }>,
@@ -163,17 +165,34 @@ export class PushTransport {
       } catch {
         // Fall through to the invalid-success retry.
       }
-      return { kind: "retry", status: response.status, reason: "Invalid gateway success response" };
+      return {
+        kind: "retry",
+        status: response.status,
+        reason: "Invalid gateway success response",
+        itemOnly: true,
+      };
     }
     if (response.status === 401 || response.status === 403) {
       return { kind: "drop", reason: await responseReason(response), status: response.status };
     }
-    if ([408, 425, 429, 503].includes(response.status) || response.status >= 500) {
+    // Congestion is the gateway's, and holds every upload back alike.
+    if ([408, 425, 429].includes(response.status)) {
       return {
         kind: "retry",
         status: response.status,
         reason: await responseReason(response),
         retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+      };
+    }
+    // A server error on a screenshot may be the preview store's alone; pages
+    // must keep flowing past it.
+    if (response.status >= 500) {
+      return {
+        kind: "retry",
+        status: response.status,
+        reason: await responseReason(response),
+        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+        itemOnly: true,
       };
     }
     return { kind: "suppressed" };

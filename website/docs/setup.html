@@ -1003,18 +1003,20 @@ omnesis.example.com {
           browser is paired, is off by default. Turned on, it applies to every paired browser: when
           a page is captured, the browser also saves a screenshot of the visible part of the page,
           the viewport only, as that page's preview, shown in the portal's document view and the
-          apps. The shot is taken only while the captured tab is the active tab of a focused window,
-          and only of a page the extension would capture anyway; it is downscaled to at most 1280
-          pixels on its longest side and dropped if it is still over 512 KB. A page is shot again
-          only when its text has changed. Screenshots are not redacted the way captured text is:
-          whatever the page shows on screen is in the image. Chrome lets an extension take
-          screenshots only with access to all sites, so turning this on in a browser asks Chrome for
-          that permission there; another paired browser shows
-          <em>Allow screenshots in this browser</em> on its Options page until it is granted, and
-          takes none before. The gateway keeps one per page, in its own encrypted store, includes it
-          in backups and exports, and deletes it with the page, for good or as a copy, and with an
-          excluded domain's pages. Turning screenshots off stops new ones; those already saved stay
-          with their pages.
+          apps. The shot is taken only while the captured tab is the active tab of a focused window
+          and still shows exactly the address the capture came from, only of a page the extension
+          would capture anyway, and only once the page confirms it has no password, one-time-code or
+          card field and nothing being typed; it is downscaled to at most 1280 pixels on its longest
+          side and dropped if it is still over 512 KB. A page is shot again only when its text has
+          changed. Screenshots are not redacted the way captured text is: whatever the page shows on
+          screen is in the image. Chrome lets an extension take screenshots only with access to all
+          sites, so turning this on in a browser asks Chrome for that permission there; another
+          paired browser shows <em>Allow screenshots in this browser</em> on its Options page until
+          it is granted, and takes none before. The gateway keeps one per page, in its own encrypted
+          store, includes it in backups and exports, and deletes it with the page, for good or as a
+          copy, and with an excluded domain's pages. Turning screenshots off stops new ones; those
+          already saved stay with their pages. A gateway whose preview store cannot be opened
+          reports screenshots as unavailable, and browsers take none.
         </p>
         <p>
           A browser rereads the settings when its copy is older than fifteen minutes, whenever the

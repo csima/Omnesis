@@ -56,7 +56,9 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   uploads still surface in the popup and badge.
 - **Page screenshots.** Off unless the shared policy's `screenshots.enabled` is on. Then, when a
   capture from a tab is queued, the worker (`chrome/screenshot.ts`) checks that tab is the active
-  tab of a focused, unminimized window on the page's origin, calls `chrome.tabs.captureVisibleTab`
+  tab of a focused, unminimized window at exactly the frame address the capture was sent from,
+  asks the page (`chrome/screenshot-check.ts`) to confirm within a second that it is still that
+  capture, focused, with no password, one-time-code or card field and nothing being typed, calls `chrome.tabs.captureVisibleTab`
   (Chrome allows it only with `<all_urls>` or an `activeTab` invocation, so the Options page and
   popup ask for the optional `<all_urls>` grant when screenshots are turned on in that browser,
   and a browser without it takes none), checks the same again
@@ -64,7 +66,8 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   longest side and encodes WebP at 0.7 (JPEG where WebP is unavailable) with `OffscreenCanvas`
   (`capture/screenshot.ts`), skipping it above 512 KB. It goes through the same durable queue as a
   `preview` item to `PUT /documents/preview`, always behind its page's document; a refusal drops it
-  quietly, and it is the first thing evicted when the queue's byte budget fills.
+  quietly, a server error retries that shot alone a few times without holding pages back, and it
+  is the first thing evicted when the queue's byte budget fills.
   `omnesis.push.previewLedger.v1` remembers which page text each uploaded shot was taken of, so a
   page is shot again only when its content hash changes. Captures recovered from a tab's outbox
   get no shot.

@@ -189,7 +189,7 @@ const MESSAGE_CASES: Record<string, MessageCase> = {
   capture: {
     message: CAPTURE,
     dep: "handleCapture",
-    args: [CAPTURE, 7],
+    args: [CAPTURE, { id: 7, frameUrl: null }],
     response: { ok: true, accepted: true },
     acceptedBy: ["contentTab"],
   },
@@ -408,6 +408,32 @@ describe("failure acks", () => {
   });
 });
 
+describe("capture frame address", () => {
+  function routeFrom(sender: Parameters<typeof routeBackgroundMessage>[1], deps: FakeDeps) {
+    return new Promise((resolve) => {
+      routeBackgroundMessage(CAPTURE, sender, resolve, deps);
+    });
+  }
+
+  it("hands the worker the exact frame address the capture was sent from", async () => {
+    const deps = makeDeps();
+    await routeFrom(
+      { id: runtimeId, url: `${PAGE_URL}?ref=1`, tab: { id: 7, url: "https://elsewhere.example" } },
+      deps,
+    );
+    expect(deps.handleCapture).toHaveBeenCalledWith(CAPTURE, {
+      id: 7,
+      frameUrl: `${PAGE_URL}?ref=1`,
+    });
+  });
+
+  it("falls back to the tab's address when the sender names no frame", async () => {
+    const deps = makeDeps();
+    await routeFrom({ id: runtimeId, tab: { id: 7, url: PAGE_URL } }, deps);
+    expect(deps.handleCapture).toHaveBeenCalledWith(CAPTURE, { id: 7, frameUrl: PAGE_URL });
+  });
+});
+
 describe("set-screenshots", () => {
   it.each([{ enabled: "yes" }, {}, { enabled: null }])("refuses a malformed switch %j", (body) => {
     const deps = makeDeps();
@@ -519,7 +545,7 @@ describe("malformed payloads are refused before any dep runs", () => {
     ])("accepts %s", (_label, message) => {
       const { kept, deps } = route(message, sender.contentTab);
       expect(kept).toBe(true);
-      expect(deps.handleCapture).toHaveBeenCalledWith(message, 7);
+      expect(deps.handleCapture).toHaveBeenCalledWith(message, { id: 7, frameUrl: null });
     });
   });
 

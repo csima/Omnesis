@@ -76,7 +76,18 @@ import {
 import { CapturePermissionCoordinator } from "./permission-coordinator.js";
 import { hasCaptureAccess, syncCaptureContentScript } from "./content-registration.js";
 import { BadgeRefreshCoordinator } from "./badge-refresh.js";
-import { chromeScreenshotBrowser, offscreenCodec, takePageScreenshot } from "./screenshot.js";
+import {
+  SCREENSHOT_CONFIRM_TIMEOUT_MS,
+  chromeScreenshotBrowser,
+  offscreenCodec,
+  takePageScreenshot,
+} from "./screenshot.js";
+import {
+  SCREENSHOT_CHECK_TYPE,
+  type ScreenshotCheckMessage,
+  type ScreenshotCheckResult,
+} from "./screenshot-check.js";
+import { messageWithTimeout } from "./message-timeout.js";
 import type { CaptureEmission } from "../capture/lifecycle.js";
 import type {
   CaptureEligibilityResponse,
@@ -437,6 +448,8 @@ function drainOnce(): Promise<void> {
 /** A page screenshot to take once its capture is queued. */
 interface ScreenshotJob {
   tabId: number;
+  /** The exact frame address the capture was sent from. */
+  frameUrl: string;
   emission: CaptureEmission;
   externalId: string;
   pairingId: string;
@@ -465,7 +478,21 @@ function schedulePageScreenshot(job: ScreenshotJob): void {
         return;
       }
       const shot = await takePageScreenshot(
-        { tabId: job.tabId, pageUrl: job.emission.normalizedUrl },
+        {
+          tabId: job.tabId,
+          frameUrl: job.frameUrl,
+          confirm: async () => {
+            const answer = await messageWithTimeout(
+              chrome.tabs.sendMessage<ScreenshotCheckResult>(job.tabId, {
+                type: SCREENSHOT_CHECK_TYPE,
+                url: job.frameUrl,
+                contentHash: job.emission.contentHash,
+              } satisfies ScreenshotCheckMessage),
+              SCREENSHOT_CONFIRM_TIMEOUT_MS,
+            );
+            return answer?.ok === true;
+          },
+        },
         { browser: chromeScreenshotBrowser(), codec: offscreenCodec },
       );
       if (typeof shot === "string") return;
@@ -499,7 +526,7 @@ function schedulePageScreenshot(job: ScreenshotJob): void {
 /** Enqueue a confirmed capture's two planes, then kick a drain. */
 async function handleCapture(
   message: Extract<ContentToSwMessage, { type: "capture" }>,
-  tabId?: number,
+  tab?: { id: number; frameUrl: string | null },
 ): Promise<CaptureAck> {
   let screenshot: ScreenshotJob | null = null;
   const ack = await serializeQueueWork(async () => {
@@ -584,8 +611,14 @@ async function handleCapture(
 
     // A page screenshot is taken only of the tab that emitted this capture,
     // never for one recovered from a tab's outbox after the fact.
-    if (tabId !== undefined && message.pairingId && screenshotsEnabled(policy)) {
-      screenshot = { tabId, emission, externalId, pairingId: message.pairingId };
+    if (tab?.frameUrl && message.pairingId && screenshotsEnabled(policy)) {
+      screenshot = {
+        tabId: tab.id,
+        frameUrl: tab.frameUrl,
+        emission,
+        externalId,
+        pairingId: message.pairingId,
+      };
     }
     return finish({ ok: true, accepted: true });
   });

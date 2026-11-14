@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import { describe, expect, it } from "vitest";
-import { PushClient, PREVIEW_LEDGER_KEY, clearPushQueue } from "./client.js";
+import { MAX_PREVIEW_ATTEMPTS, PushClient, PREVIEW_LEDGER_KEY, clearPushQueue } from "./client.js";
 import { PersistentQueue } from "./queue.js";
 import { buildWebPageDocument } from "./documents.js";
 import { FakeFetch, MemoryStore, jsonResponse } from "./test-fakes.js";
@@ -127,7 +127,52 @@ describe("page screenshot uploads", () => {
     },
   );
 
-  it.each([429, 503, 500])("a %i keeps the shot for a retry", async (status) => {
+  it.each([500, 503])(
+    "a %i on a screenshot never holds back the pages behind it, and is given up after a few tries",
+    async (status) => {
+      const store = new MemoryStore();
+      let now = 1_000_000;
+      const fetch = new FakeFetch((req) =>
+        req.url.includes("/documents/preview")
+          ? jsonResponse(status, { error: "the preview store failed" })
+          : jsonResponse(200, { ingested: 1 }),
+      );
+      const push = new PushClient({
+        gatewayUrl: GATEWAY,
+        token: TOKEN,
+        fetch: fetch.fetch,
+        store,
+        batchSize: 1,
+        now: () => now,
+      });
+      const first = await pageDoc("https://news.example.com/a");
+      await push.enqueueDocument(first);
+      await push.enqueuePreview(preview(first.externalId));
+      await push.enqueueDocument(await pageDoc("https://news.example.com/b"));
+      await push.enqueueDocument(await pageDoc("https://news.example.com/c"));
+
+      const delivered: number[] = [];
+      for (let pass = 0; pass < 4; pass += 1) delivered.push((await push.drain()).delivered);
+      expect(delivered).toEqual([1, 0, 1, 1]);
+      const pages = fetch.requests.filter((r) => new URL(r.url).pathname === "/documents");
+      expect(pages).toHaveLength(3);
+      expect(await push.getRetry()).toBeNull();
+
+      let previewTries = 1;
+      for (let pass = 0; pass < 10; pass += 1) {
+        now += 10 * 60 * 1000;
+        const before = fetch.requests.length;
+        const result = await push.drain();
+        if (fetch.requests.length > before) previewTries += 1;
+        if (result.retained === 0) break;
+      }
+      expect(previewTries).toBe(MAX_PREVIEW_ATTEMPTS);
+      expect(await push.queueDepth()).toBe(0);
+      expect(await push.getFailure()).toBeNull();
+    },
+  );
+
+  it.each([429, 408])("a %i holds the queue back like any upload", async (status) => {
     const store = new MemoryStore();
     const push = client(store, new FakeFetch(() => jsonResponse(status, {})));
     await push.enqueuePreview(preview("page-a"));

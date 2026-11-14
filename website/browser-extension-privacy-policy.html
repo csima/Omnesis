@@ -86,17 +86,18 @@
             <strong>Page screenshots</strong> — off by default. When you turn them on, a setting
             stored on your gateway and shared by every browser paired to it, each captured page also
             uploads a screenshot of the visible part of the page: the viewport only, not the whole
-            page, taken after the same five seconds of focus and only while that tab is the active
-            tab of a focused window. It is downscaled to at most 1280 pixels on its longest side,
-            encoded as WebP (or JPEG), and skipped when it is over 512 KB. Screenshots are not
-            redacted the way text is: anything visible on screen, including content that page text
-            extraction removes, is in the image. Pages the extension never captures are never
-            screenshotted. The gateway keeps one screenshot per page and deletes it with the page,
-            including when you delete the page for good or exclude its domain with deletion. Turning
-            screenshots off stops new ones; saved ones stay with their pages. Chrome lets an
-            extension take screenshots only with access to all sites, so turning them on asks Chrome
-            for that permission in each browser; it is used only for these screenshots and removed
-            when you unpair.
+            page, taken after the same five seconds of focus, only while that tab is the active tab
+            of a focused window and still at the address the capture came from, and only when the
+            page has no password, one-time-code or card field and nothing is being typed. It is
+            downscaled to at most 1280 pixels on its longest side, encoded as WebP (or JPEG), and
+            skipped when it is over 512 KB. Screenshots are not redacted the way text is: anything
+            visible on screen, including content that page text extraction removes, is in the image.
+            Pages the extension never captures are never screenshotted. The gateway keeps one
+            screenshot per page and deletes it with the page, including when you delete the page for
+            good or exclude its domain with deletion. Turning screenshots off stops new ones; saved
+            ones stay with their pages. Chrome lets an extension take screenshots only with access
+            to all sites, so turning them on asks Chrome for that permission in each browser; it is
+            used only for these screenshots and removed when you unpair.
           </li>
           <li>
             <strong>Visit metadata</strong> — the normalized page URL, domain, title, visit time,

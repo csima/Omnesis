@@ -31,7 +31,8 @@ export function BrowserCaptureSettings() {
     };
   }, []);
 
-  const enabled = policy?.screenshots?.enabled === true;
+  const unavailable = policy?.screenshots?.available === false;
+  const enabled = policy?.screenshots?.enabled === true && !unavailable;
 
   async function toggle(event) {
     const next = event.currentTarget.checked;
@@ -54,7 +55,7 @@ export function BrowserCaptureSettings() {
           <input
             type="checkbox"
             checked=${enabled}
-            disabled=${policy === null || saving}
+            disabled=${policy === null || saving || unavailable}
             onChange=${toggle}
           />
           <span>Save a screenshot of each page</span>
@@ -65,6 +66,11 @@ export function BrowserCaptureSettings() {
           text is: whatever the page shows on screen is in the image. Each is deleted with its
           page. Off unless you turn it on; turning it off keeps the screenshots already saved.
         </p>
+        ${unavailable &&
+        html`<p class="devices-banner error" role="status">
+          The preview store could not be opened, so this gateway keeps no screenshots and browsers
+          take none. See the gateway log.
+        </p>`}
         ${error && html`<p class="devices-banner error" role="alert">${error}</p>`}
       </div>
     </section>

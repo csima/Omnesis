@@ -81,6 +81,12 @@ const PROBE_INTERVAL_MS = 5 * 60 * 1000;
  */
 export const PREVIEW_LEDGER_KEY = "omnesis.push.previewLedger.v1";
 
+/**
+ * Attempts a page screenshot gets against server errors before it is dropped:
+ * a screenshot is never worth holding a slot for long.
+ */
+export const MAX_PREVIEW_ATTEMPTS = 3;
+
 /** Pages the ledger remembers; the oldest entries are forgotten first. */
 const PREVIEW_LEDGER_LIMIT = 2_000;
 
@@ -355,6 +361,19 @@ export class PushClient {
             status: outcome.status,
             kind: item.kind,
             at: now,
+          });
+        }
+      } else if (outcome.kind === "retry" && outcome.itemOnly) {
+        // This item's own failure: it retries on its own clock, behind nothing
+        // and holding nothing back, and is given up after a few attempts.
+        const attempts = item.attempts + 1;
+        if (attempts >= MAX_PREVIEW_ATTEMPTS) {
+          suppressed += 1;
+        } else {
+          retained.push({
+            ...item,
+            attempts,
+            notBefore: now + this.computeDelay(attempts, outcome.retryAfterMs),
           });
         }
       } else {

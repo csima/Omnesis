@@ -112,6 +112,23 @@ describe("rendered", () => {
     );
   });
 
+  test("a gateway without its preview store shows screenshots as unavailable", async () => {
+    (getWebCapturePolicy as ReturnType<typeof vi.fn>).mockResolvedValue({
+      screenshots: { enabled: false, available: false },
+    });
+    await act(async () => {
+      render(h(BrowserCaptureSettings, {}), host);
+    });
+    await vi.waitFor(() =>
+      expect(host.querySelector("[role=status]")?.textContent).toContain(
+        "The preview store could not be opened",
+      ),
+    );
+    expect(Boolean((host.querySelector("input[type=checkbox]") as HTMLInputElement).disabled)).toBe(
+      true,
+    );
+  });
+
   test("a refused edit is shown", async () => {
     (getWebCapturePolicy as ReturnType<typeof vi.fn>).mockResolvedValue({
       screenshots: { enabled: false },

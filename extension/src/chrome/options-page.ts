@@ -309,16 +309,19 @@ export function initOptions(
     const allow = $("allow-screenshots") as HTMLButtonElement;
     screenshotGrant = await hasScreenshotPermission().catch(() => false);
     const enabled = snapshot.policy !== null && screenshotsEnabled(snapshot.policy);
-    toggle.disabled = !paired || snapshot.policy === null;
+    const unavailable = snapshot.policy?.screenshots?.available === false;
+    toggle.disabled = !paired || snapshot.policy === null || unavailable;
     toggle.checked = enabled;
     allow.hidden = !paired || !enabled || screenshotGrant;
     hint.textContent = !paired
       ? "Pair this browser to change this setting for your paired browsers."
       : snapshot.policy === null
         ? "Capture settings have not been loaded from the gateway yet."
-        : enabled && !screenshotGrant
-          ? "Screenshots are on for your paired browsers, but Chrome has not allowed this browser to take them."
-          : "This setting is shared by every browser paired to this gateway. Chrome asks each browser for permission to take screenshots.";
+        : unavailable
+          ? "Your gateway cannot store screenshots right now, so none are taken."
+          : enabled && !screenshotGrant
+            ? "Screenshots are on for your paired browsers, but Chrome has not allowed this browser to take them."
+            : "This setting is shared by every browser paired to this gateway. Chrome asks each browser for permission to take screenshots.";
   }
 
   /** Ask Chrome for the screenshot grant; must be called inside the click. */

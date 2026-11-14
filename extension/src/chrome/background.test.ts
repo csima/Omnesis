@@ -2256,14 +2256,17 @@ describe("MV3 background page screenshots", () => {
   }
 
   /** `chrome.tabs` / `chrome.windows` for one focused window showing tab 7 on `url`. */
-  function screenFor(url = PAGE) {
+  function screenFor(url = PAGE, confirm: () => Promise<unknown> = async () => ({ ok: true })) {
     const captureVisibleTab = vi.fn(async () => "data:image/jpeg;base64,AAAA");
+    const sendMessage = vi.fn((_tabId: number, _message: unknown) => confirm());
     return {
       captureVisibleTab,
+      sendMessage,
       extra: {
         tabs: {
           get: vi.fn(async () => ({ id: 7, windowId: 2, active: true, url })),
           captureVisibleTab,
+          sendMessage,
         },
         windows: { get: vi.fn(async () => ({ id: 2, focused: true, state: "normal" })) },
       },
@@ -2357,6 +2360,57 @@ describe("MV3 background page screenshots", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(screen.captureVisibleTab).not.toHaveBeenCalled();
     expect(requests).not.toContain("PUT /documents/preview");
+  });
+
+  it.each([
+    ["the tab moved to another page of the same site", () => screenFor(`${PAGE}/signin`)],
+    [
+      "the page declines the shot",
+      () => screenFor(PAGE, async () => ({ ok: false, reason: "typing" })),
+    ],
+    ["the page does not answer", () => screenFor(PAGE, () => new Promise(() => undefined))],
+  ])("takes no screenshot when %s", async (_label, makeScreen) => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = makeScreen();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      url: PAGE,
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+    expect(requests).not.toContain("PUT /documents/preview");
+  });
+
+  it("asks the page to confirm the exact capture before shooting it", async () => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = screenFor();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      url: PAGE,
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"));
+    expect(screen.sendMessage).toHaveBeenCalledWith(7, {
+      type: "screenshot-check",
+      url: PAGE,
+      contentHash: TEST_CONTENT_HASH,
+    });
   });
 
   it("takes no screenshot in a browser Chrome has not allowed to take one", async () => {

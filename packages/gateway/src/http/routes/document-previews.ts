@@ -16,16 +16,12 @@
  *     its content type, `Cache-Control: private` and an ETag; 404 when there
  *     is none.
  *
- * Without a preview store (it failed to open) both answer 503.
+ * Without a preview store (it failed to open) an upload answers 409
+ * `PREVIEWS_UNAVAILABLE`, which a client does not retry, and a read 404.
  */
 
 import { bodyLimit } from "hono/body-limit";
-import {
-  BadRequestError,
-  NotFoundError,
-  ServiceUnavailableError,
-  ValidationError,
-} from "../errors.js";
+import { BadRequestError, NotFoundError, HttpError, ValidationError } from "../errors.js";
 import { scope } from "../scope.js";
 import { previewUploadFields, previewUploadJsonBody } from "../schemas/index.js";
 import { MAX_PREVIEW_BYTES } from "../../previews/store.js";
@@ -52,7 +48,13 @@ export function mountDocumentPreviewRoutes(
   previews: DocumentPreviewService | undefined,
 ): void {
   const service = (): DocumentPreviewService => {
-    if (!previews) throw new ServiceUnavailableError("The preview store is not available");
+    if (!previews) {
+      throw new HttpError(
+        409,
+        "PREVIEWS_UNAVAILABLE",
+        "This gateway is running without its preview store",
+      );
+    }
     return previews;
   };
 
@@ -67,7 +69,7 @@ export function mountDocumentPreviewRoutes(
   });
 
   app.get("/documents/:id/preview", scope.read(), (c) => {
-    const preview = service().read(c.req.param("id"));
+    const preview = previews?.read(c.req.param("id")) ?? null;
     if (!preview) throw new NotFoundError("No preview for this document");
     const headers = {
       "Content-Type": preview.meta.contentType,
