@@ -15,6 +15,7 @@ import {
 } from "../../merge-candidates.js";
 import { listMergeRules } from "../../people.js";
 import {
+  MERGE_JUDGE_INDIVIDUALS_ID,
   MERGE_JUDGE_QUESTION_ID,
   buildMergeJudgeRequest,
   listMergeJudgeWork,
@@ -72,8 +73,8 @@ function candidate(a: string, b: string): string {
   return row.id;
 }
 
-/** A decision model scoring each request by an address its evidence carries. */
-function judge(scores: Record<string, number | Error>) {
+/** A decision model scoring each request by an address its evidence carries: [same person, both individuals]. */
+function judge(scores: Record<string, readonly [number, number] | Error>) {
   const requests: DecisionRequest[] = [];
   const model: DecisionCapability = {
     modelId: "decision-scripted-v1",
@@ -85,7 +86,10 @@ function judge(scores: Record<string, number | Error>) {
       if (hit[1] instanceof Error) throw hit[1];
       return {
         model: "decision-scripted-v1",
-        answers: { [MERGE_JUDGE_QUESTION_ID]: { type: "score", score: hit[1] } },
+        answers: {
+          [MERGE_JUDGE_QUESTION_ID]: { type: "score", score: hit[1][0] },
+          [MERGE_JUDGE_INDIVIDUALS_ID]: { type: "score", score: hit[1][1] },
+        },
         inputTokens: 120,
       };
     },
@@ -126,24 +130,30 @@ const status = (id: string) =>
     .get(id)!;
 
 describe("mergeJudgeVerdict", () => {
-  test("only a confident score merges or dismisses; the middle is left for review", () => {
-    expect(mergeJudgeVerdict(4)).toBe("merge");
-    expect(mergeJudgeVerdict(3.5)).toBe("merge");
-    expect(mergeJudgeVerdict(3.4)).toBe("unsure");
-    expect(mergeJudgeVerdict(2)).toBe("unsure");
-    expect(mergeJudgeVerdict(0.6)).toBe("unsure");
-    expect(mergeJudgeVerdict(0.5)).toBe("distinct");
-    expect(mergeJudgeVerdict(0)).toBe("distinct");
+  test("two individuals merge on a clear same-person score and are dismissed on a clear different one", () => {
+    expect(mergeJudgeVerdict(4, 1)).toBe("merge");
+    expect(mergeJudgeVerdict(3, 0.8)).toBe("merge");
+    expect(mergeJudgeVerdict(2.9, 1)).toBe("unsure");
+    expect(mergeJudgeVerdict(1.1, 1)).toBe("unsure");
+    expect(mergeJudgeVerdict(1, 1)).toBe("distinct");
+  });
+
+  test("a side that is not a person is dismissed, however alike they look", () => {
+    expect(mergeJudgeVerdict(3.6, 0.2)).toBe("distinct");
+    expect(mergeJudgeVerdict(3.6, 0.3)).toBe("distinct");
+    // Not clearly individuals, not clearly not: never merged.
+    expect(mergeJudgeVerdict(3.6, 0.6)).toBe("unsure");
   });
 });
 
 describe("buildMergeJudgeRequest", () => {
-  test("asks one five-level question about the evidence", () => {
+  test("asks whether both sides are people, and whether they are the same one", () => {
     const request = buildMergeJudgeRequest("evidence text");
     expect(request.state).toBe("evidence text");
-    const question = request.questions[MERGE_JUDGE_QUESTION_ID];
-    expect(question?.type).toBe("score");
-    expect(question?.type === "score" && question.criteria).toHaveLength(5);
+    const same = request.questions[MERGE_JUDGE_QUESTION_ID];
+    const individuals = request.questions[MERGE_JUDGE_INDIVIDUALS_ID];
+    expect(same?.type === "score" && same.criteria).toHaveLength(5);
+    expect(individuals?.type === "score" && individuals.criteria).toHaveLength(2);
   });
 });
 
@@ -158,7 +168,11 @@ describe("runMergeJudgePass", () => {
     const same = candidate("maya.reeves@example.com", "mreeves@example.org");
     const different = candidate("alex.chen@northstar.example", "alex.rivera@northstar.example");
     const unclear = candidate("jamie@example.com", "jlopez@example.org");
-    const { model, requests } = judge({ mreeves: 3.9, "alex.rivera": 0.2, jlopez: 2 });
+    const { model, requests } = judge({
+      mreeves: [3.9, 0.95],
+      "alex.rivera": [0.2, 0.9],
+      jlopez: [2, 0.9],
+    });
 
     const { run, spend } = pass("enforce", model);
     const res = await run();
@@ -179,11 +193,22 @@ describe("runMergeJudgePass", () => {
     expect(requests).toHaveLength(3);
   });
 
+  test("a person and their newsletter sender are dismissed, however alike they score", async () => {
+    makePerson("Maya Reeves", "maya.reeves@example.com");
+    makePerson("Maya Reeves", "news@example.org");
+    const id = candidate("maya.reeves@example.com", "news@example.org");
+    const { model } = judge({ "news@": [3.6, 0.1] });
+
+    expect((await pass("enforce", model).run()).distinct).toBe(1);
+    expect(status(id).status).toBe("denied");
+    expect(listMergeRules(db, { active: true })).toHaveLength(0);
+  });
+
   test("shadow asks and changes nothing, and does not ask the same evidence twice", async () => {
     makePerson("Maya Reeves", "maya.reeves@example.com");
     makePerson("Maya Reeves", "mreeves@example.org");
     const id = candidate("maya.reeves@example.com", "mreeves@example.org");
-    const { model, requests } = judge({ mreeves: 4 });
+    const { model, requests } = judge({ mreeves: [4, 1] });
     const seen = new Set<string>();
 
     expect((await pass("shadow", model, seen).run()).merge).toBe(1);
@@ -209,7 +234,7 @@ describe("runMergeJudgePass", () => {
     makePerson("Maya Reeves", "maya.reeves@example.com", true);
     makePerson("Maya Reeves", "mreeves@example.org");
     const id = candidate("maya.reeves@example.com", "mreeves@example.org");
-    const { model, requests } = judge({ mreeves: 4 });
+    const { model, requests } = judge({ mreeves: [4, 1] });
 
     expect((await pass("enforce", model).run()).judged).toBe(0);
     expect((await pass("off", model).run()).judged).toBe(0);
