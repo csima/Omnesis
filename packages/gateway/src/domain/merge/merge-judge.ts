@@ -72,7 +72,7 @@ const SAME_PERSON_LEVELS = [
  * them.
  */
 const INDIVIDUALS_LEVELS = [
-  "At least one side is not an individual person: a meeting room or resource calendar, a mailing list or group, a role or team mailbox, an organisation or business, a newsletter, or another automated sender.",
+  "At least one side is not an individual person: a meeting room or resource calendar, a mailing list or group, a role or team mailbox, an organisation or business, or a sender that posts on behalf of a platform, an event or a publication (a newsletter, an event calendar, a community or booking service, a marketing sender).",
   "Both sides are individual people.",
 ] as const;
 
@@ -90,7 +90,7 @@ export function buildMergeJudgeRequest(evidence: string): DecisionRequest {
       [MERGE_JUDGE_INDIVIDUALS_ID]: {
         type: "score",
         instructions:
-          "These two records come from one person's own email, chat, calendar and contacts. Judge from the evidence whether side A and side B are each an individual human being.",
+          "These two records come from one person's own email, chat, calendar and contacts. Judge from the evidence whether side A and side B are each an individual human being. A record known only by an address, with no display name, is still an individual when the address and the documents read as one person's.",
         criteria: INDIVIDUALS_LEVELS,
       },
       [MERGE_JUDGE_QUESTION_ID]: {
