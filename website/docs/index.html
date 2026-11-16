@@ -513,8 +513,9 @@
           <code>gateway.backfill.mergeCandidates.judge</code> to <code>enforce</code> and it reads
           each suggestion's evidence (both people's names and addresses, their recent documents and
           shared conversations), then merges the ones it judges the same person, dismisses the ones
-          it judges different people, and leaves the rest for you. Its merges are reversible and
-          name the model in their reason, and suggestions involving you always stay with you.
+          it judges different people or not a person at all (a meeting room, a mailing list, a
+          newsletter sender), and leaves the rest for you. Its merges are reversible and name the
+          model in their reason, and suggestions involving you always stay with you.
           <code>shadow</code> logs its verdicts without acting on them.
         </p>
         <p>

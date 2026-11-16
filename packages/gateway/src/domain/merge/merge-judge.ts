@@ -11,11 +11,14 @@
  * such case is a rule that misfires on the next. So each pending candidate's
  * evidence pack (`buildMergeAdjudicationEvidence`: both sides' names and
  * identifiers, recent documents, shared threads, co-interactors) goes to the
- * decision model as one scored question, and its answer settles the candidate:
+ * decision model with two questions: whether both sides are individual people
+ * at all, and whether they are the same one. The answers settle the candidate:
  *
- *   - the same person → a reversible system merge rule, whose reason names the
- *     model and its score;
- *   - different people → the candidate is denied, so the pair stops returning;
+ *   - two individuals and the same person → a reversible system merge rule,
+ *     whose reason names the model and its scores;
+ *   - different people, or a side that is not a person (a meeting room, a list,
+ *     a role mailbox, a newsletter) → the candidate is denied, so the pair stops
+ *     returning;
  *   - anything between → it stays pending for the operator, with the verdict
  *     recorded on it.
  *
@@ -51,29 +54,50 @@ export type MergeJudgeMode = "off" | "shadow" | "enforce";
 export const MERGE_JUDGE_MAX_PER_PASS = 25;
 
 export const MERGE_JUDGE_QUESTION_ID = "samePerson";
+export const MERGE_JUDGE_INDIVIDUALS_ID = "individuals";
 
-/** Levels of the question, lowest first. */
-const LEVELS = [
-  "Different people. The records belong to separate individuals, or one side is a shared mailbox, a team, a role account, an organisation or an automated sender.",
+/** Levels of the same-person question, lowest first. */
+const SAME_PERSON_LEVELS = [
+  "Different people.",
   "Probably different people. They share a common name, a surname, an employer or an email domain, but nothing specific to one individual.",
   "Cannot tell from this evidence.",
   "Probably the same person. They share something specific to one individual, such as the same full name with a matching personal address, or the same conversations.",
   "The same person: one individual seen under different addresses, names or accounts, with evidence specific to them.",
 ] as const;
 
-/** At or above: merge. At or below: distinct. Between: left for the operator. */
-export const MERGE_JUDGE_SAME_AT = 3.5;
-export const MERGE_JUDGE_DIFFERENT_AT = 0.5;
+/**
+ * Whether both sides are people at all. Asked apart from the same-person
+ * question, because a newsletter sender, a meeting room or a role mailbox can
+ * look very like the person it belongs to and still must never be merged into
+ * them.
+ */
+const INDIVIDUALS_LEVELS = [
+  "At least one side is not an individual person: a meeting room or resource calendar, a mailing list or group, a role or team mailbox, an organisation or business, a newsletter, or another automated sender.",
+  "Both sides are individual people.",
+] as const;
+
+/** Same-person score at or above which two individuals are merged, and at or below which they are dismissed. */
+export const MERGE_JUDGE_SAME_AT = 3;
+export const MERGE_JUDGE_DIFFERENT_AT = 1;
+/** Probability that both sides are individuals, at or below which the pair is dismissed, and at or above which it may merge. */
+export const MERGE_JUDGE_NOT_INDIVIDUALS_AT = 0.3;
+export const MERGE_JUDGE_INDIVIDUALS_AT = 0.8;
 
 export function buildMergeJudgeRequest(evidence: string): DecisionRequest {
   return {
     state: evidence,
     questions: {
+      [MERGE_JUDGE_INDIVIDUALS_ID]: {
+        type: "score",
+        instructions:
+          "These two records come from one person's own email, chat, calendar and contacts. Judge from the evidence whether side A and side B are each an individual human being.",
+        criteria: INDIVIDUALS_LEVELS,
+      },
       [MERGE_JUDGE_QUESTION_ID]: {
         type: "score",
         instructions:
-          "These two records come from one person's own email, chat and contacts, and a matcher has proposed that they describe the same human being. Judge from the evidence whether side A and side B are the same individual. Sharing a first name, a surname, an employer or an email domain does not make two people the same.",
-        criteria: LEVELS,
+          "A matcher has proposed that these two records describe the same human being. Judge from the evidence whether side A and side B are the same individual. Sharing a first name, a surname, an employer or an email domain does not make two people the same; one person's work and personal addresses, or their addresses at an old and a new employer, are the same person.",
+        criteria: SAME_PERSON_LEVELS,
       },
     },
   };
@@ -85,9 +109,19 @@ const VERDICT_REASON: Record<MergeAdjudicationVerdict, string> = {
   unsure: "that the evidence cannot tell whether these are the same person",
 };
 
-export function mergeJudgeVerdict(score: number): MergeAdjudicationVerdict {
-  if (score >= MERGE_JUDGE_SAME_AT) return "merge";
-  if (score <= MERGE_JUDGE_DIFFERENT_AT) return "distinct";
+/**
+ * The verdict from both answers. A pair where either side is not a person is
+ * dismissed whatever else matches; two individuals merge only on a clear
+ * same-person score, and are dismissed on a clear different-people one.
+ */
+export function mergeJudgeVerdict(
+  samePerson: number,
+  individuals: number,
+): MergeAdjudicationVerdict {
+  if (individuals <= MERGE_JUDGE_NOT_INDIVIDUALS_AT) return "distinct";
+  if (samePerson <= MERGE_JUDGE_DIFFERENT_AT) return "distinct";
+  if (samePerson >= MERGE_JUDGE_SAME_AT && individuals >= MERGE_JUDGE_INDIVIDUALS_AT)
+    return "merge";
   return "unsure";
 }
 
@@ -170,34 +204,39 @@ export async function runMergeJudgePass(deps: MergeJudgePassDeps): Promise<Merge
       deps.decision,
       buildMergeJudgeRequest(w.evidence),
       MERGE_JUDGE_QUESTION_ID,
-      { recordSpend: deps.recordSpend, log: deps.log },
+      {
+        recordSpend: deps.recordSpend,
+        log: deps.log,
+        additionalQuestionIds: [MERGE_JUDGE_INDIVIDUALS_ID],
+      },
     );
-    if (judgement.score === null) {
+    const individuals = judgement.additionalScores?.[MERGE_JUDGE_INDIVIDUALS_ID];
+    if (judgement.score === null || individuals === undefined) {
       // Fail open: the candidate stays pending and due, for the next pass.
       result.unavailable += 1;
       continue;
     }
-    const verdict = mergeJudgeVerdict(judgement.score);
+    const verdict = mergeJudgeVerdict(judgement.score, individuals);
     result.judged += 1;
     result[verdict] += 1;
-    const score = judgement.score.toFixed(2);
+    const score = `${judgement.score.toFixed(2)}/4, individuals ${individuals.toFixed(2)}`;
     if (shadow) {
       deps.shadowSeen.add(`${w.candidateId}:${w.evidenceFingerprint}`);
       deps.log.info(
-        `merge judge (shadow): candidate ${w.candidateId} → ${verdict} (score ${score}/4, ${judgement.modelId})`,
+        `merge judge (shadow): candidate ${w.candidateId} → ${verdict} (score ${score}, ${judgement.modelId})`,
       );
       continue;
     }
     const applied = await deps.apply({
       candidateId: w.candidateId,
       verdict,
-      reason: `${judgement.modelId} judged ${VERDICT_REASON[verdict]} (score ${score} of 4).`,
+      reason: `${judgement.modelId} judged ${VERDICT_REASON[verdict]} (same-person score ${judgement.score.toFixed(2)} of 4; both individuals ${individuals.toFixed(2)}).`,
       runId: `merge-judge:${judgement.modelId}`,
       expectedPersonIds: w.personIds,
       judgedEvidenceFingerprint: w.evidenceFingerprint,
     });
     deps.log.info(
-      `merge judge: candidate ${w.candidateId} → ${verdict} (score ${score}/4, ${applied.outcome})`,
+      `merge judge: candidate ${w.candidateId} → ${verdict} (score ${score}, ${applied.outcome})`,
     );
   }
   if (result.judged > 0 || result.unavailable > 0) {
