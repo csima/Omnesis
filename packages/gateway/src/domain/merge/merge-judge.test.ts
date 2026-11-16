@@ -134,15 +134,17 @@ describe("mergeJudgeVerdict", () => {
     expect(mergeJudgeVerdict(4, 1)).toBe("merge");
     expect(mergeJudgeVerdict(3, 0.8)).toBe("merge");
     expect(mergeJudgeVerdict(2.9, 1)).toBe("unsure");
-    expect(mergeJudgeVerdict(1.1, 1)).toBe("unsure");
-    expect(mergeJudgeVerdict(1, 1)).toBe("distinct");
+    expect(mergeJudgeVerdict(1, 1)).toBe("unsure");
+    expect(mergeJudgeVerdict(0.6, 1)).toBe("unsure");
+    expect(mergeJudgeVerdict(0.5, 1)).toBe("distinct");
   });
 
   test("a side that is not a person is dismissed, however alike they look", () => {
-    expect(mergeJudgeVerdict(3.6, 0.2)).toBe("distinct");
-    expect(mergeJudgeVerdict(3.6, 0.3)).toBe("distinct");
-    // Not clearly individuals, not clearly not: never merged.
-    expect(mergeJudgeVerdict(3.6, 0.6)).toBe("unsure");
+    expect(mergeJudgeVerdict(3.6, 0.05)).toBe("distinct");
+    expect(mergeJudgeVerdict(3.6, 0.1)).toBe("distinct");
+    // Not clearly individuals, not clearly not: neither merged nor dismissed.
+    expect(mergeJudgeVerdict(3.6, 0.3)).toBe("unsure");
+    expect(mergeJudgeVerdict(0.8, 0.29)).toBe("unsure");
   });
 });
 

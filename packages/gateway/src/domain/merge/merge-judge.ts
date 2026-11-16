@@ -76,11 +76,17 @@ const INDIVIDUALS_LEVELS = [
   "Both sides are individual people.",
 ] as const;
 
-/** Same-person score at or above which two individuals are merged, and at or below which they are dismissed. */
+/**
+ * Same-person score at or above which two individuals are merged, and at or
+ * below which they are dismissed. A merge is a rule that can be undone; a
+ * dismissal is a permanent veto of the pair, so dismissing takes the clearer
+ * answer: on live shadow runs, real pairs where one side had no display name
+ * scored just under 1, and rooms, lists and different people near 0.
+ */
 export const MERGE_JUDGE_SAME_AT = 3;
-export const MERGE_JUDGE_DIFFERENT_AT = 1;
+export const MERGE_JUDGE_DIFFERENT_AT = 0.5;
 /** Probability that both sides are individuals, at or below which the pair is dismissed, and at or above which it may merge. */
-export const MERGE_JUDGE_NOT_INDIVIDUALS_AT = 0.3;
+export const MERGE_JUDGE_NOT_INDIVIDUALS_AT = 0.1;
 export const MERGE_JUDGE_INDIVIDUALS_AT = 0.8;
 
 export function buildMergeJudgeRequest(evidence: string): DecisionRequest {
