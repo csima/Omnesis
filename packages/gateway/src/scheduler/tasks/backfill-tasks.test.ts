@@ -348,6 +348,34 @@ describe("mergeCandidatesDetectTask — completion report", () => {
     expect(opts.writeGate.autoApproveHighConfidenceCandidates).not.toHaveBeenCalled();
   });
 
+  test("while the merge judge is enforced, name matching hands candidates to it instead of merging", async () => {
+    const { opts } = makeDetectOpts(2, 1);
+    const kicked: string[] = [];
+    Object.assign(opts, {
+      getMergeJudgeMode: () => "enforce",
+      getDecision: () => ({ modelId: "decision-scripted-v1" }),
+      kickPeriodic: (name: string) => kicked.push(name),
+    });
+
+    const outcome = await mergeCandidatesDetectTask(opts).run(undefined, ctx);
+
+    expect(outcome).toEqual({ kind: "done", value: { idle: false, detected: true, approved: 0 } });
+    expect(opts.writeGate.autoApproveHighConfidenceCandidates).not.toHaveBeenCalled();
+    expect(kicked).toEqual(["backfill.mergeJudge"]);
+  });
+
+  test("a shadowed judge, or one with no decision model, leaves auto-approval as it was", async () => {
+    for (const [mode, decision] of [
+      ["shadow", { modelId: "decision-scripted-v1" }],
+      ["enforce", null],
+    ] as const) {
+      const { opts } = makeDetectOpts(2, 1);
+      Object.assign(opts, { getMergeJudgeMode: () => mode, getDecision: () => decision });
+      await mergeCandidatesDetectTask(opts).run(undefined, ctx);
+      expect(opts.writeGate.autoApproveHighConfidenceCandidates).toHaveBeenCalledOnce();
+    }
+  });
+
   test("a tick deferred by an in-flight graph reports no detection", async () => {
     const { opts, meta } = makeDetectOpts(1, 1);
     const task = mergeCandidatesDetectTask(opts);

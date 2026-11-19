@@ -5,7 +5,8 @@ import CoreGraphics
 import Foundation
 
 /// Geometry, thresholds and the gesture decisions for the slide-out menu —
-/// the menu that sits under the app, which the app slides aside to reveal.
+/// the menu that sits under the app, which the app slides aside to reveal —
+/// and for when a wide container docks that menu as a sidebar instead.
 ///
 /// Deliberately free of SwiftUI and UIKit so it compiles, and is tested,
 /// natively on macOS in the sim-less logic lane. `MenuRevealContainer` renders
@@ -87,6 +88,54 @@ enum MenuReveal {
     /// it. A hairline on the cut edge draws the separation instead, which
     /// works the same way in both.
     static let scrimOpacity: Double = 0.18
+
+    // MARK: - Docked sidebar
+
+    /// Container width from which the menu stops being a drawer under the app
+    /// and stands beside it as a sidebar: the inner display of a foldable
+    /// iPhone (669pt upright, 951pt on its side), an iPad, a wide window. The
+    /// folded outer display (466pt) and every phone stay below it. Chosen so
+    /// the section beside the sidebar still gets at least a phone's width; a
+    /// narrower container keeps the drawer, and folding or narrowing the
+    /// window hands the same menu back to it without the section losing its
+    /// place.
+    static let dockMinimumWidth: CGFloat = 660
+
+    /// The same threshold at an accessibility text size, where the sidebar
+    /// has to be wider for its rows to stay legible. Below it the section
+    /// keeps the whole width and the menu stays a drawer, which already
+    /// opens to most of the screen.
+    static let largeTextDockMinimumWidth: CGFloat = 900
+
+    /// Sidebar width as a fraction of the container, clamped to a band where
+    /// a row's label and the Settings button stay close enough to read as one
+    /// column. Accessibility text sizes get a wider band.
+    static let sidebarFraction: CGFloat = 0.3
+    static let sidebarMinimumWidth: CGFloat = 260
+    static let sidebarMaximumWidth: CGFloat = 340
+    static let largeTextSidebarMinimumWidth: CGFloat = 340
+    static let largeTextSidebarMaximumWidth: CGFloat = 420
+
+    static func docksMenu(containerWidth width: CGFloat, largeText: Bool = false) -> Bool {
+        width >= (largeText ? largeTextDockMinimumWidth : dockMinimumWidth)
+    }
+
+    /// The container width to lay out with, given the one in use and a new
+    /// measurement. A change under half a point is layout rounding, not a
+    /// resize, and is ignored: the sidebar's width and the app's padding are
+    /// fractions of this width, so taking such a change lays the app out
+    /// again, which moves the measurement back by the same sliver, and the
+    /// two never settle. A backgrounded app hit this while the system
+    /// snapshotted it docked, until the watchdog killed it.
+    static func settledWidth(current: CGFloat, measured: CGFloat) -> CGFloat {
+        abs(measured - current) < 0.5 ? current : measured
+    }
+
+    static func sidebarWidth(forContainerWidth width: CGFloat, largeText: Bool = false) -> CGFloat {
+        let lower = largeText ? largeTextSidebarMinimumWidth : sidebarMinimumWidth
+        let upper = largeText ? largeTextSidebarMaximumWidth : sidebarMaximumWidth
+        return min(upper, max(lower, width * sidebarFraction))
+    }
 
     /// The space exclusion frames and a drag's start location are both
     /// resolved in, so the two are comparable wherever in the hierarchy an

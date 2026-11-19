@@ -344,7 +344,7 @@ struct RecentAnalyticsRowsView: View {
                 "\(table) · \(pagingCountLabel(rows.count, countIsPartial: paging.countIsPartial)) "
                     + "\(rows.count == 1 ? "row" : "rows")"
             )
-            .font(Theme.monospace(size: 11))
+            .scaledFont(size: 11, design: .monospaced)
             .foregroundStyle(Theme.textMuted)
             .lineLimit(1)
         }
@@ -452,13 +452,13 @@ struct RecentDocumentRow: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Text(doc.title.isEmpty ? "(untitled)" : doc.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                 metaRow
                 if let preview = doc.contentPreview, !preview.isEmpty {
                     Text(preview)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(2)
                 }
@@ -483,7 +483,7 @@ struct RecentDocumentRow: View {
         let parts = [docTypeLabel(doc.documentType), formatTimeAgo(doc.sourceCreatedAt)].compactMap { $0 }
         if !parts.isEmpty {
             Text(parts.joined(separator: " · "))
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(1)
         }
@@ -602,7 +602,7 @@ struct SourceRecentPreviewWrapper: View {
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "tray")
-                            .font(.system(size: 36))
+                            .scaledFont(size: 36)
                             .foregroundStyle(Theme.textMuted)
                         Text("No recent items yet")
                             .font(.headline)

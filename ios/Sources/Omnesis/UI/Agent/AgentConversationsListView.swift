@@ -27,6 +27,7 @@ import SwiftUI
 @available(iOS 17.0, *)
 struct AgentConversationsList: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var onSelect: (ConversationSummary) -> Void
 
     var body: some View {
@@ -120,10 +121,10 @@ struct AgentConversationsList: View {
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.textMuted)
             Text("No prior conversations")
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textSecondary)
             Text("Send a message in the Agent tab to start one.")
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textMuted)
                 .multilineTextAlignment(.center)
         }
@@ -137,20 +138,20 @@ struct AgentConversationsList: View {
                 GatewayErrorView.classify(error).title,
                 systemImage: "exclamationmark.triangle"
             )
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(Theme.warning)
             Spacer(minLength: Theme.Spacing.sm)
             if retryable {
                 Button("Retry") {
                     Task { await store.agent.refreshConversations() }
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .buttonStyle(.borderless)
             } else {
                 Button("Dismiss") {
                     store.agent.clearConversationActionError()
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .buttonStyle(.borderless)
             }
         }
@@ -200,15 +201,15 @@ extension AgentConversationsList {
                     .accessibilityHidden(true)
             }
             Text(item.title.isEmpty ? "(untitled)" : item.title)
-                .font(.system(size: 15, weight: unreadForDisplay(item) ? .semibold : .regular))
+                .scaledFont(size: 15, weight: unreadForDisplay(item) ? .semibold : .regular)
                 .foregroundStyle(Theme.textPrimary)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 10)
-        .frame(height: 40)
+        .frame(minHeight: 40, maxHeight: dynamicTypeSize.isAccessibilitySize ? nil : 40)
         .contentShape(Rectangle())
     }
 }

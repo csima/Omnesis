@@ -314,7 +314,7 @@ struct LucideQuoteIcon: View {
                 LucideTimelineIcon(size: CGFloat(size))
                 LucideQuoteIcon(size: CGFloat(size))
                 Text("\(size)pt")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textMuted)
             }
         }

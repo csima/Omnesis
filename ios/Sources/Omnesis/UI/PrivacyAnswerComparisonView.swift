@@ -51,12 +51,12 @@ struct PrivacyAnswerComparisonSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(copy.title)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let detail = copy.detail {
                 Text(detail)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -76,7 +76,7 @@ struct PrivacyAnswerComparisonSection: View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(privacyAnswerDiffLegend(lines), id: \.self) { entry in
                 Text(entry)
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -115,7 +115,7 @@ private struct PrivacyAnswerDiffRow: View {
                 .foregroundStyle(markerColor)
                 .frame(width: PrivacyAnswerDiffStyle.markerWidth, alignment: .center)
             Text(rendered)
-                .font(Theme.monospace(size: PrivacyAnswerDiffStyle.lineSize))
+                .scaledFont(size: PrivacyAnswerDiffStyle.lineSize, design: .monospaced)
                 .foregroundStyle(Theme.textPrimary)
                 // A phone is narrower than an answer's lines: they wrap here
                 // rather than being cut off at the edge of the card.
