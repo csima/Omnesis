@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Caleb Sima
 
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,10 +71,12 @@ from pathlib import Path
 def sources(home): return [('env',Path(k),None) for k in sorted(os.environ)]+[('isolated',Path(str(sys.flags.isolated)),None)]
 def source_id(kind,root): return kind+':'+root.name
 `);
-    const listing = (await runBridge(
-      { root, python: "/usr/bin/python3", sources: [], userAgents: {} },
-      "list",
-    )) as { sources: string[] };
+    const python = execFileSync("/usr/bin/python3", ["-c", "import sys; print(sys.executable)"], {
+      encoding: "utf8",
+    }).trim();
+    const listing = (await runBridge({ root, python, sources: [], userAgents: {} }, "list")) as {
+      sources: string[];
+    };
     expect(listing.sources).toContain("isolated:1");
     expect(listing.sources).toContain("env:PYTHONDONTWRITEBYTECODE");
     expect(listing.sources).not.toContain("env:OMNESIS_KEYRING_PASSPHRASE");
