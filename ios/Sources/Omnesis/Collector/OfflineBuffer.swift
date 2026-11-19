@@ -4,9 +4,9 @@
 import Foundation
 
 /// Persistent FIFO queue of pending `Batch`es. Each batch is one JSON
-/// file on disk, named by its id (which sorts lexicographically in
-/// creation order), so we can read batches in order without keeping
-/// any index in memory.
+/// file on disk, named by the sequence it was queued at and its id
+/// (`<sequence>_<id>.json`), so the order survives relaunches and clock
+/// changes without any index beyond the directory itself.
 ///
 /// Survives app kills, iOS suspensions, and device reboots. The actual
 /// HealthKit data stays in HealthKit's local database — this buffer
@@ -14,9 +14,11 @@ import Foundation
 /// delivered immediately.
 ///
 /// Durability model (see design doc §4.4):
-///   - HealthKit is the source of truth. Dropping oldest batches
-///     because the buffer filled is recoverable by resetting the
-///     source anchor (Phase 3).
+///   - HealthKit is the source of truth, but a queued batch is one
+///     whose cursor has already moved past it, so the buffer never
+///     drops one to make room: a batch that doesn't fit is refused
+///     (`Full`), and its page is read again from the same cursor once
+///     there is room.
 ///   - The buffer is a network-coalescing optimisation, not a
 ///     durability layer. Losing the directory entirely just means a
 ///     fresh backfill.
@@ -74,6 +76,10 @@ public actor OfflineBuffer {
 
     public struct Config: Sendable {
         public let maxSizeBytes: Int
+        /// The most one source's queued batches may take. A source the
+        /// gateway refuses keeps its batches, so without a share of its own
+        /// its backlog would fill the buffer and stop every other source.
+        public let maxSourceBytes: Int
         /// Alert threshold — warn the UI when the buffer grows past this.
         public let warningSizeBytes: Int
         /// How many permanent delivery failures a single batch may collect
@@ -95,9 +101,11 @@ public actor OfflineBuffer {
         /// can spend the whole attempt budget in seconds. Timing the run of
         /// failures is what actually holds the window open.
         public let quarantineGrace: TimeInterval
-        /// Upper bound on retained quarantined batches. They are kept so the
-        /// undelivered data is inspectable rather than silently destroyed;
-        /// the cap stops that from growing without limit. Oldest first out.
+        /// Upper bound on quarantined batches. Each is a page its source's
+        /// cursor has moved past, so nothing deletes them but the user's
+        /// discard. Once the quarantine holds this many, a batch that runs
+        /// out of retries stays queued instead, where it counts toward its
+        /// source's backlog and so pauses that source's reading.
         public let maxQuarantinedBatches: Int
 
         public static let `default` = Config(
@@ -110,9 +118,11 @@ public actor OfflineBuffer {
             warningSizeBytes: Int,
             quarantineAfterAttempts: Int = 5,
             quarantineGrace: TimeInterval = 6 * 60 * 60,
-            maxQuarantinedBatches: Int = 25
+            maxQuarantinedBatches: Int = 25,
+            maxSourceBytes: Int? = nil
         ) {
             self.maxSizeBytes = maxSizeBytes
+            self.maxSourceBytes = maxSourceBytes ?? maxSizeBytes / 4
             self.warningSizeBytes = warningSizeBytes
             self.quarantineAfterAttempts = quarantineAfterAttempts
             self.quarantineGrace = quarantineGrace
@@ -146,7 +156,18 @@ public actor OfflineBuffer {
     /// Populated lazily by `ensureCacheLoaded()`; updated in-place on
     /// every mutation. Disk is still the source of truth for the
     /// initial scan + on cache miss in `remove(id:)` / `load(id:)`.
+    ///
+    /// The order is the order batches were queued, kept in their file
+    /// names (`<sequence>_<id>.json`), never the clock their ids carry:
+    /// that resets with each process and steps back with the system clock.
     private var fileURLs: [URL] = []
+
+    /// The file of each queued batch, by id.
+    private var urlsById: [String: URL] = [:]
+
+    /// The highest sequence a queued batch carries; the next one queued
+    /// gets one more.
+    private var lastSequence: UInt64 = 0
 
     /// Running total of all queued file sizes in bytes. Kept in lockstep
     /// with `fileURLs` so `totalSizeBytes()` is O(1).
@@ -156,6 +177,15 @@ public actor OfflineBuffer {
     /// directory is actually empty or whether we just haven't scanned
     /// yet. Toggled inside `ensureCacheLoaded()`.
     private var cacheLoaded: Bool = false
+
+    /// The source of each queued batch read so far, by batch id.
+    private var batchSources: [String: String] = [:]
+
+    /// Batches handed to the background upload queue, keyed by batch id.
+    /// `nil` until the sidecar is read; it stays `nil` while the sidecar
+    /// can't be read (a locked phone), so "unreadable" is never taken for
+    /// "nothing handed off".
+    private var backgroundMarks: [String: BackgroundUploadMark]?
 
     public init(
         directory: URL,
@@ -193,45 +223,47 @@ public actor OfflineBuffer {
         lifetime.invalidate()
     }
 
-    /// Persist a batch to disk. If the buffer would exceed
-    /// `maxSizeBytes`, drops oldest batches FIFO until there's room.
-    /// Returns the number of evicted batches (0 if nothing was dropped).
-    @discardableResult
-    public func enqueue(_ batch: Batch) throws -> Int {
+    /// `enqueue` refused a batch: it would take the buffer past
+    /// `maxSizeBytes`.
+    public struct Full: Error, Equatable {}
+
+    /// Persist a batch to disk. Throws `Full`, and drops nothing, when the
+    /// batch would take the buffer past `maxSizeBytes` or its source past
+    /// `maxSourceBytes`: every queued batch is one its source's cursor has
+    /// already moved past, so dropping one to make room would lose its
+    /// samples for good. A source with nothing queued always gets its batch
+    /// in, however full the buffer: other sources' backlogs can't stop it,
+    /// and an oversized page can't stall its source forever.
+    public func enqueue(_ batch: Batch) throws {
         try lifetime.withActive {
             try ProtectedStore.offlineBuffer.requireBackupExclusion(
                 to: directory, fileManager: fileManager
             )
             ensureCacheLoaded()
             let data = try encoder.encode(batch)
-            var evicted = 0
-
-            // Ensure room before writing. Delete oldest until under limit.
-            while totalBytes + data.count > config.maxSizeBytes,
-                  let oldest = fileURLs.first {
-                let size = (try? sizeOf(oldest)) ?? 0
-                try fileManager.removeItem(at: oldest)
-                fileURLs.removeFirst()
-                totalBytes = max(0, totalBytes - size)
-                forgetFailures(id: oldest.deletingPathExtension().lastPathComponent)
-                evicted += 1
+            let own = bytesQueued(bySource: batch.sourceId)
+            guard own == 0
+                || (own + data.count <= config.maxSourceBytes && totalBytes + data.count <= config.maxSizeBytes)
+            else {
+                throw Full()
             }
 
-            let url = fileURL(for: batch.id)
+            // A batch queued again under its id keeps its place.
+            if let queued = urlsById[batch.id] {
+                let size = (try? sizeOf(queued)) ?? 0
+                try data.write(to: queued, options: ProtectedStore.offlineBuffer.writingOptions)
+                totalBytes += data.count - size
+                batchSources[batch.id] = batch.sourceId
+                return
+            }
+            let sequence = lastSequence + 1
+            let url = directory.appendingPathComponent(QueuedBatchFile.name(sequence: sequence, id: batch.id))
             try data.write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
-            // FIFO order is by filename, and `Batch.makeId` is monotonic, so
-            // a fresh batch sorts after every existing one — appending keeps
-            // the cache in sorted order without a re-sort. Defensive guard:
-            // if for some reason a non-monotonic id arrives (e.g. tests
-            // injecting a hand-crafted earlier id), insert in sort position.
-            if let last = fileURLs.last, last.lastPathComponent > url.lastPathComponent {
-                let idx = fileURLs.firstIndex(where: { $0.lastPathComponent > url.lastPathComponent }) ?? fileURLs.count
-                fileURLs.insert(url, at: idx)
-            } else {
-                fileURLs.append(url)
-            }
+            lastSequence = sequence
+            fileURLs.append(url)
+            urlsById[batch.id] = url
             totalBytes += data.count
-            return evicted
+            batchSources[batch.id] = batch.sourceId
         }
     }
 
@@ -252,7 +284,7 @@ public actor OfflineBuffer {
     public func listIds() throws -> [String] {
         try lifetime.withActive {
             ensureCacheLoaded()
-            return fileURLs.map { $0.deletingPathExtension().lastPathComponent }
+            return fileURLs.map(QueuedBatchFile.batchId(of:))
         }
     }
 
@@ -289,9 +321,7 @@ public actor OfflineBuffer {
                 pruneMissingFile(url, id: id)
                 return
             }
-            if let idx = fileURLs.firstIndex(of: url) {
-                fileURLs.remove(at: idx)
-            }
+            dropFromQueue(url, id: id)
             totalBytes = max(0, totalBytes - size)
             forgetFailures(id: id)
         }
@@ -324,14 +354,14 @@ public actor OfflineBuffer {
     /// decide whether to submit an "as soon as possible" drain when the
     /// app backgrounds with stale data still pending.
     ///
-    /// Relies on the filename timestamp prefix (`YYYYMMDDHHMMSSmmm-`) —
+    /// Relies on the batch id's timestamp prefix (`YYYYMMDDHHMMSSmmm-`) —
     /// avoids a filesystem stat per file, which would read the whole
     /// buffer directory every wake-up.
     public func oldestBatchAge() throws -> TimeInterval? {
         try lifetime.withActive {
             ensureCacheLoaded()
             guard let url = fileURLs.first else { return nil }
-            return age(ofFileNamed: url.deletingPathExtension().lastPathComponent)
+            return age(ofFileNamed: QueuedBatchFile.batchId(of: url))
         }
     }
 
@@ -342,8 +372,8 @@ public actor OfflineBuffer {
     /// Returns true when that failure was the batch's last: it has now been
     /// moved into `quarantine/` and no longer appears in the FIFO, so the
     /// caller should stop counting it as pending. Returns false while the
-    /// batch is still within its retry budget — it stays queued and the next
-    /// drain tries it again.
+    /// batch is still within its retry budget, or the quarantine is full —
+    /// it stays queued and the next drain tries it again.
     ///
     /// Call this ONLY for failures that repeating cannot fix. A network
     /// error, a 5xx, or a 403 awaiting a scope grant are all states the
@@ -368,6 +398,7 @@ public actor OfflineBuffer {
             persistFailures()
             guard run.attempts >= config.quarantineAfterAttempts else { return false }
             guard now.timeIntervalSince(run.firstAt) >= config.quarantineGrace else { return false }
+            guard quarantinedURLs().count < config.maxQuarantinedBatches else { return false }
             try quarantine(id: id)
             return true
         }
@@ -393,9 +424,7 @@ public actor OfflineBuffer {
             ensureCacheLoaded()
             return HealthSnapshot(
                 bufferedBatches: fileURLs.count,
-                oldestBufferedAge: fileURLs.first.flatMap {
-                    age(ofFileNamed: $0.deletingPathExtension().lastPathComponent)
-                },
+                oldestBufferedAge: fileURLs.first.flatMap { age(ofFileNamed: QueuedBatchFile.batchId(of: $0)) },
                 quarantinedBatches: quarantinedURLs().count
             )
         }
@@ -419,29 +448,18 @@ public actor OfflineBuffer {
 
     // MARK: - Internals
 
-    /// Move a batch out of the FIFO into `quarantine/`, evicting the oldest
-    /// quarantined batches if that would exceed the retention cap.
+    /// Move a batch out of the FIFO into `quarantine/`. Nothing already
+    /// there is evicted to make room (see `Config.maxQuarantinedBatches`).
     private func quarantine(id: String) throws {
         let source = fileURL(for: id)
         let dir = quarantineDirectory()
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // Make room, oldest first. A delete that fails stops the loop rather
-        // than being counted as room made — otherwise the cap silently
-        // stops holding.
-        var existing = quarantinedURLs()
-        while existing.count >= config.maxQuarantinedBatches, let oldest = existing.first {
-            guard (try? fileManager.removeItem(at: oldest)) != nil else { break }
-            existing.removeFirst()
-        }
-
         let size = (try? sizeOf(source)) ?? 0
         let destination = dir.appendingPathComponent(source.lastPathComponent)
         try? fileManager.removeItem(at: destination)
         try fileManager.moveItem(at: source, to: destination)
-        if let idx = fileURLs.firstIndex(of: source) {
-            fileURLs.remove(at: idx)
-        }
+        dropFromQueue(source, id: id)
         totalBytes = max(0, totalBytes - size)
         forgetFailures(id: id)
     }
@@ -460,7 +478,7 @@ public actor OfflineBuffer {
         directory.appendingPathComponent("quarantine", isDirectory: true)
     }
 
-    /// Age of a batch from its filename timestamp prefix
+    /// Age of a batch from its id's timestamp prefix
     /// ("yyyyMMdd'T'HHmmssSSS-<8-hex>" → the first 18 chars). Matches
     /// `Batch.makeId` — keep them in lockstep.
     private func age(ofFileNamed name: String) -> TimeInterval? {
@@ -478,6 +496,8 @@ public actor OfflineBuffer {
     }()
 
     private func forgetFailures(id: String) {
+        batchSources[id] = nil
+        forgetBackgroundMark(id: id)
         guard permanentFailures.removeValue(forKey: id) != nil else { return }
         persistFailures()
     }
@@ -511,13 +531,20 @@ public actor OfflineBuffer {
             return
         }
         // Drop counts for batches that are no longer queued — a delivered or
-        // evicted batch must not hand its failure history to a future id.
-        let queued = Set(fileURLs.map { $0.deletingPathExtension().lastPathComponent })
+        // quarantined batch must not hand its failure history to a future id.
+        let queued = Set(fileURLs.map(QueuedBatchFile.batchId(of:)))
         permanentFailures = decoded.filter { queued.contains($0.key) }
     }
 
+    /// The queued file of batch `id`; for one not queued, where a file
+    /// from before sequences would be.
     private func fileURL(for id: String) -> URL {
-        directory.appendingPathComponent("\(id).json")
+        urlsById[id] ?? directory.appendingPathComponent("\(id).json")
+    }
+
+    private func dropFromQueue(_ url: URL, id: String) {
+        fileURLs.removeAll { $0 == url }
+        if urlsById[id] == url { urlsById[id] = nil }
     }
 
     /// Reconcile an entry another owner removed from disk. Normal app
@@ -526,6 +553,7 @@ public actor OfflineBuffer {
     private func pruneMissingFile(_ url: URL, id: String) {
         if let idx = fileURLs.firstIndex(of: url) {
             fileURLs.remove(at: idx)
+            if urlsById[id] == url { urlsById[id] = nil }
             totalBytes = fileURLs.reduce(0) { total, fileURL in
                 total + ((try? sizeOf(fileURL)) ?? 0)
             }
@@ -541,10 +569,26 @@ public actor OfflineBuffer {
         let contents = (try? fileManager.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.fileSizeKey]
         )) ?? []
-        let urls = contents
+        // Rebuilt from `directory` rather than kept as listed: the listing
+        // resolves symlinks (an app container's `/var/…` comes back as
+        // `/private/var/…`), and every later lookup — `remove`, quarantine —
+        // finds its entry by comparing against `fileURL(for:)`. A mismatch
+        // left delivered batches counted as queued after every relaunch.
+        // Files from before sequences go first, in the order of their names.
+        let queued = contents
             .filter { $0.pathExtension == "json" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .map { (parsed: QueuedBatchFile.parse($0.lastPathComponent), name: $0.lastPathComponent) }
+            .sorted { lhs, rhs in
+                let left = lhs.parsed.sequence.map { (1, $0) } ?? (0, 0)
+                let right = rhs.parsed.sequence.map { (1, $0) } ?? (0, 0)
+                return left != right ? left < right : lhs.name < rhs.name
+            }
+        let urls = queued.map { directory.appendingPathComponent($0.name) }
         fileURLs = urls
+        urlsById = Dictionary(
+            zip(queued.map(\.parsed.id), urls), uniquingKeysWith: { _, later in later }
+        )
+        lastSequence = queued.compactMap(\.parsed.sequence).max() ?? 0
         totalBytes = urls.reduce(0) { acc, url in
             acc + ((try? sizeOf(url)) ?? 0)
         }
@@ -556,5 +600,199 @@ public actor OfflineBuffer {
     private func sizeOf(_ url: URL) throws -> Int {
         let values = try url.resourceValues(forKeys: [.fileSizeKey])
         return values.fileSize ?? 0
+    }
+}
+
+// MARK: - Background uploads
+
+extension OfflineBuffer {
+    /// Batches handed to the background upload queue, by id. Throws while
+    /// the record of them can't be read.
+    public func backgroundUploadMarks() throws -> [String: BackgroundUploadMark] {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            return try loadBackgroundMarks()
+        }
+    }
+
+    /// Write `body` as the outbox file for `tag` and mark its batch as
+    /// handed off, before the task is started. Returns the file to upload.
+    /// The file carries this store's own protection class.
+    public func prepareBackgroundUpload(_ body: Data, tag: BackgroundUploadTag, sourceId: String) throws -> URL {
+        try lifetime.withActive {
+            try ProtectedStore.offlineBuffer.requireBackupExclusion(
+                to: directory, fileManager: fileManager
+            )
+            ensureCacheLoaded()
+            var marks = try loadBackgroundMarks()
+            guard fileURLs.contains(fileURL(for: tag.batchId)) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            try fileManager.createDirectory(at: outboxDirectory(), withIntermediateDirectories: true)
+            let url = outboxDirectory().appendingPathComponent(tag.outboxFileName)
+            try body.write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
+            marks[tag.batchId] = BackgroundUploadMark(tag: tag.description, sourceId: sourceId)
+            do {
+                try persistBackgroundMarks(marks)
+            } catch {
+                try? fileManager.removeItem(at: url)
+                throw error
+            }
+            return url
+        }
+    }
+
+    /// Clear the mark of `tag`'s batch if it still names `tag`, and delete
+    /// `tag`'s outbox file either way. Returns whether the mark matched —
+    /// false for a task from before a re-pair or one a later hand-off
+    /// superseded. Throws while the record can't be read.
+    @discardableResult
+    public func finishBackgroundUpload(tag: BackgroundUploadTag) throws -> Bool {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            try? fileManager.removeItem(at: outboxDirectory().appendingPathComponent(tag.outboxFileName))
+            var marks = try loadBackgroundMarks()
+            guard marks[tag.batchId]?.tag == tag.description else { return false }
+            marks.removeValue(forKey: tag.batchId)
+            try persistBackgroundMarks(marks)
+            return true
+        }
+    }
+
+    /// Forget every hand-off whose task the system no longer holds, and
+    /// every outbox file no live task reads. A batch whose result was lost
+    /// goes back to the ordinary queue; sending it again is safe because
+    /// ingest is an idempotent upsert. Returns how many marks were cleared.
+    ///
+    /// A record that doesn't decode is started over once no live task is
+    /// for a queued batch — there is then nothing it could have told — and
+    /// throws until then.
+    @discardableResult
+    public func reconcileBackgroundUploads(liveTags: Set<String>) throws -> Int {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            let marks: [String: BackgroundUploadMark]
+            do {
+                marks = try loadBackgroundMarks()
+            } catch let error as UnrecognisedBackgroundRecord {
+                let queued = Set(fileURLs.map(QueuedBatchFile.batchId(of:)))
+                let out = liveTags.contains { BackgroundUploadTag($0).map { queued.contains($0.batchId) } ?? false }
+                if out { throw error }
+                try persistBackgroundMarks([:])
+                marks = [:]
+            }
+            let kept = marks.filter { liveTags.contains($0.value.tag) }
+            if kept.count != marks.count {
+                try persistBackgroundMarks(kept)
+            }
+            let liveFiles = Set(liveTags.compactMap { BackgroundUploadTag($0)?.outboxFileName })
+            let files = (try? fileManager.contentsOfDirectory(
+                at: outboxDirectory(), includingPropertiesForKeys: nil
+            )) ?? []
+            for file in files where !liveFiles.contains(file.lastPathComponent) {
+                try? fileManager.removeItem(at: file)
+            }
+            return marks.count - kept.count
+        }
+    }
+
+    private func outboxDirectory() -> URL {
+        directory.appendingPathComponent("outbox", isDirectory: true)
+    }
+
+    /// Sidecar holding `backgroundMarks`; not `.json`, like the attempts one.
+    private func backgroundMarksFileURL() -> URL {
+        directory.appendingPathComponent("background-uploads.state")
+    }
+
+    /// The record of hand-offs exists but doesn't decode.
+    struct UnrecognisedBackgroundRecord: Error {}
+
+    /// The marks, read once and pruned to batches still queued. A missing
+    /// sidecar is "none". One that can't be read, or reads but doesn't
+    /// decode, throws: it says nothing about which batches are out, and
+    /// taking it for "none" would send a batch again while its task lives.
+    private func loadBackgroundMarks() throws -> [String: BackgroundUploadMark] {
+        if let backgroundMarks { return backgroundMarks }
+        var marks: [String: BackgroundUploadMark] = [:]
+        do {
+            let data = try Data(contentsOf: backgroundMarksFileURL())
+            do {
+                marks = try JSONDecoder().decode([String: BackgroundUploadMark].self, from: data)
+            } catch {
+                throw UnrecognisedBackgroundRecord()
+            }
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            // Nothing handed off yet.
+        }
+        let queued = Set(fileURLs.map(QueuedBatchFile.batchId(of:)))
+        let pruned = marks.filter { queued.contains($0.key) }
+        backgroundMarks = pruned
+        return pruned
+    }
+
+    private func persistBackgroundMarks(_ marks: [String: BackgroundUploadMark]) throws {
+        let url = backgroundMarksFileURL()
+        if marks.isEmpty {
+            do {
+                try fileManager.removeItem(at: url)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                // Already none.
+            }
+        } else {
+            try ProtectedStore.offlineBuffer.requireBackupExclusion(to: directory, fileManager: fileManager)
+            try JSONEncoder().encode(marks).write(to: url, options: ProtectedStore.offlineBuffer.writingOptions)
+        }
+        backgroundMarks = marks
+    }
+
+    /// A batch that left the queue takes its mark with it. Best-effort: a
+    /// mark that can't be cleared now is pruned on the next read, which
+    /// drops marks for batches no longer queued.
+    private func forgetBackgroundMark(id: String) {
+        guard var marks = backgroundMarks, marks.removeValue(forKey: id) != nil else { return }
+        if (try? persistBackgroundMarks(marks)) == nil {
+            backgroundMarks = nil
+        }
+    }
+}
+
+// MARK: - Backlog by source
+
+extension OfflineBuffer {
+    private struct BatchSource: Decodable {
+        let sourceId: String
+    }
+
+    /// Batches of `sourceId` still queued. One that can't be read (the
+    /// phone is locked) counts as the source's own, so a backlog the
+    /// buffer can't see holds the source's reading back instead of
+    /// letting it run ahead.
+    public func pendingCount(sourceId: String) throws -> Int {
+        try lifetime.withActive {
+            ensureCacheLoaded()
+            return fileURLs.count(where: { url in
+                let id = QueuedBatchFile.batchId(of: url)
+                return (source(ofBatch: id, at: url) ?? sourceId) == sourceId
+            })
+        }
+    }
+
+    /// Bytes `sourceId`'s queued batches take, counting a batch that can't
+    /// be read as its own (as `pendingCount` does).
+    private func bytesQueued(bySource sourceId: String) -> Int {
+        fileURLs.reduce(0) { total, url in
+            let id = QueuedBatchFile.batchId(of: url)
+            guard (source(ofBatch: id, at: url) ?? sourceId) == sourceId else { return total }
+            return total + ((try? sizeOf(url)) ?? 0)
+        }
+    }
+
+    private func source(ofBatch id: String, at url: URL) -> String? {
+        if let known = batchSources[id] { return known }
+        guard let data = try? Data(contentsOf: url),
+              let read = try? decoder.decode(BatchSource.self, from: data) else { return nil }
+        batchSources[id] = read.sourceId
+        return read.sourceId
     }
 }

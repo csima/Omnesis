@@ -90,6 +90,21 @@ public final class OmnesisAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    /// iOS relaunched the app because background uploads finished. The
+    /// session reattaches and records their results; iOS may suspend the
+    /// app again once `completionHandler` is called.
+    public func application(
+        _: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        guard identifier == BackgroundUploadSession.shared.identifier else {
+            completionHandler()
+            return
+        }
+        BackgroundUploadSession.shared.handleEvents(completion: completionHandler)
+    }
+
     public func application(
         _: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
