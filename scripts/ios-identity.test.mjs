@@ -902,7 +902,7 @@ describe("iOS live gateway startup", () => {
   });
 
   it("boots a gateway that fetches no hosted icons and checks no releases", () => {
-    expect(failedStartup().gatewayNetworkFlags).toBe("1:1\n");
+    expect(runWrapper().gatewayNetworkFlags).toBe("1:1\n");
   });
 
   it("honors a destination already prepared by CI", () => {
