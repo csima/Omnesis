@@ -189,7 +189,7 @@ final class GatewayLiveE2ETests: XCTestCase {
     ///
     /// What it does not prove: certificate pinning, and behaviour on a
     /// locked phone. The scratch gateway's certificate is self-signed, so
-    /// trust goes to `AcceptAnyCertDelegate` rather than the shared
+    /// trust goes to `LiveSessionDelegate` rather than the shared
     /// session's pinning delegate, and the phone is taken as always
     /// unlocked (`protectedDataAvailable` is `true`). The locked case is
     /// covered by unit tests against a fake queue; the background
@@ -201,7 +201,7 @@ final class GatewayLiveE2ETests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let transport = BackgroundUploadSession(
             identifier: "dev.omnesis.e2e.uploads.\(UUID().uuidString)",
-            trustOverride: AcceptAnyCertDelegate()
+            trustOverride: LiveSessionDelegate()
         )
         defer { transport.finishAndInvalidate() }
         let buffer = OfflineBuffer(directory: directory)
