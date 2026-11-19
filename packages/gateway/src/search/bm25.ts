@@ -8,7 +8,7 @@
 
 import type Database from "better-sqlite3";
 type Db = Database.Database;
-import { buildMetadataFilter } from "./metadata.js";
+import { buildLexicalFilter, buildMetadataFilter } from "./metadata.js";
 import { withDocIdRestriction } from "./docid-filter.js";
 import { visibleChunkClause } from "./visible-chunks.js";
 import { createLogger } from "@omnesis/core";
@@ -241,6 +241,22 @@ export function filterCommonTokens(
  * Ranks the chunks matching a query by BM25 without touching `chunks`. The
  * in-memory lexical index implements this; FTS5 itself is the fallback.
  */
+/**
+ * The BM25 lane's metadata filter in a form a ranker can apply while it scores,
+ * so a filtered query ranks only the chunks it could return. Mirrors
+ * `buildMetadataFilter`; a ranker may also ignore it, since the SQL join still
+ * filters every row it returns.
+ */
+export interface LexicalFilter {
+  sourceIds?: readonly string[];
+  excludeSourceIds?: readonly string[];
+  documentTypes?: readonly string[];
+  /** Inclusive lower bound, compared as SQLite compares TEXT. */
+  dateFrom?: string;
+  /** Inclusive upper bound, already widened to the end of a bare date. */
+  dateTo?: string;
+}
+
 export interface LexicalRanker {
   /**
    * Best-first `{ rowid, score }` pairs (higher score = better), at most `k`.
@@ -252,7 +268,7 @@ export interface LexicalRanker {
     db: Db,
     query: string,
     k: number,
-    opts?: { prefixLastToken?: boolean },
+    opts?: { prefixLastToken?: boolean; filter?: LexicalFilter },
   ): RankedChunk[] | null;
   /**
    * The ranker's corpus statistics, read without touching FTS5, once it has
@@ -353,7 +369,15 @@ export function bm25Search(
   }
 
   if (!docIds && ranker) {
-    const rows = rankWithRanker(db, ranker, effectiveQuery, filter, limit, opts?.prefixLastToken);
+    const rows = rankWithRanker(
+      db,
+      ranker,
+      effectiveQuery,
+      filter,
+      limit,
+      opts?.prefixLastToken,
+      buildLexicalFilter(filters),
+    );
     if (rows) return { candidates: rows.map(toCandidate), droppedTokens, ranker: "memory" };
   }
 
@@ -391,12 +415,16 @@ function rankWithRanker(
   filter: MetadataFilter,
   limit: number,
   prefixLastToken: boolean | undefined,
+  lexicalFilter: LexicalFilter | null,
 ): ScoredRow[] | null {
   for (let k = Math.max(RANK_FIRST_MIN_K, limit * 4); ; k *= RANK_FIRST_GROWTH) {
     const window = Math.min(k, RANK_FIRST_MAX_K);
     let ranked: RankedChunk[] | null;
     try {
-      ranked = ranker.rank(db, query, window, { prefixLastToken });
+      ranked = ranker.rank(db, query, window, {
+        prefixLastToken,
+        ...(lexicalFilter ? { filter: lexicalFilter } : {}),
+      });
     } catch (err) {
       log.warn(
         `in-memory BM25 ranking failed; FTS5 ranks instead: ${err instanceof Error ? err.message : String(err)}`,

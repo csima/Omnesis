@@ -2,14 +2,14 @@
 // Copyright (c) 2026 Caleb Sima
 
 import type { SourceIcon } from "@omnesis/source-sdk";
-/** Provider-owned generic chat glyph; deliberately not Slack's trademarked mark. */
+/** The Slack mark, used nominatively to identify the source; see TRADEMARKS.md. */
 export const slackIcon: SourceIcon = {
   sfSymbol: "bubble.left.and.bubble.right.fill",
   color: "#4A154B",
-  bgColor: "#F5EDF5",
+  bgColor: "#FFFFFF",
   imageDataUri:
     "data:image/svg+xml;base64," +
     Buffer.from(
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#4A154B" d="M3 3h18v14H9l-6 4z"/><path fill="#fff" d="M6 7h12v2H6zm0 4h8v2H6z"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 122.8 122.8"><path fill="#E01E5A" d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"/><path fill="#36C5F0" d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z"/><path fill="#2EB67D" d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z"/><path fill="#ECB22E" d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z"/></svg>',
     ).toString("base64"),
 };

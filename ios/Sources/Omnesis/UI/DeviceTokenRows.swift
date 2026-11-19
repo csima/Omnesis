@@ -23,14 +23,14 @@ struct TokenRow: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.textMuted)
                 Text(token.name?.isEmpty == false ? token.name! : "unlabeled")
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(token.name?.isEmpty == false ? Theme.textPrimary : Theme.textMuted)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if let onRevoke {
                     Button(role: .destructive, action: onRevoke) {
                         Text("Revoke")
-                            .font(.system(size: 11, weight: .semibold))
+                            .scaledFont(size: 11, weight: .semibold)
                             .foregroundStyle(Theme.danger)
                     }
                     .buttonStyle(.plain)
@@ -41,10 +41,10 @@ struct TokenRow: View {
             }
             HStack(spacing: Theme.Spacing.md) {
                 Text("created \(formatUnixMillisAgo(token.createdAt))")
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
                 Text("used \(token.lastUsedAt.map(formatUnixMillisAgo) ?? "never")")
-                    .font(.system(size: 10))
+                    .scaledFont(size: 10)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -66,7 +66,7 @@ struct ScopeChipRow: View {
         FlowLayout(spacing: 5) {
             ForEach(scopes, id: \.self) { scope in
                 Text(scope)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .scaledFont(size: 10, weight: .medium, design: .monospaced)
                     .foregroundStyle(ScopeChipRow.isAdmin(scope) ? Theme.accentHover : Theme.textSecondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)

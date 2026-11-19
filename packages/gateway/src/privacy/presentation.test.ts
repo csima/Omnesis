@@ -892,6 +892,17 @@ describe("privacy exchange presentation", () => {
       expect(byTask.get(second.taskId)?.displayName).toBe("Mosaic assistant");
     });
 
+    it("names the connection for a task an agent host's agent owns", () => {
+      seedPrincipal();
+      const task = begin(
+        "Which agent of the host is asking?",
+        undefined,
+        `${principalOwner()}:host:aG9zdC1jYWxsZXItZGlnZXN0`,
+      );
+
+      expect(exchanges(task.conversationId)[0]!.externalAgent.displayName).toBe("Mosaic assistant");
+    });
+
     it("retains the historical identity after access is revoked", () => {
       seedPrincipal();
       db.exec(`

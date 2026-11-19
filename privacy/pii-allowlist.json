@@ -2767,6 +2767,7 @@
     {
       "value": "Jamie Lopez",
       "paths": [
+        "packages/gateway/src/domain/merge/merge-judge.test.ts",
         "evals/universes/sacha-bellamy/cast.json",
         "evals/universes/sacha-bellamy/sources/apple-imessage/messages.json",
         "evals/universes/sacha-bellamy/sources/granola-meetings/meetings.json",
@@ -2884,16 +2885,23 @@
     {
       "value": "Maya Reeves",
       "paths": [
+        "packages/gateway/src/domain/merge/merge-judge.test.ts",
         "evals/universes/sacha-bellamy/sources/gmail/messages.json",
         "evals/universes/sacha-bellamy/sources/google-drive/files.json",
         "packages/providers/discord/src/normalizer.test.ts",
         "packages/providers/discord/src/source.test.ts",
         "evals/universes/immich-sync/cast.json",
         "evals/universes/immich-sync/sources/immich/fake-corpus.json",
+        "evals/universes/sacha-bellamy/sources/gmail/messages.json",
+        "evals/universes/sacha-bellamy/sources/google-drive/files.json",
         "packages/collector/src/e2e/immich-sync.e2e.test.ts",
+        "packages/providers/discord/src/normalizer.test.ts",
+        "packages/providers/discord/src/source.test.ts",
+        "packages/providers/granola/src/broker.test.ts",
         "packages/providers/immich/src/document-event-profile.test.ts",
         "packages/providers/immich/src/provider.test.ts",
-        "packages/providers/immich/src/source.test.ts"
+        "packages/providers/immich/src/source.test.ts",
+        "packages/providers/strava/src/broker.test.ts"
       ],
       "reason": "Reviewed deterministic output of the original fictional universe authoring modules; fictional cast/venue/product or public title-case prose, never personal corpus data."
     },
@@ -3780,7 +3788,10 @@
     },
     {
       "value": "Studio Northstar",
-      "paths": ["evals/universes/sacha-bellamy/_build/media_test.py"],
+      "paths": [
+        "evals/universes/sacha-bellamy/_build/media_test.py",
+        "packages/providers/notion/src/broker.test.ts"
+      ],
       "reason": "Reviewed original fictional demo cast, invented venue/product, or public title-case prose in the named authoring module/test; no personal-corpus provenance."
     },
     {
@@ -5493,6 +5504,7 @@
     {
       "value": "Alex Chen",
       "paths": [
+        "packages/gateway/src/domain/merge/merge-judge.test.ts",
         "evals/universes/default/agent-demos/_build/build-trip-spending.mjs",
         "evals/universes/default/agent-demos/trip-spending.jsonl",
         "evals/universes/default/agent-demos/trip-spending.meta.json",
@@ -5544,6 +5556,7 @@
     {
       "value": "Alex Rivera",
       "paths": [
+        "packages/gateway/src/domain/merge/merge-judge.test.ts",
         "evals/universes/loops-test-life/cast.json",
         "packages/collector/src/e2e/brain-bench/docs.ts",
         "packages/gateway/src/people.test.ts"
@@ -5983,7 +5996,8 @@
       "value": "Bad Request",
       "paths": [
         "packages/providers/google/src/api-error.test.ts",
-        "packages/providers/google/src/contacts.test.ts"
+        "packages/providers/google/src/contacts.test.ts",
+        "packages/providers/google/src/drive.test.ts"
       ],
       "reason": "reviewed existing fixture"
     },
@@ -7468,6 +7482,7 @@
       "value": "Google Contacts",
       "paths": [
         "packages/gateway/src/people.test.ts",
+        "packages/providers/google/src/broker.test.ts",
         "packages/providers/google/src/contacts.test.ts",
         "packages/providers/google/src/setup.test.ts"
       ],
@@ -7501,6 +7516,7 @@
         "ios/Sources/Omnesis/UI/PreviewMocks.swift",
         "packages/collector/src/e2e/onedrive.e2e.test.ts",
         "packages/gateway/src/merge-candidates.test.ts",
+        "packages/providers/google/src/broker.test.ts",
         "packages/providers/google/src/setup.test.ts"
       ],
       "reason": "reviewed existing fixture"
@@ -7589,6 +7605,7 @@
         "packages/collector/src/e2e/agent-integration-connect.e2e.test.ts",
         "packages/collector/src/e2e/agent-integration-graduated.e2e.test.ts",
         "packages/collector/src/e2e/mcp-answer.e2e.test.ts",
+        "packages/collector/src/e2e/mcp-host-identity.e2e.test.ts",
         "packages/collector/src/e2e/restart-durability.e2e.test.ts"
       ],
       "reason": "reviewed: invented organisation in the synthetic privacy fixtures"
@@ -7949,7 +7966,8 @@
       "paths": [
         "packages/collector/src/error-classifier.test.ts",
         "packages/collector/src/sync-engine.test.ts",
-        "packages/providers/google/src/api-error.test.ts"
+        "packages/providers/google/src/api-error.test.ts",
+        "packages/providers/google/src/broker.test.ts"
       ],
       "reason": "reviewed existing fixture"
     },
@@ -8470,6 +8488,7 @@
       "paths": [
         "evals/universes/e2e-minimal/_build/build.mjs",
         "packages/collector/src/e2e/finance.e2e.test.ts",
+        "packages/providers/lunchflow/src/broker.test.ts",
         "packages/providers/lunchflow/src/normalizer.test.ts"
       ],
       "reason": "reviewed existing fixture"
@@ -12521,6 +12540,146 @@
       "reason": "Invented Immich fixture name (person, album, place or camera), not corpus data."
     },
     {
+      "value": "Invalid Value",
+      "paths": ["packages/providers/google/src/drive.test.ts"],
+      "reason": "The message Google APIs return for a rejected request parameter, not a name."
+    },
+    {
+      "value": "Rate Limit Exceeded",
+      "paths": [
+        "packages/providers/google/src/broker.test.ts",
+        "packages/providers/google/src/drive.test.ts"
+      ],
+      "reason": "Google API error message text."
+    },
+    {
+      "value": "User Rate Limit",
+      "paths": ["packages/providers/google/src/drive.test.ts"],
+      "reason": "Google API error message text (\"User Rate Limit Exceeded\")."
+    },
+    {
+      "value": "What Google",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Start of a doc comment sentence, not a name."
+    },
+    {
+      "value": "Insufficient Permission",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Google API error message text."
+    },
+    {
+      "value": "Neither Microsoft",
+      "paths": ["packages/providers/outlook/src/broker.test.ts"],
+      "reason": "Start of a test comment sentence, not a name."
+    },
+    {
+      "value": "Neither Strava",
+      "paths": ["packages/providers/strava/src/broker.test.ts"],
+      "reason": "Start of a test comment sentence, not a name."
+    },
+    {
+      "value": "Backend Error",
+      "paths": ["packages/providers/google/src/broker.test.ts"],
+      "reason": "Google API error message text."
+    },
+    {
+      "value": "Cloudflare Access",
+      "paths": [
+        "packages/collector/src/auth-subprocess-env.test.ts",
+        "packages/collector/src/e2e/cloudflare-access.e2e.test.ts",
+        "packages/core/src/gateway-access-binding.test.ts",
+        "packages/core/src/gateway-access.test.ts",
+        "packages/gateway-client/src/gateway-access.test.ts",
+        "scripts/release/install-sh-collector.test.mjs"
+      ],
+      "reason": "Product name of Cloudflare's access-control service, not a person; the suites test the client's support for it."
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": [
+        "evals/universes/sacha-bellamy/sources/gmail/messages.json",
+        "evals/universes/sacha-bellamy/sources/google-drive/files.json",
+        "packages/providers/discord/src/normalizer.test.ts",
+        "packages/providers/discord/src/source.test.ts",
+        "evals/universes/immich-sync/cast.json",
+        "evals/universes/immich-sync/sources/immich/fake-corpus.json",
+        "packages/collector/src/e2e/immich-sync.e2e.test.ts",
+        "packages/providers/immich/src/document-event-profile.test.ts",
+        "packages/providers/immich/src/provider.test.ts",
+        "packages/providers/immich/src/source.test.ts"
+      ],
+      "reason": "Reviewed deterministic output of the original fictional universe authoring modules; fictional cast/venue/product or public title-case prose, never personal corpus data."
+    },
+    {
+      "value": "Studio Northstar",
+      "paths": ["evals/universes/sacha-bellamy/_build/media_test.py"],
+      "reason": "Reviewed original fictional demo cast, invented venue/product, or public title-case prose in the named authoring module/test; no personal-corpus provenance."
+    },
+    {
+      "value": "Bad Request",
+      "paths": [
+        "packages/providers/google/src/api-error.test.ts",
+        "packages/providers/google/src/contacts.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Google Contacts",
+      "paths": [
+        "packages/gateway/src/people.test.ts",
+        "packages/providers/google/src/contacts.test.ts",
+        "packages/providers/google/src/setup.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Google Drive",
+      "paths": [
+        "evals/universes/default/agent-demos/_build/build-mixed-decks.mjs",
+        "evals/universes/default/agent-demos/_build/build-sleep-recovery.mjs",
+        "evals/universes/default/agent-demos/_build/build-url-lookup.mjs",
+        "evals/universes/default/agent-demos/sleep-recovery.jsonl",
+        "evals/universes/default/agent-demos/url-lookup.jsonl",
+        "ios/Sources/Omnesis/UI/PreviewMocks.swift",
+        "packages/collector/src/e2e/onedrive.e2e.test.ts",
+        "packages/gateway/src/merge-candidates.test.ts",
+        "packages/providers/google/src/setup.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Halden Press",
+      "paths": [
+        "packages/collector/src/e2e/fixtures/citation-link-review/delivery-review.jsonl",
+        "evals/universes/default/agent-demos/privacy-delivery-window-review.jsonl",
+        "evals/universes/default/agent-demos/privacy-delivery-window.jsonl",
+        "evals/universes/default/agent-demos/privacy-requests.json",
+        "packages/collector/src/e2e/agent-integration-connect.e2e.test.ts",
+        "packages/collector/src/e2e/agent-integration-graduated.e2e.test.ts",
+        "packages/collector/src/e2e/mcp-answer.e2e.test.ts",
+        "packages/collector/src/e2e/restart-durability.e2e.test.ts"
+      ],
+      "reason": "reviewed: invented organisation in the synthetic privacy fixtures"
+    },
+    {
+      "value": "Invalid Credentials",
+      "paths": [
+        "packages/collector/src/error-classifier.test.ts",
+        "packages/collector/src/sync-engine.test.ts",
+        "packages/providers/google/src/api-error.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
+      "value": "Lunch Flow",
+      "paths": [
+        "evals/universes/e2e-minimal/_build/build.mjs",
+        "packages/collector/src/e2e/finance.e2e.test.ts",
+        "packages/providers/lunchflow/src/normalizer.test.ts"
+      ],
+      "reason": "reviewed existing fixture"
+    },
+    {
       "value": "Example Workshop",
       "paths": [
         "evals/universes/default/sources/slack/messages.json",
@@ -12569,6 +12728,26 @@
       "kind": "private-key",
       "reason": "Documentation string names a PEM header shape without containing a real key.",
       "paths": []
+    },
+    {
+      "path": "packages/providers/google/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/notion/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/outlook/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
+    },
+    {
+      "path": "packages/providers/strava/src/broker.test.ts",
+      "kind": "bearer-token",
+      "reason": "Invented brokered access token checked in an Authorization header in a credential-broker test."
     },
     {
       "path": "packages/providers/slack/src/provider.test.ts",

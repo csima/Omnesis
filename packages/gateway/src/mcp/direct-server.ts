@@ -19,6 +19,7 @@ export const DIRECT_TOOL_NAMES = [
   "list_loops",
   "fetch_loop",
   "list_tables",
+  "list_sources",
 ] as const;
 
 export const RESTRICTED_DIRECT_TOOL_NAMES = [
@@ -27,6 +28,7 @@ export const RESTRICTED_DIRECT_TOOL_NAMES = [
   "lookup_document_by_url",
   "run_sql",
   "list_tables",
+  "list_sources",
 ] as const;
 
 export const STABLE_DIRECT_TOOL_NAMES = [
@@ -38,6 +40,7 @@ export const STABLE_DIRECT_TOOL_NAMES = [
   "run_sql",
   "temporal_query",
   "list_tables",
+  "list_sources",
 ] as const;
 
 export const DIRECT_MCP_SUPPORTED_VERSIONS = ["2026-07-28", "2025-11-25"] as const;
@@ -157,6 +160,9 @@ function safeDirectFailure(error: unknown): string {
     }
     if (error.name === "DirectMcpBusyError") {
       return "Omnesis Direct is busy. Retry after 1 second.";
+    }
+    if (error.name === "HostIdentityRequiredError") {
+      return "This connection is bound to an agent host; the call carried no identity from it.";
     }
     if (error.name === "GatewayTimeoutError") {
       return "The Omnesis Direct request timed out. Narrow the request and retry.";

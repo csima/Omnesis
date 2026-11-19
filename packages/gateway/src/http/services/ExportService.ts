@@ -21,6 +21,9 @@
  *         for full content.
  *       - `<table>.csv` per analytics table (DuckDB), copied online through
  *         the injected `analyticsExport` port.
+ *   - `previews.jsonl` + `previews/<documentId>.<webp|jpg>` — each exported
+ *     document's preview image, when it has one, and an index naming the
+ *     document, type, size and capture time of each file.
  *   - `manifest.json` — product version, timestamps, format, the optional
  *     source filter, total document count, a per-source breakdown, and
  *     encryption metadata when a root key wrapped the artifacts.
@@ -137,6 +140,9 @@ export interface ExportServiceOptions {
   configDir: string;
   gatewayDbPath: string;
   gatewayDbKeyHex?: string;
+  /** The document preview store; omitted when the gateway runs without one. */
+  previewDbPath?: string;
+  previewDbKeyHex?: string;
   /**
    * Online export of every analytics table to `<destDir>/<table>.csv`.
    * Production wires `analyticsDb.exportTablesToCsv`; tests stub it.
@@ -277,9 +283,11 @@ export class ExportService {
         format: cur.format,
         ...(cur.sourceId ? { sourceId: cur.sourceId } : {}),
         batchSize: DOCUMENTS_BATCH_SIZE,
+        ...(this.opts.previewDbPath ? { previewDbPath: this.opts.previewDbPath } : {}),
+        ...(this.opts.previewDbKeyHex ? { previewDbKeyHex: this.opts.previewDbKeyHex } : {}),
       };
-      const { perSource } = await this.runWorker(input, cur);
-      const files = [documentsFile];
+      const { perSource, previewFiles } = await this.runWorker(input, cur);
+      const files = [documentsFile, ...previewFiles];
 
       // CSV exports also include each analytics table as its own CSV; the
       // copies go through the live DuckDB pool (a second instance can't open
@@ -362,7 +370,7 @@ export class ExportService {
   private runWorker(
     input: ExportWorkerInput,
     cur: CurrentExport,
-  ): Promise<{ perSource: Record<string, number> }> {
+  ): Promise<{ perSource: Record<string, number>; previewFiles: string[] }> {
     const entry = resolveWorkerEntry(
       "../../workers/export-worker.ts",
       import.meta.url,
@@ -383,7 +391,9 @@ export class ExportService {
             break;
           case "done":
             cur.documentCount = msg.documents;
-            settle(() => resolve({ perSource: msg.perSource }));
+            settle(() =>
+              resolve({ perSource: msg.perSource, previewFiles: msg.previewFiles ?? [] }),
+            );
             break;
           case "error":
             settle(() => reject(new Error(msg.error)));

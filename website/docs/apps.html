@@ -444,7 +444,9 @@ Expires in 599s. Scopes: admin, read, push:claim, write:apple-health, write:acti
           connections to related documents. Tap a linked title to open that document. These facts
           are available when the gateway supports graph context and has it enabled; search still
           works with older gateways or when graph context is disabled. Matching text does not
-          establish that files have identical bytes, and a bounded trail can be incomplete.
+          establish that files have identical bytes, and a bounded trail can be incomplete. On
+          iPhone, a page with a saved screenshot shows it as a preview: a thumbnail in search
+          results and recent lists, and at the top of the document, where a tap shows it full size.
         </p>
         <p>
           Both apps open on <a href="agent">the agent</a> chat. The menu reaches Search, Tasks,
@@ -452,6 +454,16 @@ Expires in 599s. Scopes: admin, read, push:claim, write:apple-health, write:acti
           and a new conversation at its foot. Swipe right (on the iPhone Tasks screen, from the left
           edge), or use the menu button, and the screen you are on slides aside to uncover it; tap
           the strip still showing to come back. There is no tab bar.
+        </p>
+        <p>
+          On a wide screen (an iPad, or a foldable iPhone opened out) the app shows the menu as a
+          sidebar beside the screen you are on; the sidebar button, or Control-Command-S on a
+          keyboard, hides or shows it. On those screens the app also turns to landscape, the agent
+          shows its Timeline beside the conversation when there is room, and Tell Omnesis keeps the
+          microphone and its buttons away from the middle of the screen, where a foldable bends. At
+          the largest text sizes the sidebar is wider, and where it would leave the screen too
+          narrow the menu stays a drawer. Folded, or on a phone, the menu slides out as above and
+          the app stays upright.
         </p>
         <p>
           In a completed agent answer, tap the copy icon beside a value or after the last line of a
@@ -717,6 +729,12 @@ Expires in 599s. Scopes: admin, read, push:claim, write:apple-health, write:acti
           reports that consent as unknown rather than treating an empty result as proof that access
           is healthy. Background App Refresh is reported separately for every iOS source that
           depends on it.
+        </p>
+        <p>
+          Reading a phone's whole Apple Health history can take many syncs, because iOS gives the
+          app only a few seconds each time it wakes it in the background. Each sync first brings
+          every data type's last seven days up to date and then spends the time left on older
+          history, so recent data appears within a sync or two while the history fills in behind it.
         </p>
         <p>On Android:</p>
         <div class="table-wrap">

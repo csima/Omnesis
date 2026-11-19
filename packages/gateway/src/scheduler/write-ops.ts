@@ -146,6 +146,7 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   { name: "db.promoteSourceWireContract", priority: "realtime" },
   { name: "db.preparePendingSourcePage", priority: "realtime" },
   { name: "db.acknowledgePendingSourcePage", priority: "realtime" },
+  { name: "db.abandonPendingSourcePage", priority: "realtime" },
   { name: "db.revokeSyncAttempt", priority: "realtime" },
   // A per-device resync: the operator waits on it, like the wipes above.
   { name: "db.resetMemberCursor", priority: "user" },
@@ -173,6 +174,8 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   // finish is one fingerprint row. Neither parses metadata or runs regexes.
   { name: "db.applySourceUrlRecanonicalizationPage", priority: "background" },
   { name: "db.finishSourceUrlRecanonicalization", priority: "background" },
+  // Reader-planned web redaction: at most 50 indexed OCC updates per page.
+  { name: "db.applyWebRedactionPage", priority: "background" },
 
   // ── people.ts ──────────────────────────────────────────────────────
   { name: "people.findOrCreatePerson", priority: "realtime" },
@@ -261,10 +264,10 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   { name: "people.denyMergeCandidate", priority: "user" },
   // Cluster merge from the grouped candidate card — creates N-1 user rules.
   { name: "people.mergeCluster", priority: "user" },
-  // Periodic sweep of collapsed candidates — runs alongside the
-  // merge-rules eval task. Background priority since drift cleanup
-  // shouldn't compete with user actions.
-  { name: "people.sweepCollapsedMergeCandidates", priority: "background", latencyBudgetMs: 1_000 },
+  // Write half of the collapsed-candidate sweep that runs alongside the
+  // merge-rules eval task; the candidates are found on an io reader.
+  // Background priority since drift cleanup shouldn't compete with user actions.
+  { name: "people.acceptCollapsedMergeCandidates", priority: "background" },
   // Prune pending candidates the role-mailbox suppression rule now rejects —
   // runs alongside fuzzy detection to converge pre-existing junk rows.
   { name: "people.pruneSuppressedMergeCandidates", priority: "background", latencyBudgetMs: 1_000 },
@@ -317,6 +320,8 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
 
   // ── catalog ────────────────────────────────────────────────────────
   { name: "catalog.upsertSqliteTableStats", priority: "background" },
+  // Planner statistics: one bounded ANALYZE per table, yielding between them.
+  { name: "db.refreshPlannerStatistics", priority: "background" },
 
   // ── access / MCP OAuth ─────────────────────────────────────────────
   { name: "access.oauthClientRegister", priority: "user" },
@@ -336,6 +341,12 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   { name: "access.connectionLevelSet", priority: "user" },
   { name: "access.deviceLevelSet", priority: "user" },
   { name: "access.principalRename", priority: "user" },
+  { name: "access.hostIdentityBind", priority: "user" },
+  { name: "access.hostIdentityUnbind", priority: "user" },
+  { name: "access.hostAgentGrantCreate", priority: "user" },
+  { name: "access.hostAgentGrantRevoke", priority: "user" },
+  { name: "access.hostAgentDefaultSet", priority: "user" },
+  { name: "access.hostAgentGrantSet", priority: "user" },
   { name: "access.revoke", priority: "user" },
   { name: "access.mcpInvocationAudit", priority: "user" },
   { name: "access.credentialUsageTouchBatch", priority: "background" },
@@ -544,6 +555,9 @@ const WRITE_OP_DEFS: readonly WriteOpDef[] = [
   // annotation sibling.
   { name: "temporalAnnotations.invalidateForDoc", priority: "background" },
   { name: "temporalAnnotations.refilePresented", priority: "background" },
+  // Carries annotation links across projection ids an analytics table rekey
+  // changed; replayed from the analytics move ledger, so never on a page path.
+  { name: "temporalAnnotations.relinkProjections", priority: "background" },
   // Observations and the morning brief: background steward writes.
   { name: "cognition.observationCreate", priority: "background" },
   { name: "cognition.observationTransition", priority: "background" },

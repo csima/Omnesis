@@ -49,7 +49,7 @@ struct DirectToolCardView: View {
             }
             if let note = content.note {
                 Text(note)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -71,7 +71,7 @@ struct DirectToolCardView: View {
                 .foregroundStyle(Theme.accent)
                 .accessibilityHidden(true)
             Text(content.label)
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             if let icon = content.argIcon {
                 DirectHeaderArgIconView(icon: icon)
@@ -82,7 +82,7 @@ struct DirectToolCardView: View {
             Spacer(minLength: 0)
             if let timeText, !timeText.isEmpty {
                 Text(timeText)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .lineLimit(1)
             }
@@ -108,14 +108,14 @@ struct DirectToolCardView: View {
             // text — grey like the rest, never link-blue — per the portal's
             // `.agent-ephemeral-arg a` rule.
             Link(content.arg, destination: url)
-                .font(Theme.monospace(size: 11))
+                .scaledFont(size: 11, design: .monospaced)
                 .tint(Theme.textMuted)
                 .underline(false)
                 .lineLimit(1)
                 .truncationMode(.tail)
         } else {
             Text(content.arg)
-                .font(Theme.monospace(size: 11))
+                .scaledFont(size: 11, design: .monospaced)
                 .foregroundStyle(Theme.textMuted)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -149,7 +149,7 @@ struct DirectCardSectionView: View {
         VStack(alignment: .leading, spacing: 1) {
             if let heading = section.heading, !heading.isEmpty {
                 Text(heading)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -165,7 +165,7 @@ struct DirectCardSectionView: View {
             }
             if section.showsEmpty {
                 Text("No result")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -188,7 +188,7 @@ struct DirectRawJsonSheet: View {
         NavigationStack {
             ScrollView {
                 Text(text)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.textPrimary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,13 +250,13 @@ struct DirectCardRowView: View {
             rowIcon(sourceId: sourceId)
             VStack(alignment: .leading, spacing: 0) {
                 Text(row.title.isEmpty ? "Untitled" : row.title)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let subtitle = row.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -344,7 +344,7 @@ struct DirectSqlBlockView: View {
             let extra = block.totalRows - block.rows.count
             if extra > 0 {
                 Text("+\(extra) more rows")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
             }
         }
@@ -361,7 +361,7 @@ private struct DirectSqlGridRow: View {
         HStack(spacing: 8) {
             ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
                 Text(cell)
-                    .font(Theme.monospace(size: 11))
+                    .scaledFont(size: 11, design: .monospaced)
                     .foregroundStyle(header ? Theme.textSecondary : Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)

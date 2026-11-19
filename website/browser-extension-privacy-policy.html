@@ -61,7 +61,7 @@
       <main id="main" class="docs-content">
         <p class="docs-kicker">Legal</p>
         <h1>Omnesis Browser Extension Privacy Policy</h1>
-        <p class="docs-lead"><strong>Last updated:</strong> 2026-10-28</p>
+        <p class="docs-lead"><strong>Last updated:</strong> 2026-11-14</p>
 
         <h2>Summary</h2>
         <p>
@@ -77,10 +77,27 @@
         <ul>
           <li>
             <strong>Readable page content</strong> — the page title and readable text converted to
-            Markdown. Raw HTML, scripts, images, and page pixels are not sent. Form controls and
-            editable regions are removed before extraction. Readable page text, titles, and URLs can
-            still contain sensitive information, so review the disclosure and exclusions before
-            enabling capture.
+            Markdown. Raw HTML and scripts are not sent, and page pixels only as described under
+            page screenshots below. Form controls and editable regions are removed before
+            extraction. Readable page text, titles, and URLs can still contain sensitive
+            information, so review the disclosure and exclusions before enabling capture.
+          </li>
+          <li>
+            <strong>Page screenshots</strong> — off by default. When you turn them on, a setting
+            stored on your gateway and shared by every browser paired to it, each captured page also
+            uploads a screenshot of the visible part of the page: the viewport only, not the whole
+            page, taken after the same five seconds of focus, only while that tab is the active tab
+            of a focused window and still at the address the capture came from, and only when the
+            page has no password, one-time-code or card field and nothing is being typed. It is
+            downscaled to at most 1280 pixels on its longest side, encoded as WebP (or JPEG), and
+            skipped when it is over 512 KB. Screenshots are not redacted the way text is: anything
+            visible on screen, including content that page text extraction removes, is in the image.
+            Pages the extension never captures are never screenshotted. The gateway keeps one
+            screenshot per page and deletes it with the page, including when you delete the page for
+            good or exclude its domain with deletion. Turning screenshots off stops new ones; saved
+            ones stay with their pages. Chrome lets an extension take screenshots only with access
+            to all sites, so turning them on asks Chrome for that permission in each browser; it is
+            used only for these screenshots and removed when you unpair.
           </li>
           <li>
             <strong>Visit metadata</strong> — the normalized page URL, domain, title, visit time,
@@ -144,13 +161,15 @@
         </ul>
         <p>
           The extension does not run in incognito windows. Chrome-internal pages, pages on the
-          domains you exclude, pages you deleted for good, sign-in, registration, checkout and
-          payment pages, and pages carrying a password field are not captured. These capture
-          settings are stored on your paired gateway and apply to every browser paired with it.
-          Domains a dedicated Omnesis source already covers are also skipped, so a page is not
-          collected twice. These restrictions apply to automatic page capture. Tell Omnesis sends
-          only the note and quotation you explicitly submit, with their page context, even when
-          automatic capture is paused or the page is excluded.
+          domains you exclude, pages you deleted for good, mail, messaging and password-manager
+          sites, sign-in, registration, multi-factor, checkout and payment pages, pages that manage
+          API keys or tokens, links that carry their own token, and pages carrying a password,
+          one-time-code or payment-card field are not captured. These capture settings are stored on
+          your paired gateway and apply to every browser paired with it. Domains a dedicated Omnesis
+          source already covers are also skipped, so a page is not collected twice. These
+          restrictions apply to automatic page capture. Tell Omnesis sends only the note and
+          quotation you explicitly submit, with their page context, even when automatic capture is
+          paused or the page is excluded.
         </p>
         <p>
           Because a signed-in page can contain identifying details, communications, financial or
@@ -180,6 +199,11 @@
           <li>
             <strong>Optional HTTPS page access</strong> lets the extension read rendered pages. It
             is requested during pairing, not at installation, and removed when unpairing.
+          </li>
+          <li>
+            <strong>Optional access to all sites</strong> is requested only when you turn on page
+            screenshots in a browser, because Chrome lets an extension take a screenshot of a tab
+            only with it. It is used for nothing else, and removed when unpairing.
           </li>
           <li>
             <strong>Storage</strong> retains pairing, a copy of the gateway's capture settings,
@@ -234,10 +258,13 @@
           evicts old entries when those limits are reached. Credential-bearing query parameters
           (tokens, signatures, one-time codes, passwords, session ids) are removed from a page's
           address before it is recorded, so a password-reset link or a signed download link is
-          stored without its secret. Pairing, notes and Find credentials remain until you unpair or
-          clear the extension's data. Notes drafts and submitted notes waiting for delivery are
-          stored locally; delivered notes are removed from the local delivery queue. A full notes
-          queue refuses new submissions instead of evicting previously submitted notes.
+          stored without its secret. Credentials shown on a page, such as API keys, access tokens
+          and private keys, are replaced with <code>[redacted]</code> in the captured title and text
+          before the page leaves the browser, and again by the gateway when it arrives. Pairing,
+          notes and Find credentials remain until you unpair or clear the extension's data. Notes
+          drafts and submitted notes waiting for delivery are stored locally; delivered notes are
+          removed from the local delivery queue. A full notes queue refuses new submissions instead
+          of evicting previously submitted notes.
         </p>
         <p>
           Find keeps the current results and bounded agent explanation locally when the Find page

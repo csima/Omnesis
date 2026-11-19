@@ -116,9 +116,12 @@ export class PersistentQueue {
     let totalBytes = 2 + sizes.reduce((sum, size) => sum + size, 0);
     let remainingItems = this.items.length;
     const discard = new Set<number>();
-    // Preserve corpus documents as long as possible; visit analytics are the
-    // first eviction tier when a prolonged outage reaches the local budget.
-    for (const kind of ["visit", "document"] as const) {
+    // Preserve corpus documents as long as possible. Screenshots are the
+    // first eviction tier when a prolonged outage reaches the local budget —
+    // each is far larger than a page and only illustrates one, so dropping
+    // one loses nothing the overflow notice need mention — then visit
+    // analytics.
+    for (const kind of ["preview", "visit", "document"] as const) {
       for (let index = 0; index < this.items.length; index += 1) {
         if (
           (remainingItems <= this.limits.maxItems && totalBytes <= this.limits.maxBytes) ||
@@ -130,7 +133,7 @@ export class PersistentQueue {
         remainingItems -= 1;
         totalBytes -= sizes[index];
         if (kind === "document") discardedDocuments += 1;
-        else discardedVisits += 1;
+        else if (kind === "visit") discardedVisits += 1;
       }
     }
     if (discard.size > 0) this.items = this.items.filter((_, index) => !discard.has(index));
@@ -199,10 +202,15 @@ export class PersistentQueue {
   async enqueueReplacing(
     item: QueueItem,
     supersedes: (queued: QueueItem) => boolean,
+    follows?: (queued: QueueItem) => boolean,
   ): Promise<void> {
     await this.ensureLoaded();
     if (this.items.some((queued) => queued.id === item.id)) return;
-    this.items = [...this.items.filter((queued) => !supersedes(queued)), item];
+    // Items that must be delivered after this one (a page's screenshot after
+    // the page) move behind it, keeping their own order.
+    const kept = this.items.filter((queued) => !supersedes(queued));
+    const trailing = follows ? kept.filter(follows) : [];
+    this.items = [...kept.filter((queued) => !trailing.includes(queued)), item, ...trailing];
     await this.persist();
   }
 
@@ -240,7 +248,21 @@ function isQueueItem(value: unknown): value is QueueItem {
   }
   return (
     (item.kind === "document" && typeof item.doc === "object" && item.doc !== null) ||
-    (item.kind === "visit" && typeof item.visit === "object" && item.visit !== null)
+    (item.kind === "visit" && typeof item.visit === "object" && item.visit !== null) ||
+    (item.kind === "preview" && isPreviewUpload(item.preview))
+  );
+}
+
+function isPreviewUpload(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const preview = value as Record<string, unknown>;
+  return (
+    ["providerId", "sourceId", "externalId", "contentHash", "capturedAt", "image"].every(
+      (key) => typeof preview[key] === "string",
+    ) &&
+    (preview.contentType === "image/webp" || preview.contentType === "image/jpeg") &&
+    typeof preview.width === "number" &&
+    typeof preview.height === "number"
   );
 }
 

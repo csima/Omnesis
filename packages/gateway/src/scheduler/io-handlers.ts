@@ -30,12 +30,13 @@ import {
   type AnalyticsSweepCandidate,
 } from "../data/repositories/AnalyticsReplicaClaimRepository.js";
 import {
-  computePeopleCounts,
   computePeopleCountsChunk,
   searchPeople,
   type PersonBrowseCursor,
   type PersonSortBy,
 } from "../data/repositories/PersonRepository.js";
+import { getPersonDocuments } from "../data/repositories/DocumentPeopleRepository.js";
+import { listMergeJudgeWork } from "../domain/merge/merge-judge.js";
 import { assemblePersonLookup } from "../domain/person-lookup.js";
 import { countMessagesByPerson, type MessageCountsQuery } from "../domain/message-counts.js";
 import { likeSearchDocuments } from "../search/like-search.js";
@@ -71,6 +72,7 @@ import { resolvePersonId } from "../domain/PeopleResolutionService.js";
 import { computeAutoMergePairs, computeTransitiveCollapse, pickMergeWinner } from "../people.js";
 import {
   computeEnrichedMergeCandidates,
+  findCollapsedMergeCandidates,
   explainMergeCandidateVisibility,
   fetchMergeCandidatesData,
   selectTokensNeedingClassification,
@@ -136,6 +138,7 @@ import {
   planSourceUrlRecanonicalization,
   type SourceUrlRecanonicalizationCursor,
 } from "../domain/SourceUrlRecanonicalization.js";
+import { planWebRedactionPage, type WebRedactionCursor } from "../sources/web/backfill.js";
 
 import {
   fetchTranscriptionVocabularyBatch,
@@ -169,6 +172,8 @@ export const ioHandlers = {
     specs: readonly UrlCanonicalizerSpec[],
     cursor?: SourceUrlRecanonicalizationCursor,
   ) => planSourceUrlRecanonicalization(db, specs, cursor),
+  "io.planWebRedactionPage": (db: Db, cursor?: WebRedactionCursor) =>
+    planWebRedactionPage(db, cursor),
   // Smallest non-trivial read op — proves the handle is usable.
   "io.countDocuments": (db: Db) => {
     const row = db.prepare("SELECT COUNT(*) AS n FROM documents").get() as
@@ -236,6 +241,18 @@ export const ioHandlers = {
     limit: number,
     options: { sortBy?: PersonSortBy; after?: PersonBrowseCursor },
   ) => searchPeople(db, query, limit, options),
+
+  // A page of a person's documents (GET /people/:id/documents). On the main
+  // thread, a person on millions of documents froze the gateway for minutes.
+  "io.personDocuments": (
+    db: Db,
+    personId: string,
+    options: { role?: string; limit?: number; offset?: number },
+  ) => getPersonDocuments(db, personId, options),
+
+  // The merge judge's evidence packs: bounded per candidate, but they read
+  // documents and co-interactors of people who can sit on millions of them.
+  "io.mergeJudgeWork": (db: Db, limit: number) => listMergeJudgeWork(db, limit),
 
   // Person lookup (agent `lookup_people`). The same heavy `searchPeople` join
   // as browse, plus up to ~limit per-candidate follow-ups; on the main thread
@@ -311,7 +328,6 @@ export const ioHandlers = {
   ) => enrichGraphContextHits(db, hits, options),
 
   // ── people compute (read halves of compute/upsert splits) ─────────
-  "io.peopleCounts": (db: Db) => computePeopleCounts(db),
   "io.peopleCountsChunk": (db: Db, cursor: string | null, batchSize: number) =>
     computePeopleCountsChunk(db, cursor, batchSize),
   "io.mergeCandidates": (db: Db, perStepLimit?: number) => computeAutoMergePairs(db, perStepLimit),
@@ -338,6 +354,8 @@ export const ioHandlers = {
   // ── source-stats ───────────────────────────────────────────────────
   "io.dirtyStatsSourceIds": (db: Db) => listDirtyStatsSourceIds(db),
   "io.sourceStatsRow": (db: Db, sourceId: string) => computeSourceStatsRow(db, sourceId),
+  // ── merge candidates (read half of people.acceptCollapsedMergeCandidates) ─
+  "io.collapsedMergeCandidates": (db: Db) => findCollapsedMergeCandidates(db),
 
   // ── links compute (read half of links.upsertLinkResolutions split) ─
   "io.linkResolutions": (

@@ -46,7 +46,7 @@ struct PrivacyPolicyPane: View {
                 // A statement of where editing lives, not a problem to solve — so it reads as
                 // ordinary text rather than as a warning the reader has to clear.
                 Text("The policy can only be edited on the web portal.")
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let loadError, policy != nil {
@@ -78,7 +78,7 @@ struct PrivacyPolicyPane: View {
             .frame(minHeight: GatewayErrorView.minScrollHeight)
         } else if let policy {
             FlatSection("Privacy policy") {
-                MarkdownView(text: policy.policy, bodyFont: .system(size: 14))
+                MarkdownView(text: policy.policy)
                     .padding(Theme.Spacing.md)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -159,7 +159,7 @@ struct PrivacyReviewedUnderRow: View {
         NavigationLink(value: PrivacyRoute.policy(familyId: policy.familyId, name: policy.name)) {
             HStack(spacing: Theme.Spacing.sm) {
                 Label(privacyReviewedUnderLabel(policy), systemImage: "doc.text")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(Theme.accent)
                 Spacer(minLength: Theme.Spacing.sm)
                 Image(systemName: "chevron.right")

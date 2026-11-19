@@ -67,6 +67,7 @@ export class PushTransport {
 
   /** Deliver one queue item and classify every transport/gateway outcome. */
   async deliver(item: QueueItem): Promise<DeliveryOutcome> {
+    if (item.kind === "preview") return this.deliverPreview(item);
     const { path, body } =
       item.kind === "document"
         ? { path: "/documents", body: { documents: [item.doc] } }
@@ -128,6 +129,73 @@ export class PushTransport {
       // Keep the status-line fallback for an empty or non-JSON error body.
     }
     return { kind: "drop", reason, status: response.status };
+  }
+
+  /**
+   * Upload one page screenshot. A refusal is final for this shot — screenshots
+   * switched off, the page excluded, paused or deleted since, the page not
+   * stored, an image the gateway does not take — and the shot leaves the
+   * queue silently as `suppressed`. A missing or revoked credential is kept
+   * for re-pair like any upload, and congestion holds the queue back like any
+   * upload; a server error retries this shot alone, a few times, so a gateway
+   * that cannot store previews never stops pages syncing.
+   */
+  private async deliverPreview(
+    item: Extract<QueueItem, { kind: "preview" }>,
+  ): Promise<DeliveryOutcome> {
+    const { contentHash: _contentHash, ...body } = item.preview;
+    let response: FetchLikeResponse;
+    try {
+      response = await this.request(this.url("/documents/preview"), {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify(body),
+        redirect: "error",
+      });
+    } catch (error) {
+      return { kind: "retry", network: true, reason: networkReason(error) };
+    }
+    if (response.status >= 200 && response.status < 300) {
+      try {
+        const parsed = JSON.parse(await response.text()) as { stored?: unknown };
+        if (parsed?.stored === true) return { kind: "ok" };
+      } catch {
+        // Fall through to the invalid-success retry.
+      }
+      return {
+        kind: "retry",
+        status: response.status,
+        reason: "Invalid gateway success response",
+        itemOnly: true,
+      };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { kind: "drop", reason: await responseReason(response), status: response.status };
+    }
+    // Congestion is the gateway's, and holds every upload back alike.
+    if ([408, 425, 429].includes(response.status)) {
+      return {
+        kind: "retry",
+        status: response.status,
+        reason: await responseReason(response),
+        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+      };
+    }
+    // A server error on a screenshot may be the preview store's alone; pages
+    // must keep flowing past it.
+    if (response.status >= 500) {
+      return {
+        kind: "retry",
+        status: response.status,
+        reason: await responseReason(response),
+        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+        itemOnly: true,
+      };
+    }
+    return { kind: "suppressed" };
   }
 
   private request(input: string, init: Parameters<FetchLike>[1]): Promise<FetchLikeResponse> {

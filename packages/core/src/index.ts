@@ -267,6 +267,39 @@ export {
   verifiesUnderSystemTrust,
 } from "./tofu.js";
 
+export {
+  ACCESS_CLIENT_ID_ENV,
+  ACCESS_CLIENT_ID_HEADER,
+  ACCESS_CLIENT_SECRET_ENV,
+  ACCESS_CLIENT_SECRET_FILE_ENV,
+  ACCESS_CLIENT_SECRET_HEADER,
+  ACCESS_GATEWAY_URL_ENV,
+  assertNotCloudflareAccessRefusal,
+  CloudflareAccessRefusedError,
+  CloudflareBlockedError,
+  CloudflareRefusalError,
+  cloudflareAccessRefusal,
+  enableGatewayAccess,
+  GATEWAY_ACCESS_CREDENTIALS_FILE,
+  GatewayAccessConfigError,
+  gatewayAccessClientIdFor,
+  gatewayAccessCredentialsPath,
+  gatewayAccessOrigin,
+  installGatewayAccess,
+  isCloudflareAccessRefusedError,
+  isCloudflareRefusalError,
+  parseGatewayAccessCredentials,
+  readGatewayAccessCredentials,
+  redactGatewayUrl,
+  removeGatewayAccessCredentials,
+  resetGatewayAccessForTests,
+  withGatewayAccessDispatcher,
+  withGatewayAccessHeaders,
+  writeGatewayAccessCredentials,
+  type GatewayAccessCredentials,
+  type LoadedGatewayAccessCredentials,
+} from "./gateway-access.js";
+
 export { retry, type RetryOptions } from "./retry.js";
 
 export {
@@ -367,8 +400,10 @@ export {
   DEFAULT_CONFIG_DIR,
   GATEWAY_ANALYTICS_STORE_FILE,
   GATEWAY_INDEX_STORE_FILE,
+  GATEWAY_PREVIEW_STORE_FILE,
   GATEWAY_STORE_FILE,
   OPERATOR_INSTRUCTIONS_FILENAME,
+  PREVIEW_STORE_SCHEMA_VERSION,
   WATCH_JOURNAL_FILENAME,
   stripThinkTags,
   createThinkTagFilter,
@@ -582,6 +617,28 @@ export {
   serializeCredentialsSpec,
   validateCredentialFields,
 } from "./credentials.js";
+
+export {
+  DEFAULT_BROKER_PURPOSE,
+  BrokerCredentialError,
+  BrokeredCredentials,
+  brokerBearerToken,
+  brokerBindingPath,
+  brokerConnectionFor,
+  credentialBrokerConfigPath,
+  fetchBrokerCredential,
+  hasBrokerBinding,
+  listBrokeredAccountIds,
+  readBrokerBinding,
+  readCredentialBrokerConfig,
+  writeBrokerBinding,
+  writeCredentialBrokerConfig,
+  type BrokerBinding,
+  type BrokerConnectionRef,
+  type BrokerCredential,
+  type BrokerCredentialResult,
+  type CredentialBrokerConfig,
+} from "./credential-broker.js";
 
 export { AUTH_ERROR_CODES, isAuthErrorCode, type AuthErrorCode } from "./auth-error-codes.js";
 
@@ -1180,6 +1237,8 @@ export type {
   CatalogEntry,
   GgufCatalogEntry,
   AnthropicCatalogEntry,
+  AnthropicEffortLevel,
+  AnthropicThinkingTypes,
   Manifest,
   ManifestEntry,
   ModelsOverview,

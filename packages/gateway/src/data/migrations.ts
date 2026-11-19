@@ -64,6 +64,7 @@ import { queueTranscriptEviction } from "../brain/transcript-eviction.js";
 import {
   createExtractedDatesTables,
   createDatesUnprocessedIndex,
+  createDatesPendingAgeIndex,
   addDateMentions,
   rescanIsoDateTimeMentions,
   rescanSameDaySpansAndRestCompounds,
@@ -90,6 +91,7 @@ import { createTranscriptionVocabularyState } from "../transcribe/vocabulary/reb
 import { installTranscriptionVocabulary } from "../transcribe/vocabulary/storage.js";
 import { createNoteAgentTables } from "../brain/note-agent/storage.js";
 import { createNoteHandoffTables } from "../brain/note-agent/handoffs.js";
+import { markWebRedactionDue } from "../sources/web/backfill.js";
 import { migrateV152AccessGrants } from "./migration-152-access-grants.js";
 import { migrateV153AccessPolicyFamilies } from "./migration-153-access-policy-families.js";
 import { markLinkStatsDirty } from "./DirtyMarks.js";
@@ -134,6 +136,8 @@ import { runSchemaSetup } from "./schema.js";
 import { compactKnowledgeJournal } from "./migration-205-knowledge-journal.js";
 import { addConversationAuthors } from "./migration-206-conversation-authors.js";
 import { compactKnowledgeHistoryTargets } from "./migration-207-knowledge-history-targets.js";
+import { createHostAgentGrantTables } from "./migration-213-host-agent-grants.js";
+import { allowHostAgentDenials } from "./migration-215-host-agent-denials.js";
 import {
   createLegacyBriefClaimsTables,
   createLegacyBriefTables,
@@ -4966,6 +4970,27 @@ export const MIGRATIONS: readonly Migration[] = [
         "UPDATE sync_state SET minimum_gateway_version = ? WHERE minimum_gateway_version > ?",
       ).run(178, 178);
     },
+  },
+  {
+    version: 212,
+    description: "index the date pass's pending documents by arrival again",
+    up: createDatesPendingAgeIndex,
+  },
+  {
+    version: 213,
+    description: "agent hosts that say who is calling, and the access level of each host agent",
+    up: createHostAgentGrantTables,
+  },
+  {
+    version: 214,
+    description:
+      "mark stored web pages and visits due a background redaction pass with the shaped rules",
+    up: markWebRedactionDue,
+  },
+  {
+    version: 215,
+    description: "host agents denied by name, and no host access left behind a removed connection",
+    up: (db) => allowHostAgentDenials(db),
   },
 ];
 

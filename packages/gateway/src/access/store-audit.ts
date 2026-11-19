@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 
 import { activeAccessTokenPredicate } from "./active-access-token.js";
 import { appendAudit } from "./store-helpers.js";
+import { connectionRequiresHostIdentity, hostAgentAuthorityHolds } from "./store-host-identity.js";
 import type { Db } from "../data/types.js";
 import type {
   AccessAuditEvent,
@@ -37,6 +38,20 @@ export function recordMcpToolInvocationAudit(
         outcome: input.outcome,
         requestId: boundedAuditField(input.requestId),
         sourceMode: input.sourceMode,
+        ...(input.hostCaller
+          ? {
+              hostAgent: boundedAuditField(input.hostCaller.agent),
+              hostDelegators: input.hostCaller.delegators.map(boundedAuditField),
+              ...(input.hostCaller.task
+                ? { hostTask: boundedAuditField(input.hostCaller.task) }
+                : {}),
+              hostAgentGrantIds: input.hostCaller.grants.map((grant) => grant.grantId),
+              hostAgentGrants: input.hostCaller.grants.map((grant) => ({
+                agent: boundedAuditField(grant.agent),
+                grant: grant.grant,
+              })),
+            }
+          : {}),
       },
       now,
     });
@@ -77,8 +92,8 @@ export function listAccessAuditEvents(
     params.push(input.grantId);
   }
   if (input.after) {
-    clauses.push("(occurred_at < ? OR (occurred_at = ? AND id < ?))");
-    params.push(input.after.occurredAt, input.after.occurredAt, input.after.id);
+    clauses.push("(occurred_at, id) < (?, ?)");
+    params.push(input.after.occurredAt, input.after.id);
   }
   const rows = db
     .prepare<Array<string | number>, AuditRow>(
@@ -119,8 +134,17 @@ function auditEventFromRow(row: AuditRow): AccessAuditEvent {
   };
 }
 
-/** The writer transaction is the final linearization point before corpus egress. */
+/**
+ * The writer transaction is the final linearization point before corpus
+ * egress. A call through a connection bound to an agent host also needs every
+ * host agent grant it was authorized by to be live on the level revision it
+ * read, and a call through a bound connection without one releases nothing.
+ */
 function hasActiveAuthority(db: Db, input: McpToolInvocationAuditInput, now: number): boolean {
+  const hostAuthority = input.hostCaller
+    ? hostAgentAuthorityHolds(db, input.principalId, input.hostCaller.grants)
+    : !connectionRequiresHostIdentity(db, input.principalId);
+  if (!hostAuthority) return false;
   return Boolean(
     db
       .prepare<{

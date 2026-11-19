@@ -22,14 +22,20 @@ import { SyntheticE2EHarness } from "./synth-harness.js";
  * under Node and proves the wire contract. This suite covers what only a
  * browser can: the options page pairing through Chrome's own UI, the content
  * script watching a page and handing the capture to the service worker, the
- * worker surviving eviction with nothing lost, the options page and popup
+ * worker surviving eviction with nothing lost, credentials on a page redacted
+ * before it leaves the browser, the privacy rules that skip a page (sensitive
+ * fields in the DOM and in open shadow roots, credential paths, built-in
+ * sites and the operator's own sites) each named in the popup and capturing
+ * nothing, the options page and popup
  * editing the capture settings the gateway holds for every paired browser, a
+ * real `captureVisibleTab` screenshot becoming a captured page's preview, a
  * page deleted for good staying gone, the popup reporting truthfully when the
  * gateway revokes the device, and unpair clearing every trace.
  *
  * The extension is built with the TEST manifest (`extension/scripts/
- * test-manifest.mjs`): the wildcard-HTTPS host permission is granted at install
- * time instead of through the native dialog no automation can click. API
+ * test-manifest.mjs`): the optional host permissions — wildcard HTTPS for
+ * capture, `<all_urls>` for screenshots — are granted at install time instead
+ * of through the native dialogs no automation can click. API
  * permissions match the production manifest, and the extension id is pinned.
  * The store ZIP is asserted never to carry that
  * variant. The gateway serves a self-signed certificate; the worker's `fetch`
@@ -79,9 +85,34 @@ const FIXTURE_ORIGIN = "https://fixture.example.test";
 /** Dwell (5 s) + mutation-settle debounce, with headroom for a busy box. */
 const CAPTURE_WAIT_MS = 45_000;
 
-function fixturePage(ordinal: string): string {
-  return `<!doctype html><html><head><title>Field notes ${ordinal} (fictional)</title></head><body><main><h1>Field notes ${ordinal} (fictional)</h1><p>An invented observatory logbook entry with enough readable prose for the extractor to keep: a clear evening, a borrowed notebook, and a quiet walk back along the ridge.</p><p>These additional fictional sentences make extraction stable for the headless browser suite.</p></main></body></html>`;
+function fixturePage(ordinal: string, extra = ""): string {
+  return `<!doctype html><html><head><title>Field notes ${ordinal} (fictional)</title></head><body><main><h1>Field notes ${ordinal} (fictional)</h1><p>An invented observatory logbook entry with enough readable prose for the extractor to keep: a clear evening, a borrowed notebook, and a quiet walk back along the ridge.</p><p>These additional fictional sentences make extraction stable for the headless browser suite.</p>${extra}</main></body></html>`;
 }
+
+/** The operator's own tool, as `webCapture.ownSites` in the gateway's config. */
+const OWN_SITE_ORIGIN = "https://agents.example.test";
+/** A built-in password-manager site no source owns and no policy names. */
+const BUILT_IN_ORIGIN = "https://vault.bitwarden.com";
+
+/** Invented credentials, assembled at run time so no scanner matches this file. */
+const FAKE_GITHUB_TOKEN = ["gh", "p_", "Q7rT2mX9pL4vN8kB3cZ6wY1hJ5dF0sGaAbCd"].join("");
+const FAKE_SK_KEY = ["s", "k-proj-", "Q7rT2mX9pL4vN8kB3cZ6wY1h"].join("");
+
+/** Fixture pages beyond the numbered field notes, by path. */
+const SPECIAL_PAGES: Record<string, string> = {
+  "/notes-secrets": fixturePage(
+    "secrets",
+    `<p>The fictional deploy step reads DEPLOY_TOKEN=${FAKE_GITHUB_TOKEN} from the runner.</p><pre><code>OPENAI_KEY=${FAKE_SK_KEY}\npassword: correct-horse-battery</code></pre>`,
+  ),
+  "/notes-otp": fixturePage(
+    "otp",
+    '<form><label>Enter the code we sent<input autocomplete="one-time-code" inputmode="numeric"></label></form>',
+  ),
+  "/notes-shadow-card": fixturePage(
+    "shadow card",
+    `<div id="pay"></div><script>document.getElementById("pay").attachShadow({ mode: "open" }).innerHTML = '<input autocomplete="cc-number">';</script>`,
+  ),
+};
 
 describe.skipIf(!browserAvailable)("Browser-capture extension in headless Chromium", () => {
   let harness: SyntheticE2EHarness;
@@ -98,6 +129,7 @@ describe.skipIf(!browserAvailable)("Browser-capture extension in headless Chromi
     harness = new SyntheticE2EHarness({
       gatewayMode: "synthetic-experimental",
       embedderBackend: "fake",
+      extraGatewayConfig: { webCapture: { ownSites: [new URL(OWN_SITE_ORIGIN).hostname] } },
     });
     await harness.start();
 
@@ -125,13 +157,19 @@ describe.skipIf(!browserAvailable)("Browser-capture extension in headless Chromi
       ],
     });
     await context.route(`${FIXTURE_ORIGIN}/**`, (route) => {
-      const ordinal = new URL(route.request().url()).pathname.replace(/^\/notes-/, "") || "one";
+      const { pathname } = new URL(route.request().url());
+      const ordinal = pathname.replace(/^\/notes-/, "") || "one";
       return route.fulfill({
         status: 200,
         contentType: "text/html",
-        body: fixturePage(ordinal),
+        body: SPECIAL_PAGES[pathname] ?? fixturePage(ordinal),
       });
     });
+    for (const origin of [OWN_SITE_ORIGIN, BUILT_IN_ORIGIN]) {
+      await context.route(`${origin}/**`, (route) =>
+        route.fulfill({ status: 200, contentType: "text/html", body: fixturePage("elsewhere") }),
+      );
+    }
     worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     baselineDocs = await webDocCount();
   }, 240_000);
@@ -300,6 +338,62 @@ describe.skipIf(!browserAvailable)("Browser-capture extension in headless Chromi
   }, 60_000);
 
   test(
+    "with screenshots switched on from the popup, a captured page's viewport becomes its preview",
+    async () => {
+      const popup = await openPage(popupUrl);
+      await popup.locator("#screenshots-wrap").waitFor({ state: "visible", timeout: 20_000 });
+      await popup.locator("#screenshots-toggle").check();
+      await expect
+        .poll(
+          async () =>
+            (
+              (await harness.gatewayJson("/web-capture-policy")) as {
+                screenshots?: { enabled: boolean };
+              }
+            ).screenshots?.enabled,
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      await popup.close();
+
+      const url = `${FIXTURE_ORIGIN}/notes-shot`;
+      const article = await openPage(url);
+      await article.bringToFront();
+      const documentId = async (): Promise<string | undefined> => {
+        const recent = (await harness.gatewayJson("/sources/web/recent?limit=50")) as {
+          documents?: Array<{ id: string; source_url?: string | null; title?: string }>;
+        };
+        return recent.documents?.find((doc) => doc.title === "Field notes shot (fictional)")?.id;
+      };
+      await expect.poll(documentId, { timeout: CAPTURE_WAIT_MS, interval: 500 }).toBeTruthy();
+      const id = (await documentId())!;
+      await expect
+        .poll(
+          async () =>
+            ((await harness.gatewayJson(`/documents/${id}`)) as { preview?: unknown }).preview,
+          { timeout: 30_000, interval: 500, message: "the page's screenshot must be uploaded" },
+        )
+        .toMatchObject({ url: `/documents/${id}/preview` });
+      const image = await harness.gatewayFetch(`/documents/${id}/preview`);
+      expect(image.status).toBe(200);
+      expect(["image/webp", "image/jpeg"]).toContain(image.headers.get("content-type"));
+      const { width, height } = (
+        (await harness.gatewayJson(`/documents/${id}`)) as {
+          preview: { width: number; height: number };
+        }
+      ).preview;
+      expect(Math.max(width, height)).toBeLessThanOrEqual(1280);
+      await article.close();
+
+      await harness.gatewayJson("/web-capture-policy/screenshots", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+      });
+    },
+    CAPTURE_WAIT_MS + 60_000,
+  );
+
+  test(
     "a service worker evicted mid-life comes back and the next page still lands",
     async () => {
       // Stop the worker the way Chrome does when it idles out. The next event
@@ -323,6 +417,88 @@ describe.skipIf(!browserAvailable)("Browser-capture extension in headless Chromi
       await article.close();
     },
     CAPTURE_WAIT_MS + 30_000,
+  );
+
+  test(
+    "credentials shown on a page are redacted before the page leaves the browser",
+    async () => {
+      const article = await openPage(`${FIXTURE_ORIGIN}/notes-secrets`);
+      await article.bringToFront();
+      await waitForWebDocs(baselineDocs + 3, "the page with credentials must still be captured");
+      await article.close();
+      const listed = (await harness.gatewayJson("/documents/recent/web?limit=50")) as {
+        documents?: Array<{ id: string; title: string }>;
+      };
+      const target = (listed.documents ?? []).find((d) => d.title.includes("secrets"));
+      expect(target, "the captured page is listed").toBeDefined();
+      try {
+        const stored = (await harness.gatewayJson(`/documents/${target!.id}`)) as {
+          content: string;
+        };
+        // In prose Markdown escapes the underscore; in the code block it does not.
+        expect(stored.content).toContain("DEPLOY\\_TOKEN=[redacted] from the runner");
+        expect(stored.content).toContain("OPENAI_KEY=[redacted]");
+        expect(stored.content).toContain("password: [redacted]");
+        expect(stored.content).not.toContain(FAKE_GITHUB_TOKEN);
+        expect(stored.content).not.toContain(FAKE_SK_KEY);
+        expect(stored.content).not.toContain("correct-horse-battery");
+        // Nothing the browser still holds names the credentials either.
+        const storage = JSON.stringify(await extensionStorage());
+        expect(storage).not.toContain(FAKE_GITHUB_TOKEN);
+        expect(storage).not.toContain(FAKE_SK_KEY);
+      } finally {
+        // A copy-only delete keeps the counts the later tests rely on and names
+        // no page in the settings.
+        await harness.gatewayJson(`/documents/${target!.id}?tombstone=0`, { method: "DELETE" });
+      }
+      expect(await webDocCount()).toBe(baselineDocs + 2);
+    },
+    CAPTURE_WAIT_MS + 30_000,
+  );
+
+  test(
+    "sensitive fields, credential paths, built-in sites and own sites are never captured",
+    async () => {
+      const cases: Array<[string, string]> = [
+        [`${FIXTURE_ORIGIN}/notes-otp`, "Password, code or card field on this page"],
+        [`${FIXTURE_ORIGIN}/notes-shadow-card`, "Password, code or card field on this page"],
+        [`${FIXTURE_ORIGIN}/settings/tokens`, "Sign-in, payment or credentials page"],
+        [
+          `${FIXTURE_ORIGIN}/cdn-cgi/access/login/fixture.example.test`,
+          "Sign-in, payment or credentials page",
+        ],
+        [`${BUILT_IN_ORIGIN}/vault`, "Mail, messaging or password site"],
+        [`${OWN_SITE_ORIGIN}/browser`, "One of your own tools"],
+      ];
+      const policy = (await harness.gatewayJson("/web-capture-policy")) as { ownSites: string[] };
+      expect(policy.ownSites).toEqual([new URL(OWN_SITE_ORIGIN).hostname]);
+      const before = await webDocCount();
+      for (const [url, label] of cases) {
+        const article = await openPage(url);
+        await article.bringToFront();
+        const popup = await openPage(popupUrl);
+        await article.bringToFront();
+        await popup.reload();
+        await expect
+          .poll(() => popup.locator("#current-page").textContent(), {
+            timeout: 20_000,
+            message: url,
+          })
+          .toBe(label);
+        expect(await popup.locator("#current-page").getAttribute("data-state")).toBe("excluded");
+        await popup.close();
+        await article.bringToFront();
+        await new Promise((resolve) =>
+          setTimeout(resolve, DWELL_MS + MUTATION_DEBOUNCE_MS + 2_000),
+        );
+        expect(await webDocCount(), `${url} must capture nothing`).toBe(before);
+        const staged = await extensionStorage();
+        expect(JSON.parse(String(staged["omnesis.push.queue.v1"] ?? "[]")), url).toEqual([]);
+        expect(pendingHandoffKeys(staged), url).toEqual([]);
+        await article.close();
+      }
+    },
+    6 * 40_000,
   );
 
   test(

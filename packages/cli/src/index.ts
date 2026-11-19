@@ -8,8 +8,13 @@ export {};
 import "./load-env.js";
 import { defineCommand, runCommand, showUsage, type CommandDef, type SubCommandsDef } from "citty";
 import { runCli } from "@omnesis/cli-shared";
-import { ensureGatewayTrust, readPackageVersion, DEFAULT_CONFIG_DIR } from "@omnesis/core";
-import { GATEWAY_REQUEST_URL } from "./utils.js";
+import {
+  enableGatewayAccess,
+  ensureGatewayTrust,
+  readPackageVersion,
+  DEFAULT_CONFIG_DIR,
+} from "@omnesis/core";
+import { GATEWAY_REQUEST_URL, GATEWAY_URL } from "./utils.js";
 import { isDefaultGatewayTrustExempt } from "./trust-preflight.js";
 import { SUB_COMMANDS, visibleSubCommands } from "./subcommands.js";
 import { assertKnownFlags } from "./unknown-flags.js";
@@ -40,7 +45,10 @@ const rawArgs = process.argv.slice(2).filter((a) => a !== "--");
 // Daemon subcommands host long-lived processes that register their own
 // SIGINT/SIGTERM graceful-shutdown handlers — runCli's default
 // exit(130)-on-SIGINT would preempt them, so it's disabled for these.
-const isDaemonInvocation = rawArgs[0] === "gateway" || rawArgs[0] === "collector";
+const isDaemonGroup = rawArgs[0] === "gateway" || rawArgs[0] === "collector";
+const isDaemonInvocation =
+  (rawArgs[0] === "gateway" && rawArgs[1] === "serve") ||
+  (rawArgs[0] === "collector" && rawArgs[1] === "run");
 const isUpdateInvocation = rawArgs[0] === "update";
 
 // Commands that never call the default gateway (or do so only best-effort)
@@ -51,9 +59,24 @@ const isUpdateInvocation = rawArgs[0] === "update";
 // pre-seed).
 const isLocalInvocation = isDefaultGatewayTrustExempt(rawArgs);
 
-// TOFU: trust the gateway's self-signed cert before any network call.
 const configDir = process.env.OMNESIS_CONFIG_DIR ?? DEFAULT_CONFIG_DIR;
-if (!isDaemonInvocation && !isLocalInvocation) {
+
+// A gateway behind Cloudflare Access is reached with this machine's service
+// token on every request to it, the trust probe below included. The daemons
+// read it themselves, for the gateway they resolve, and `gateway access-token`
+// is what sets it.
+if (!isDaemonGroup) {
+  try {
+    await enableGatewayAccess([GATEWAY_REQUEST_URL, GATEWAY_URL], configDir);
+  } catch (err) {
+    process.stderr.write(
+      `Warning: the Cloudflare Access service token was not loaded: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+}
+
+// TOFU: trust the gateway's self-signed cert before any network call.
+if (!isDaemonGroup && !isLocalInvocation) {
   try {
     const tofu = await ensureGatewayTrust({
       gatewayUrl: GATEWAY_REQUEST_URL,

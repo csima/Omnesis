@@ -11,7 +11,7 @@ import SwiftUI
 struct ExperimentalTag: View {
     var body: some View {
         Text("Experimental")
-            .font(.system(size: 11, weight: .medium))
+            .scaledFont(size: 11, weight: .medium)
             .foregroundStyle(Theme.textMuted)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)

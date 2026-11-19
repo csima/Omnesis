@@ -9,6 +9,7 @@ import {
   addExcludedDomainBody,
   excludedDomainParam,
   setCapturePauseBody,
+  setCaptureScreenshotsBody,
 } from "../schemas/index.js";
 import type { WebCapturePolicyService } from "../../sources/web/capture-policy.js";
 import type { RouteApp } from "./types.js";
@@ -20,7 +21,8 @@ import type { RouteApp } from "./types.js";
  * operator identity): the policy is the push contract of the source that token
  * writes, not corpus data, so the token that may add pages may also say which
  * pages must never be added. Each edit is a self-contained operation — add or
- * remove one domain, set or clear the pause — applied on the service's edit
+ * remove one domain, set or clear the pause, switch page screenshots on or
+ * off — applied on the service's edit
  * lane, so two browsers editing at once never overwrite each other, and every
  * response carries the whole policy so the caller's cache is current without a
  * second round trip.
@@ -67,4 +69,15 @@ export function mountWebCapturePolicyRoutes(app: RouteApp, policy: WebCapturePol
     enforceWriteScopeForSourceType(auth.scopes, WEB_SOURCE_ID);
     return c.json(await policy.clearPause(auth));
   });
+
+  app.put(
+    "/web-capture-policy/screenshots",
+    scope.writeAny(),
+    validateJson(setCaptureScreenshotsBody),
+    async (c) => {
+      const auth = c.get("auth");
+      enforceWriteScopeForSourceType(auth.scopes, WEB_SOURCE_ID);
+      return c.json(await policy.setScreenshots(c.req.valid("json").enabled, auth));
+    },
+  );
 }

@@ -490,3 +490,129 @@ describe("options — shared exclusions", () => {
     expect(options.input("exclusion-input").value).toBe("shop.example.net");
   });
 });
+
+describe("options — page screenshots", () => {
+  function screenshotResponder(
+    chrome: FakePageChrome,
+    initial: boolean,
+  ): { current: () => boolean } {
+    let enabled = initial;
+    chrome.respond = (message) => {
+      if (message.type === "read-policy") {
+        return { policy: policyBody({ screenshots: { enabled } }), fetchedAt: 1 };
+      }
+      if (message.type === "set-screenshots") {
+        enabled = message.enabled === true;
+        return { ok: true };
+      }
+      return { ok: true, purged: 0 };
+    };
+    return { current: () => enabled };
+  }
+
+  it("is off and unavailable before pairing, and says why", async () => {
+    const options = openOptions({});
+    await vi.waitFor(() =>
+      expect(options.$("screenshots-hint").textContent).toBe(
+        "Pair this browser to change this setting for your paired browsers.",
+      ),
+    );
+    expect(options.input("screenshots-toggle").disabled).toBe(true);
+    expect(options.input("screenshots-toggle").checked).toBe(false);
+  });
+
+  it("explains that screenshots are not redacted and are deleted with their page", () => {
+    const { document } = loadPage("options.html");
+    const text = document.body.textContent?.replace(/\s+/g, " ") ?? "";
+    expect(text).toContain("Save a screenshot of each page");
+    expect(text).toContain("Screenshots are not redacted the way captured text is");
+    expect(text).toContain("A screenshot is deleted with its page.");
+  });
+
+  it("shows the shared setting and switches it on through the worker", async () => {
+    let state: { current: () => boolean } | undefined;
+    const options = openOptions(pairedStorage(), (chrome) => {
+      state = screenshotResponder(chrome, false);
+    });
+    await vi.waitFor(() => expect(options.input("screenshots-toggle").disabled).toBe(false));
+    expect(options.input("screenshots-toggle").checked).toBe(false);
+
+    options.input("screenshots-toggle").checked = true;
+    options.input("screenshots-toggle").dispatchEvent(new options.window.Event("change"));
+    await vi.waitFor(() =>
+      expect(options.chrome.sent("set-screenshots")).toEqual([
+        { type: "set-screenshots", enabled: true },
+      ]),
+    );
+    await waitForStatus(
+      options,
+      "Every paired browser now saves a screenshot of each page it captures.",
+    );
+    expect(state?.current()).toBe(true);
+    await vi.waitFor(() => expect(options.input("screenshots-toggle").checked).toBe(true));
+  });
+
+  it("asks Chrome for the screenshot grant first and turns nothing on when it is refused", async () => {
+    let state: { current: () => boolean } | undefined;
+    const options = openOptions(pairedStorage(), (chrome) => {
+      chrome.grantScreenshots = false;
+      state = screenshotResponder(chrome, false);
+    });
+    await vi.waitFor(() => expect(options.input("screenshots-toggle").disabled).toBe(false));
+    options.input("screenshots-toggle").checked = true;
+    options.input("screenshots-toggle").dispatchEvent(new options.window.Event("change"));
+    await waitForStatus(
+      options,
+      "Chrome did not allow screenshots in this browser, so they were not turned on.",
+    );
+    expect(options.chrome.permissionRequests).toContainEqual({ origins: ["<all_urls>"] });
+    expect(options.chrome.sent("set-screenshots")).toEqual([]);
+    expect(state?.current()).toBe(false);
+  });
+
+  it("says when the gateway cannot store screenshots, and offers no switch", async () => {
+    const options = openOptions(pairedStorage(), (chrome) => {
+      chrome.respond = (message) =>
+        message.type === "read-policy"
+          ? {
+              policy: policyBody({ screenshots: { enabled: false, available: false } }),
+              fetchedAt: 1,
+            }
+          : { ok: true, purged: 0 };
+    });
+    await vi.waitFor(() =>
+      expect(options.$("screenshots-hint").textContent).toBe(
+        "Your gateway cannot store screenshots right now, so none are taken.",
+      ),
+    );
+    expect(options.input("screenshots-toggle").disabled).toBe(true);
+    expect(options.$("allow-screenshots").hidden).toBe(true);
+  });
+
+  it("offers this browser the grant when screenshots are already on for the others", async () => {
+    const options = openOptions(pairedStorage(), (chrome) => {
+      screenshotResponder(chrome, true);
+    });
+    await vi.waitFor(() => expect(options.$("allow-screenshots").hidden).toBe(false));
+    expect(options.$("screenshots-hint").textContent).toBe(
+      "Screenshots are on for your paired browsers, but Chrome has not allowed this browser to take them.",
+    );
+    click(options, options.$("allow-screenshots"));
+    await waitForStatus(options, "This browser now takes page screenshots.");
+    await vi.waitFor(() => expect(options.$("allow-screenshots").hidden).toBe(true));
+  });
+
+  it("reports a refusal and shows the setting the gateway still holds", async () => {
+    const options = openOptions(pairedStorage(), (chrome) => {
+      chrome.respond = (message) =>
+        message.type === "read-policy"
+          ? { policy: policyBody(), fetchedAt: 1 }
+          : { ok: false, reason: "gateway unreachable" };
+    });
+    await vi.waitFor(() => expect(options.input("screenshots-toggle").disabled).toBe(false));
+    options.input("screenshots-toggle").checked = true;
+    options.input("screenshots-toggle").dispatchEvent(new options.window.Event("change"));
+    await waitForStatus(options, "Could not change screenshots: gateway unreachable");
+    await vi.waitFor(() => expect(options.input("screenshots-toggle").checked).toBe(false));
+  });
+});

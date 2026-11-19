@@ -95,11 +95,12 @@ public struct AgentView: View {
     @State private var composerTopY: CGFloat = 0
     @State private var citationsOpen: Bool = false
     /// Resolved adaptive layout for the current container size. `.overlay`
-    /// on iPhone and iPad-portrait (the Timeline drawer slides over the
-    /// conversation); `.sidePanel` on iPad-landscape (the Timeline docks
-    /// as a ~⅓-width column and the conversation shrinks beside it).
+    /// where the screen is phone-sized or tall (the Timeline drawer slides
+    /// over the conversation); `.sidePanel` where there is room for a split,
+    /// such as iPad landscape or a foldable's inner display (the Timeline
+    /// docks as a ~⅓-width column and the conversation shrinks beside it).
     /// Updated from `sizeProbe`. Gated by `AgentLayout` — flip
-    /// `AgentLayout.iPadSplitEnabled` to revert to overlay everywhere.
+    /// `AgentLayout.splitEnabled` to revert to overlay everywhere.
     @State private var layoutMode: AgentLayoutMode = .overlay
     /// Width of the container, used to size the docked side panel.
     @State private var availableWidth: CGFloat = 0
@@ -415,10 +416,19 @@ public struct AgentView: View {
         let newMode = AgentLayout.mode(for: size)
         if newMode != layoutMode {
             layoutMode = newMode
-            // Rotating into the split with citations already present
-            // reveals the Timeline so the landscape layout shows both
-            // panes immediately.
-            if newMode == .sidePanel { autoRevealTimelineIfNeeded() }
+            switch newMode {
+            case .sidePanel:
+                // Rotating into the split with citations already present
+                // reveals the Timeline so the landscape layout shows both
+                // panes immediately.
+                autoRevealTimelineIfNeeded()
+            case .overlay:
+                // Leaving the split — folding a foldable, showing the
+                // sidebar, rotating an iPad upright — closes the Timeline
+                // rather than turning the column beside the conversation
+                // into a drawer laid over it.
+                citationsOpen = false
+            }
         }
     }
 
@@ -764,7 +774,7 @@ public struct AgentView: View {
             VStack(spacing: 22) {
                 OmnesisMarkGlyph(width: Self.landingMarkBox)
                 Text("Ask Omnesis about your corpus")
-                    .font(.system(size: 21, weight: .semibold))
+                    .scaledFont(size: 21, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1172,7 +1182,7 @@ public struct AgentView: View {
             // floating over the transcript, matching the composer pill
             // and the scroll-to-bottom chevron.
             MenuToolbarButton(isOpen: $menuOpen)
-                .font(.system(size: 18, weight: .medium))
+                .scaledFont(size: 18, weight: .medium)
                 .frame(width: Self.topButtonDiameter, height: Self.topButtonDiameter)
                 .contentShape(Circle())
                 .modifier(GlassCircleButton())
@@ -1332,18 +1342,18 @@ private struct ContextWindowExceededCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Context window reached", systemImage: "text.badge.xmark")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             Text(
                 "This conversation no longer fits in the selected model's context window. "
                     + "Start a new conversation to continue."
             )
-            .font(.system(size: 13))
+            .scaledFont(size: 13)
             .foregroundStyle(Theme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
 
             Button("New conversation", action: onNewConversation)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
         }
@@ -1377,15 +1387,15 @@ private struct ReadOnlyConversationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Read-only", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             Text(reason)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Button("Retry", action: onRetry)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
         }
@@ -1756,7 +1766,7 @@ struct AgentComposer: View {
                     )
                     .focused(focused)
                     .lineLimit(1 ... 5)
-                    .font(.system(size: 19))
+                    .scaledFont(size: 19)
                     .padding(.leading, 20)
                     .padding(.vertical, 20)
                     .foregroundStyle(Theme.textPrimary)
@@ -1892,10 +1902,10 @@ struct AgentComposer: View {
                             .frame(width: 22)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(cmd.label)
-                                .font(.system(size: 14, weight: .semibold))
+                                .scaledFont(size: 14, weight: .semibold)
                                 .foregroundStyle(Theme.textPrimary)
                             Text(cmd.hint)
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textSecondary)
                                 .lineLimit(1)
                         }
@@ -1928,7 +1938,7 @@ struct AgentComposer: View {
                 Image(systemName: cmd.systemImage)
                     .font(.system(size: 11, weight: .semibold))
                 Text(cmd.label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
                     .padding(2)
@@ -2075,12 +2085,9 @@ struct AgentComposer: View {
 
 // iPad-landscape split with the Timeline open. Seeded directly (the
 // geometry probe + demo auto-pilot that drive this in production don't
-// run in the canvas) and forced through the `idiomOverride` seam so the
-// gate resolves `.sidePanel` on a non-iPad canvas. View in a 13" iPad
-// landscape canvas.
+// run in the canvas). View in a 13" iPad landscape canvas.
 @available(iOS 17.0, *)
 #Preview("AgentView — iPad landscape split (open)") {
-    AgentLayout.idiomOverride = true
     var seed = PreviewMocks.agentRichTranscript
     seed.trailAnnotations = PreviewMocks.trailVoucherAnnotations
     return AgentView(
@@ -2096,8 +2103,7 @@ struct AgentComposer: View {
 // spans the full width, no sticky-tab gutter.
 @available(iOS 17.0, *)
 #Preview("AgentView — iPad landscape split (closed)") {
-    AgentLayout.idiomOverride = true
-    return AgentView(
+    AgentView(
         menuOpen: .constant(false),
         previewLayoutMode: .sidePanel,
         previewCitationsOpen: false,

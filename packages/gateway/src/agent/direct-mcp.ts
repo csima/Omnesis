@@ -31,7 +31,9 @@ import { listSources } from "../data/repositories/SourceRepository.js";
 import { permittedSourceIds } from "../access/permitted-sources.js";
 import { createGatewayEntityContextPort } from "../domain/cognitive-graph/interactive-entity-context-port.js";
 import { createGatewayTemporalPort } from "../enrichment/temporal/interactive-temporal-port.js";
+import { getSourceStatsBulk } from "../data/repositories/SourceStatsRepository.js";
 import { createDirectListTablesTool } from "./direct-list-tables.js";
+import { createDirectListSourcesTool, type DirectSourceCoverage } from "./direct-list-sources.js";
 import { DIRECT_MCP_ESSENTIAL_INSTRUCTIONS } from "./direct-instructions.js";
 import {
   createGatewayDocumentByUrlPort,
@@ -62,6 +64,7 @@ export const DIRECT_MCP_TOOL_NAMES = [
   "list_loops",
   "fetch_loop",
   "list_tables",
+  "list_sources",
 ] as const;
 
 export type DirectMcpToolName = (typeof DIRECT_MCP_TOOL_NAMES)[number];
@@ -76,6 +79,7 @@ export const STABLE_DIRECT_MCP_TOOL_NAMES = [
   "run_sql",
   "temporal_query",
   "list_tables",
+  "list_sources",
 ] as const satisfies readonly DirectMcpToolName[];
 
 export const RESTRICTED_DIRECT_MCP_TOOL_NAMES = [
@@ -84,6 +88,7 @@ export const RESTRICTED_DIRECT_MCP_TOOL_NAMES = [
   "lookup_document_by_url",
   "run_sql",
   "list_tables",
+  "list_sources",
 ] as const satisfies readonly DirectMcpToolName[];
 
 const RESTRICTED_DIRECT_MCP_TOOL_NAME_SET: ReadonlySet<string> = new Set(
@@ -217,9 +222,13 @@ export class DirectMcpService {
       authorization?: CorpusAuthorization,
     ) => Promise<ReadOnlyRetrievalPlaybookInput> = () => Promise.resolve({}),
     private readonly scopedHandles?: (authorization: CorpusAuthorization) => readonly ToolHandle[],
+    private readonly sourceCoverage: (
+      authorization?: CorpusAuthorization,
+    ) => Promise<readonly DirectSourceCoverage[]> = () => Promise.resolve([]),
   ) {
     const available = new Map(handles.map((handle) => [handle.name, handle]));
     available.set("list_tables", this.listTablesHandle());
+    available.set("list_sources", this.listSourcesHandle());
     const experimentalNames = DIRECT_MCP_TOOL_NAMES.filter(
       (name) =>
         !STABLE_DIRECT_MCP_TOOL_NAMES.includes(
@@ -267,6 +276,10 @@ export class DirectMcpService {
     );
   }
 
+  private listSourcesHandle(authorization?: CorpusAuthorization): ToolHandle {
+    return createDirectListSourcesTool(() => this.sourceCoverage(authorization));
+  }
+
   manifest(authorization?: CorpusAuthorization): readonly DirectMcpToolManifest[] {
     return authorization?.restricted
       ? this.toolsManifest.filter((tool) => RESTRICTED_DIRECT_MCP_TOOL_NAME_SET.has(tool.name))
@@ -281,7 +294,8 @@ export class DirectMcpService {
         : "";
       const head =
         "This grant is restricted to selected source instances. Only `search_many`, " +
-        "`fetch_many`, `lookup_document_by_url`, `list_tables`, and `run_sql` are available. Source filters may narrow " +
+        "`fetch_many`, `lookup_document_by_url`, `list_tables`, `run_sql`, and `list_sources` are available; " +
+        "`list_sources` names the permitted sources and how complete each one's index is. Source filters may narrow " +
         "the grant but can never widen it. The person filters (`from:`, `by:`, `to:`, `with:`) " +
         "and tag filters (`tag:`, `#tag`) are not available to this grant; a query carrying one " +
         `is refused with an \`unsupported_filter\` error naming the token to remove.${sourceTypes} ` +
@@ -321,14 +335,16 @@ export class DirectMcpService {
     const handle =
       name === "list_tables"
         ? this.listTablesHandle(context.authorization)
-        : context.authorization?.restricted
-          ? new Map(
-              (this.scopedHandles?.(context.authorization) ?? []).map((candidate) => [
-                candidate.name,
-                candidate,
-              ]),
-            ).get(name)
-          : this.byName.get(name);
+        : name === "list_sources"
+          ? this.listSourcesHandle(context.authorization)
+          : context.authorization?.restricted
+            ? new Map(
+                (this.scopedHandles?.(context.authorization) ?? []).map((candidate) => [
+                  candidate.name,
+                  candidate,
+                ]),
+              ).get(name)
+            : this.byName.get(name);
     // The route validates the path first. Keep the service fail-closed too so
     // another future caller cannot widen the fixed surface by casting a name.
     if (!handle) {
@@ -434,6 +450,7 @@ export function sanitizeDirectToolResult(result: ToolResult): ToolResult {
 const DIRECT_MCP_SAFE_ERROR_CODES = new Set([
   "invalid_args",
   "catalog_failed",
+  "coverage_failed",
   "not_found",
   "loop_not_found",
   "seed_not_found",
@@ -484,6 +501,8 @@ function safeDirectToolErrorMessage(code: string): string {
       return "The SQL result exceeded the row limit. Narrow the query and retry.";
     case "catalog_failed":
       return "The analytics catalog could not be read.";
+    case "coverage_failed":
+      return "The source coverage could not be read.";
     case "sql_failed":
       return "The read-only SQL query failed.";
     case "sql_not_permitted":
@@ -606,5 +625,45 @@ export function createGatewayDirectMcpService(deps: GatewayDirectMcpDeps): Direc
       };
     },
     (authorization) => buildHandles(authorization),
+    async (authorization) => {
+      const permitted = authorization ? permittedSourceIds(deps.db, authorization) : null;
+      const sources = listSources(deps.db).filter(
+        (source) => !permitted || permitted.has(source.id),
+      );
+      const stats = getSourceStatsBulk(
+        deps.db,
+        sources.map((source) => source.id),
+      );
+      return sources.map((source) => {
+        const members = deps.syncStatus?.listMembers(source.id) ?? [];
+        const latest = members.reduce<(typeof members)[number] | undefined>(
+          (newest, member) =>
+            !newest || member.lastUpdated > newest.lastUpdated ? member : newest,
+          undefined,
+        );
+        const completedAt = members
+          .map((member) => member.completedAt)
+          .filter((value): value is number => typeof value === "number");
+        return {
+          sourceId: source.id,
+          type: source.type,
+          documentCount: stats[source.id]?.documentCount ?? 0,
+          earliestSourceDate: stats[source.id]?.earliestSourceDate ?? null,
+          latestSourceDate: stats[source.id]?.latestSourceDate ?? null,
+          syncState: latest?.state ?? null,
+          coverage: sourceCoverageOf(members.map((member) => member.coverage)),
+          lastSyncedAt: completedAt.length > 0 ? Math.max(...completedAt) : null,
+        };
+      });
+    },
   );
+}
+
+/** A source's index is complete only when every member that reported says so. */
+function sourceCoverageOf(
+  reports: ReadonlyArray<"complete" | "partial" | "unknown" | undefined>,
+): DirectSourceCoverage["coverage"] {
+  if (reports.length === 0 || reports.some((report) => report === undefined)) return "unknown";
+  if (reports.some((report) => report === "partial")) return "partial";
+  return reports.every((report) => report === "complete") ? "complete" : "unknown";
 }

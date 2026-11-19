@@ -39,7 +39,13 @@ describe("storageKeyNamesForHost", () => {
   test("splits the registry between the gateway and the collector with nothing left over", () => {
     const gateway = storageKeyNamesForHost("gateway");
     const collector = storageKeyNamesForHost("collector");
-    expect([...gateway]).toEqual(["main-db", "index-db", "analytics-db", "watch2-db"]);
+    expect([...gateway]).toEqual([
+      "main-db",
+      "index-db",
+      "analytics-db",
+      "watch2-db",
+      "preview-db",
+    ]);
     expect([...collector]).toEqual(["whatsapp-store", "imessage-transcripts", "telegram-store"]);
   });
 });

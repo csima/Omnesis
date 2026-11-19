@@ -41,13 +41,16 @@ import {
   mergeRulesEvalTask,
   autoDetectTask,
   mergeCandidatesDetectTask,
+  mergeJudgeTask,
   tokenIdentityClassifyTask,
   catalogRefreshTask,
+  plannerStatisticsTask,
   nearDupComputeTask,
   nearDupDfRefreshTask,
   nearDupAlgoSweepTask,
 } from "./backfill-tasks.js";
-import type { CompleteCapability, Logger } from "@omnesis/core";
+import type { CompleteCapability, DecisionCapability, Logger } from "@omnesis/core";
+import type { MergeJudgeMode } from "../../domain/merge/merge-judge.js";
 import type { BackgroundJob } from "../../background-jobs/types.js";
 import type { IoGate } from "../io-ops.js";
 import type { CpuGate } from "../cpu-ops.js";
@@ -78,6 +81,8 @@ interface BackfillTrackers {
   linkStatsRefresh: ScanTracker;
   /** Catalog refresh — purely periodic, no progress. */
   catalogRefresh: StatelessTracker;
+  /** Planner statistics — purely periodic, no progress. */
+  plannerStatistics: StatelessTracker;
   /**
    * Per-person interaction-score refresh — sweep style. Coverage =
    * 1 once the snapshot has been computed AND applied for the
@@ -97,6 +102,8 @@ interface BackfillTrackers {
   /** Token-identity classifier — sweep style; coverage flips to 1 once all
    *  high-spread tokens are labeled. */
   tokenIdentityClassify: ScanTracker;
+  /** Merge judge — one sweep per pass over the candidates due a judgement. */
+  mergeJudge: ScanTracker;
   /** Near-dup compute drip — decrements as inbox rows drain. */
   nearDupCompute: QueueTracker;
   /** Periodic full DF rebuild — sweep style. */
@@ -146,6 +153,8 @@ export interface BackfillTaskOpts {
   statsRefreshIntervalMs: number;
   /** Cadence for catalog refresh (longer; piggybacks on stats idle). */
   catalogRefreshIntervalMs: number;
+  /** Cadence for planner statistics; 0 leaves the task unscheduled. */
+  plannerStatisticsIntervalMs: number;
   /** Cadence for link_stats refresh check (active poll). */
   linkStatsRefreshIntervalMs: number;
   /** Cadence when link_stats is up to date (no work). */
@@ -212,6 +221,14 @@ export interface BackfillTaskOpts {
    */
   getCompletionProvider: () => CompleteCapability | null;
   /**
+   * The decision model and the merge judge's mode, read per tick so an
+   * assignment or config change applies without re-spawning the task graph.
+   * Absent: the judge never runs and name matching keeps auto-approving.
+   */
+  getDecision?: () => DecisionCapability | null;
+  getMergeJudgeMode?: () => MergeJudgeMode;
+  recordMergeJudgeSpend?: (modelId: string, inputTokens: number) => Promise<void>;
+  /**
    * Read-only `omnesis.db` handle for the cheap inbox-count poll that
    * drives the `nearDupCompute` BackgroundJob tracker. The compute
    * pass runs on the compute worker; this poll is for the UI surface.
@@ -260,10 +277,12 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
     sourceStatsRefresh: new QueueTracker({ initialRemaining: 0 }),
     linkStatsRefresh: new ScanTracker(),
     catalogRefresh: new StatelessTracker(),
+    plannerStatistics: new StatelessTracker(),
     interactionScoresRefresh: new ScanTracker(),
     mergeRulesEval: new ScanTracker(),
     mergeCandidatesDetect: new ScanTracker(),
     tokenIdentityClassify: new ScanTracker(),
+    mergeJudge: new ScanTracker(),
     nearDupCompute: new QueueTracker({ initialRemaining: 0 }),
     nearDupDfRefresh: new ScanTracker(),
     nearDupAlgoSweep: new ScanTracker(),
@@ -281,12 +300,15 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
   const peopleCountsRefresh = peopleCountsRefreshTask(internal);
   const sourceStats = sourceStatsRefreshTask(internal);
   const catalog = catalogRefreshTask(internal);
+  const plannerStatistics =
+    opts.plannerStatisticsIntervalMs > 0 ? plannerStatisticsTask(internal) : null;
   const linkStats = linkStatsRefreshTask(internal);
   const interactionScores = interactionScoresRefreshTask(internal);
   const mergeRulesEval = mergeRulesEvalTask(internal);
   const autoDetect = autoDetectTask(internal);
   const mergeCandidatesDetect = mergeCandidatesDetectTask(internal);
   const tokenIdentityClassify = tokenIdentityClassifyTask(internal);
+  const mergeJudge = mergeJudgeTask(internal);
   const nearDupCompute = nearDupComputeTask(internal);
   const nearDupDfRefresh = nearDupDfRefreshTask(internal);
   const nearDupAlgoSweep = nearDupAlgoSweepTask(internal);
@@ -298,11 +320,13 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
     peopleCountsRefresh,
     sourceStats,
     catalog,
+    ...(plannerStatistics ? [plannerStatistics] : []),
     linkStats,
     interactionScores,
     mergeRulesEval,
     autoDetect,
     mergeCandidatesDetect,
+    mergeJudge,
     tokenIdentityClassify,
     nearDupCompute,
     nearDupDfRefresh,
@@ -356,6 +380,18 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
       category: "infra",
       tracker: trackers.catalogRefresh,
     }),
+    ...(plannerStatistics
+      ? [
+          periodicJob(plannerStatistics, {
+            scheduler,
+            displayName: "Planner statistics",
+            description:
+              "Keeps sqlite_stat1 current for the SQLite query planner: PRAGMA optimize picks the tables, each index analyzed under an analysis limit.",
+            category: "infra",
+            tracker: trackers.plannerStatistics,
+          }),
+        ]
+      : []),
     periodicJob(linkStats, {
       scheduler,
       displayName: "Link stats refresh",
@@ -395,6 +431,14 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
         "Fuzzy detection of probable identity matches via name-token IDF scoring. Surfaces candidates to the operator portal; runs only when merge_rules + interaction_scores are caught up so it sees a steady-state graph.",
       category: "people",
       tracker: trackers.mergeCandidatesDetect,
+    }),
+    periodicJob(mergeJudge, {
+      scheduler,
+      displayName: "Merge judge",
+      description:
+        "Asks the decision model whether each pending merge candidate is the same person, then merges, dismisses or leaves it for review.",
+      category: "people",
+      tracker: trackers.mergeJudge,
     }),
     periodicJob(tokenIdentityClassify, {
       scheduler,

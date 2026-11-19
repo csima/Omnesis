@@ -71,6 +71,16 @@ export {
   updateAccessLevel,
 } from "./store-levels.js";
 export { findConnectionProposal } from "./store-connections.js";
+export {
+  createHostAgentGrant,
+  getHostIdentityBinding,
+  listHostIdentity,
+  removeHostIdentityBinding,
+  revokeHostAgentGrant,
+  setHostAgentDefault,
+  setHostAgentGrant,
+  setHostIdentityBinding,
+} from "./store-host-identity.js";
 export type {
   AccessCleanupPhase,
   AccessCleanupResult,

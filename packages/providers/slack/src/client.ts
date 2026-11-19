@@ -132,16 +132,27 @@ export class SlackClient {
       )
         throw new SyncError("auth", "Slack sign-in expired", { remediation: AUTH_REMEDIATION });
       if (
-        ["missing_scope", "not_in_channel", "channel_not_found", "access_denied"].includes(
-          data.error ?? "",
-        )
+        [
+          "missing_scope",
+          "not_in_channel",
+          "channel_not_found",
+          "access_denied",
+          "user_is_restricted",
+          "paid_teams_only",
+        ].includes(data.error ?? "")
       )
         throw new SyncError(
           "permission",
           "Slack cannot read this conversation with the current grant",
           { scope: method.startsWith("conversations.") ? "partition" : "source" },
         );
-      throw new SyncError("transient", "Slack could not complete this read");
+      const code = /^[a-z0-9_]{1,64}$/.test(data.error ?? "")
+        ? data.error
+        : "an unrecognized error";
+      throw new SyncError(
+        "transient",
+        `Slack could not complete this read: ${method} returned ${code}`,
+      );
     }
     this.replay.set(key, data);
     return data;

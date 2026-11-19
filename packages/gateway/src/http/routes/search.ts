@@ -17,6 +17,7 @@ import type { SearchPipeline } from "../../search/pipeline.js";
 import type { LikeSearchArgs, LikeSearchRow } from "../../search/like-search.js";
 import type Database from "better-sqlite3";
 import type { SearchPort } from "@omnesis/agent";
+import type { DocumentPreviewService } from "../../previews/service.js";
 
 type Db = Database.Database;
 
@@ -41,6 +42,25 @@ export interface SearchRoutesDeps {
   /** Read-worker gate — when wired, the legacy LIKE scan runs off the main
    *  event loop; absent, it falls back to a synchronous main-thread read. */
   ioGate?: SearchIoGate;
+  /** Adds each result's document `preview` when it has one. */
+  previews?: Pick<DocumentPreviewService, "refsFor">;
+}
+
+/** Attach each result's document `preview`, read in one lookup for the whole page. */
+export function withResultPreviews<R extends { results: Array<{ documentId: string }> }>(
+  response: R,
+  previews: SearchRoutesDeps["previews"],
+): R {
+  if (!previews || response.results.length === 0) return response;
+  const refs = previews.refsFor(response.results.map((result) => result.documentId));
+  if (refs.size === 0) return response;
+  return {
+    ...response,
+    results: response.results.map((result) => {
+      const preview = refs.get(result.documentId);
+      return preview ? { ...result, preview } : result;
+    }),
+  };
 }
 
 /**
@@ -138,7 +158,7 @@ export function mountSearchRoutes(app: RouteApp, deps: SearchRoutesDeps): void {
       const response = graphContext
         ? await searchPipeline.search(body, undefined, { graphContext: true })
         : await searchPipeline.search(body);
-      return c.json(response);
+      return c.json(withResultPreviews(response, deps.previews));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`Search failed: ${message}`);

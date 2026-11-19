@@ -10,7 +10,7 @@
  *
  * `ioGateFromScheduler(scheduler)` returns a typed `IoGate`
  * so callers (the periodic backfill orchestrators) can write
- * `compute.peopleCounts()` instead of constructing the raw enqueue.
+ * `compute.peopleCountsChunk()` instead of constructing the raw enqueue.
  *
  * All compute ops default to `background` priority — they're the read
  * halves of background work like the merge pass. There's no expectation
@@ -26,7 +26,6 @@ import type {
   AutoMergePair,
   InteractionScoresSnapshot,
   MergeEquivalenceSnapshot,
-  PeopleCountRow,
   SeedFromContactsPlan,
   TransitiveCollapseRow,
 } from "../people.js";
@@ -36,6 +35,8 @@ import type {
   PersonSortBy,
   PersonSummary,
 } from "../data/repositories/PersonRepository.js";
+import type { PersonDocumentEntry } from "../data/repositories/DocumentPeopleRepository.js";
+import type { MergeJudgeWork } from "../domain/merge/merge-judge.js";
 import type { InteractionScoresChunkResult } from "../domain/InteractionScoreService.js";
 import type { AnalyticsSweepCandidate, AnalyticsSweepPlan, SourceStatsAggregation } from "../db.js";
 import type {
@@ -90,6 +91,7 @@ import type {
   SourceUrlRecanonicalizationCursor,
   SourceUrlRecanonicalizationPlan,
 } from "../domain/SourceUrlRecanonicalization.js";
+import type { WebRedactionCursor, WebRedactionPlan } from "../sources/web/backfill.js";
 
 import type { VocabularySettings, VocabularyDocument } from "../transcribe/vocabulary/types.js";
 
@@ -109,6 +111,8 @@ export interface IoGate extends ReadPort<typeof IO_READS>, KnowledgeSelectionRea
     specs: readonly UrlCanonicalizerSpec[],
     cursor?: SourceUrlRecanonicalizationCursor,
   ): Promise<SourceUrlRecanonicalizationPlan>;
+  /** Read and redact the next page of stored web documents; see `sources/web/backfill.ts`. */
+  planWebRedactionPage(cursor?: WebRedactionCursor): Promise<WebRedactionPlan>;
   /**
    * The corpus month by month, split into what the lane has made of each
    * document. The hero picture of where the Brain stands — and a full grouped
@@ -165,6 +169,17 @@ export interface IoGate extends ReadPort<typeof IO_READS>, KnowledgeSelectionRea
     options: { sortBy?: PersonSortBy; after?: PersonBrowseCursor },
   ): Promise<PersonSummary[]>;
   /**
+   * A page of a person's documents for GET /people/:id/documents. For a person
+   * on millions of documents it is still a large read, so it runs on a read
+   * worker at user priority rather than on the main thread.
+   */
+  personDocuments(
+    personId: string,
+    options: { role?: string; limit?: number; offset?: number },
+  ): Promise<PersonDocumentEntry[]>;
+  /** Pending merge candidates due a decision-model judgement, with their evidence packs. */
+  mergeJudgeWork(limit: number): Promise<MergeJudgeWork[]>;
+  /**
    * Person lookup for the agent's `lookup_people` tool. The same heavy join as
    * browse plus up to ~limit per-candidate follow-ups; it fires on nearly every
    * agent turn (the system prompt mandates it before `search_documents`), so it
@@ -216,12 +231,10 @@ export interface IoGate extends ReadPort<typeof IO_READS>, KnowledgeSelectionRea
   /** Graph context for search's top hits, each on its own; see `enrichGraphContextHits`. */
   graphContextProvenance: AgentProvenanceReads["graphContextProvenance"];
   /**
-   * Compute `(personId, docCount, aliasCount)` for every unmerged person in
-   * one read. Heavy — a full scan of `document_people` — which is why it
-   * runs out here rather than on the writer thread.
+   * One page of `(personId, docCount, aliasCount)` for the sweep-accumulate
+   * refresh. A full scan of `document_people` is too long for this pool: a
+   * user read queued behind it waits for the whole scan.
    */
-  peopleCounts(): Promise<PeopleCountRow[]>;
-  /** Cursor-paginated variant, for the sweep-accumulate refresh. */
   peopleCountsChunk(cursor: string | null, batchSize: number): Promise<PeopleCountsChunkResult>;
   /**
    * Pick up to `perStepLimit` candidate pairs for merging. Two LIMIT 50
@@ -240,6 +253,11 @@ export interface IoGate extends ReadPort<typeof IO_READS>, KnowledgeSelectionRea
    * sum of content/title/metadata sizes. Multi-second on large sources.
    */
   sourceStatsRow(sourceId: string): Promise<SourceStatsAggregation>;
+  /**
+   * Ids of the pending merge candidates whose two sides now resolve to one
+   * identity. Pairs with the writer's `acceptCollapsedMergeCandidates`.
+   */
+  collapsedMergeCandidates(): Promise<string[]>;
   /**
    * Walk up to `limit` unresolved `document_links` rows past the
    * persisted reconcile cursor and compute the resolution for each on
@@ -489,6 +507,7 @@ const COMPUTE_OP_DEFS: readonly IoOpDef[] = [
   { name: "io.echo", priority: "background" },
   { name: "io.collectorRosterSnapshot", priority: "background" },
   { name: "io.planSourceUrlRecanonicalization", priority: "background" },
+  { name: "io.planWebRedactionPage", priority: "background" },
   { name: "io.countDocuments", priority: "background" },
   // Heavy budget: this one is a corpus scan by nature, so the slow-op alarm
   // should fire on a genuine outlier rather than on every call.
@@ -534,6 +553,8 @@ const COMPUTE_OP_DEFS: readonly IoOpDef[] = [
   },
   { name: "io.conversationRetentionCandidates", priority: "background" },
   { name: "io.browsePeople", priority: "user" },
+  { name: "io.personDocuments", priority: "user" },
+  { name: "io.mergeJudgeWork", priority: "background" },
   // The three interactive reads moved off the main event loop — user priority
   // (preempts background compute), heavy budget so the slow-op alarm only fires
   // on a genuine outlier.
@@ -548,12 +569,12 @@ const COMPUTE_OP_DEFS: readonly IoOpDef[] = [
   { name: "io.knowledgeDocumentsReadable", priority: "user", latencyBudgetMs: HEAVY_BUDGET_MS },
   { name: "io.agentSearchProvenance", priority: "user", latencyBudgetMs: HEAVY_BUDGET_MS },
   { name: "io.graphContextProvenance", priority: "user", latencyBudgetMs: HEAVY_BUDGET_MS },
-  { name: "io.peopleCounts", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
   { name: "io.peopleCountsChunk", priority: "background" },
   { name: "io.mergeCandidates", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
   { name: "io.resolvePairWinner", priority: "background" },
   { name: "io.dirtyStatsSourceIds", priority: "background" },
   { name: "io.sourceStatsRow", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
+  { name: "io.collapsedMergeCandidates", priority: "background" },
   { name: "io.linkResolutions", priority: "background", latencyBudgetMs: HEAVY_BUDGET_MS },
   {
     name: "io.seedFromContactsPlan",
@@ -591,7 +612,6 @@ const COMPUTE_OP_DEFS: readonly IoOpDef[] = [
   { name: "io.mergeEquivalences", priority: "background", latencyBudgetMs: 5_000 },
   { name: "io.mergeEquivalencesData", priority: "background", latencyBudgetMs: 5_000 },
   // 3s — full alias join scanning the entire person_aliases table.
-  // Comparable to compute.peopleCounts.
   { name: "io.autoDetectedRules", priority: "background", latencyBudgetMs: 3_000 },
   { name: "io.autoDetectData", priority: "background", latencyBudgetMs: 3_000 },
   { name: "io.mergeRulesMeta", priority: "background" },
@@ -662,6 +682,7 @@ export function ioGateFromScheduler(scheduler: Scheduler): IoGate {
     collectorRosterSnapshot: () => call("io.collectorRosterSnapshot", []),
     planSourceUrlRecanonicalization: (specs, cursor) =>
       call("io.planSourceUrlRecanonicalization", [specs, cursor]),
+    planWebRedactionPage: (cursor) => call("io.planWebRedactionPage", [cursor]),
     countDocuments: () => call("io.countDocuments", []),
     bootstrapBacklog: (recencyFloor) => call("io.bootstrapBacklog", [recencyFloor]),
     knowledgeDiscoveryByMonth: (notBefore, excludedSources = []) =>
@@ -683,6 +704,8 @@ export function ioGateFromScheduler(scheduler: Scheduler): IoGate {
     conversationRetentionCandidates: (files, cutoffMs) =>
       call("io.conversationRetentionCandidates", [files, cutoffMs]),
     browsePeople: (query, limit, options) => call("io.browsePeople", [query, limit, options]),
+    personDocuments: (personId, options) => call("io.personDocuments", [personId, options]),
+    mergeJudgeWork: (limit) => call("io.mergeJudgeWork", [limit]),
     lookupPeople: (query, limit, opts) => call("io.lookupPeople", [query, limit, opts]),
     messageCounts: (query) => call("io.messageCounts", [query]),
     enrichedMergeCandidates: (opts) => call("io.enrichedMergeCandidates", [opts]),
@@ -694,12 +717,12 @@ export function ioGateFromScheduler(scheduler: Scheduler): IoGate {
       call("io.agentSearchProvenance", [[...results], options]),
     graphContextProvenance: (hits, options) =>
       call("io.graphContextProvenance", [[...hits], options]),
-    peopleCounts: () => call("io.peopleCounts", []),
     peopleCountsChunk: (cursor, batchSize) => call("io.peopleCountsChunk", [cursor, batchSize]),
     mergeCandidates: (perStepLimit) => call("io.mergeCandidates", [perStepLimit]),
     resolvePairWinner: (a, b) => call("io.resolvePairWinner", [a, b]),
     dirtyStatsSourceIds: () => call("io.dirtyStatsSourceIds", []),
     sourceStatsRow: (sourceId) => call("io.sourceStatsRow", [sourceId]),
+    collapsedMergeCandidates: () => call("io.collapsedMergeCandidates", []),
     linkResolutions: (
       limit,
       fallbackRepresentationSourcePrefixes,

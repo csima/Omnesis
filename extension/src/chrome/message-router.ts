@@ -24,7 +24,7 @@ import {
 interface MessageSender {
   id?: string;
   url?: string;
-  tab?: { id?: number; incognito?: boolean };
+  tab?: { id?: number; incognito?: boolean; url?: string };
 }
 
 type ExclusionMessage = Extract<
@@ -36,7 +36,14 @@ export interface BackgroundMessageDeps {
   runtimeId: string;
   popupUrl: string;
   optionsUrl: string;
-  handleCapture: (message: Extract<ContentToSwMessage, { type: "capture" }>) => Promise<CaptureAck>;
+  /**
+   * `tab` is the tab that emitted the capture and the exact frame address it
+   * was sent from, which a page screenshot must still show.
+   */
+  handleCapture: (
+    message: Extract<ContentToSwMessage, { type: "capture" }>,
+    tab: { id: number; frameUrl: string | null },
+  ) => Promise<CaptureAck>;
   drain: () => Promise<void>;
   judgeEligibility: (url: string) => Promise<CaptureEligibilityResponse>;
   handlePause: (
@@ -46,6 +53,7 @@ export interface BackgroundMessageDeps {
   checkNow: () => Promise<void>;
   readPolicy: () => Promise<CapturePolicySnapshot>;
   mutateExclusions: (message: ExclusionMessage) => Promise<{ purged: number }>;
+  setScreenshots: (enabled: boolean) => Promise<void>;
   changePairing: (
     message: Extract<
       OptionsToSwMessage,
@@ -69,10 +77,15 @@ export function routeBackgroundMessage(
     isCaptureMessage(message)
   ) {
     respond(
-      deps.handleCapture(message).then((ack) => {
-        if (ack.ok && ack.accepted) runDetached(deps.drain());
-        return ack;
-      }),
+      deps
+        .handleCapture(message, {
+          id: sender.tab.id,
+          frameUrl: sender.url ?? sender.tab.url ?? null,
+        })
+        .then((ack) => {
+          if (ack.ok && ack.accepted) runDetached(deps.drain());
+          return ack;
+        }),
       sendResponse,
       () => ({ ok: false, reason: "queue-unavailable" }) satisfies CaptureAck,
     );
@@ -136,6 +149,20 @@ export function routeBackgroundMessage(
       deps
         .mutateExclusions(message)
         .then(({ purged }) => ({ ok: true, purged }) satisfies ExclusionAck),
+      sendResponse,
+      failureAck,
+    );
+    return true;
+  }
+  if (
+    (fromPopup || fromOptions) &&
+    isObjectWithType(message, "set-screenshots") &&
+    typeof (message as { enabled?: unknown }).enabled === "boolean"
+  ) {
+    respond(
+      deps
+        .setScreenshots((message as { enabled: boolean }).enabled)
+        .then(() => ({ ok: true }) satisfies PauseAck),
       sendResponse,
       failureAck,
     );

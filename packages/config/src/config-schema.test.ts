@@ -11,6 +11,8 @@ import {
   changedPathsFromPatch,
   toJsonPointer,
   resolveSourceSettings,
+  ownSourceSettings,
+  normalizeWebCaptureSite,
   type OmnesisConfig,
 } from "./config-schema.js";
 
@@ -159,6 +161,31 @@ describe("validateConfig — releaseCheck", () => {
       expect(validateConfig({ releaseCheck }).ok).toBe(false);
     },
   );
+});
+
+describe("validateConfig — webCapture.ownSites", () => {
+  test.each([
+    ["agents.example.com", "agents.example.com"],
+    ["https://Apps.Example.com/browser", "apps.example.com"],
+    ["*.apps.example.com", "apps.example.com"],
+    [".apps.example.com.", "apps.example.com"],
+    ["agents", "agents"],
+    ["192.0.2.10", "192.0.2.10"],
+    ["[fd00::1]", "[fd00::1]"],
+    ["https://[fd00::1]:8443/", "[fd00::1]"],
+  ])("normalizes %s to %s", (input, host) => {
+    expect(normalizeWebCaptureSite(input)).toBe(host);
+  });
+
+  test("accepts valid entries and rejects one that names no host", () => {
+    expect(validateConfig({ webCapture: { ownSites: ["*.apps.example.com", "agents"] } }).ok).toBe(
+      true,
+    );
+    for (const entry of ["not a host", "", "*.", "-bad-.example.com"]) {
+      const result = validateConfig({ webCapture: { ownSites: [entry] } });
+      expect(result.ok, entry).toBe(false);
+    }
+  });
 });
 
 describe("validateConfig — gateway.pushRelay", () => {
@@ -1154,6 +1181,76 @@ describe("changedPathsFromPatch", () => {
       sources: { "gmail:user@x.com": { syncInterval: "2m" } },
     });
     expect(paths).toEqual(["/sources/gmail:user@x.com/syncInterval"]);
+  });
+});
+
+describe("unlimited maxAge", () => {
+  test("is accepted on dataRetention, sources.default and a source", () => {
+    const res = validateConfig({
+      dataRetention: { maxAge: "unlimited" },
+      sources: { default: { maxAge: "unlimited" }, "google-drive": { maxAge: "unlimited" } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test("a duration is still accepted beside it, and other words are not", () => {
+    expect(validateConfig({ sources: { gmail: { maxAge: "2y" } } }).ok).toBe(true);
+    for (const word of ["all", "none", "forever", "Unlimited", "unlimited "]) {
+      const res = validateConfig({ sources: { gmail: { maxAge: word } } });
+      expect(res.ok, word).toBe(false);
+    }
+  });
+
+  test("is not a value for activityRetention, which has its own meaning", () => {
+    expect(validateConfig({ activityRetention: { maxAge: "unlimited" } }).ok).toBe(false);
+  });
+});
+
+describe("ownSourceSettings", () => {
+  const id = "gmail:maya@example.com";
+
+  test("does not copy a value the source inherits into its own block", () => {
+    const cfg: OmnesisConfig = {
+      sources: { gmail: { maxAge: "2y" }, default: { syncInterval: "5m" } },
+    };
+    expect(ownSourceSettings(cfg, id, { maxAge: "2y", syncInterval: "5m" })).toEqual({});
+  });
+
+  test("keeps a value that differs from what the broader blocks give", () => {
+    const cfg: OmnesisConfig = { sources: { gmail: { maxAge: "2y" } } };
+    expect(ownSourceSettings(cfg, id, { maxAge: "unlimited", params: { label: "INBOX" } })).toEqual(
+      {
+        maxAge: "unlimited",
+        params: { label: "INBOX" },
+      },
+    );
+  });
+
+  test("keeps a field the source's own block already sets, even when it matches", () => {
+    const cfg: OmnesisConfig = {
+      sources: { gmail: { maxAge: "2y" }, [id]: { maxAge: "2y" } },
+    };
+    expect(ownSourceSettings(cfg, id, { maxAge: "2y" })).toEqual({ maxAge: "2y" });
+  });
+
+  test("drops a field the effective settings no longer carry", () => {
+    const cfg: OmnesisConfig = { sources: { [id]: { syncInterval: "1m", maxAge: "1y" } } };
+    expect(ownSourceSettings(cfg, id, { syncInterval: "1m" })).toEqual({ syncInterval: "1m" });
+  });
+
+  test("resolves back to the effective settings it was given", () => {
+    const cfg: OmnesisConfig = {
+      sources: {
+        default: { maxAge: "1y", syncInterval: "5m" },
+        gmail: { extractAttachments: false },
+      },
+    };
+    const effective = { maxAge: "1y", syncInterval: "2m", extractAttachments: false };
+    const own = ownSourceSettings(cfg, id, effective);
+    expect(own).toEqual({ syncInterval: "2m" });
+    expect(resolveSourceSettings({ sources: { ...cfg.sources, [id]: own } }, id)).toEqual(
+      effective,
+    );
   });
 });
 

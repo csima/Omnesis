@@ -83,12 +83,14 @@
             After a page stays focused for at least five seconds, Omnesis captures its URL, domain,
             title, readable page text, visit time, focused dwell time, stable browser device ID, and
             the Chrome profile name entered above. This can include content visible only after you
-            sign in. Captures wait in a bounded local retry queue and are sent only to the gateway
-            entered above. The gateway credential, browser device ID, queue, and recent delivery
-            status are stored locally in this Chrome profile; the capture settings (pause, excluded
-            domains) are stored on your gateway and shared by every browser paired to it. Incognito
-            pages, sign-in pages and pages on excluded domains are never captured; you can pause
-            capture, exclude domains, or unpair at any time. See the
+            sign in. If page screenshots are turned on (they are off unless you turn them on), it
+            also saves a screenshot of the visible part of the page, which is not redacted. Captures
+            wait in a bounded local retry queue and are sent only to the gateway entered above. The
+            gateway credential, browser device ID, queue, and recent delivery status are stored
+            locally in this Chrome profile; the capture settings (pause, excluded domains,
+            screenshots) are stored on your gateway and shared by every browser paired to it.
+            Incognito pages, sign-in pages and pages on excluded domains are never captured; you can
+            pause capture, exclude domains, or unpair at any time. See the
             <a
               href="https://omnesis.dev/browser-extension-privacy-policy"
               target="_blank"
@@ -140,6 +142,26 @@
       </form>
       <ul id="exclusions" class="exclusions"></ul>
       <p id="exclusions-empty" class="hint">No domains excluded yet.</p>
+    </main>
+
+    <main class="card">
+      <h1>Page screenshots</h1>
+      <p class="muted">
+        When this is on, every browser paired to your gateway also saves a screenshot of the visible
+        part of each page it captures, and Omnesis shows it as the page's preview. Screenshots are
+        not redacted the way captured text is: whatever the page shows on screen is in the image. A
+        screenshot is deleted with its page. Off unless you turn it on. Chrome only lets an
+        extension take screenshots with access to all sites, so turning this on asks Chrome for that
+        in this browser; each other paired browser asks once, here.
+      </p>
+      <label class="consent" for="screenshots-toggle">
+        <input id="screenshots-toggle" type="checkbox" disabled />
+        Save a screenshot of each page
+      </label>
+      <button id="allow-screenshots" class="secondary" type="button" hidden>
+        Allow screenshots in this browser
+      </button>
+      <p id="screenshots-hint" class="hint"></p>
     </main>
 
     <div id="notes-entry" class="controls" hidden>

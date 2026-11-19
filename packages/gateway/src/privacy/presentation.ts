@@ -260,8 +260,8 @@ function readExchangeRows(
     filterParams.push(options.taskId);
   }
   if (before) {
-    filters.push("(t.created_at < ? OR (t.created_at = ? AND t.id < ?))");
-    filterParams.push(before.createdAt, before.createdAt, before.id);
+    filters.push("(t.created_at, t.id) < (?, ?)");
+    filterParams.push(before.createdAt, before.id);
   }
   const rows = db
     .prepare<unknown[], ExchangeRow>(
@@ -359,7 +359,7 @@ interface PrincipalOwnerIdentity {
 const LEGACY_PRINCIPAL_OWNER_PATTERN =
   /^principal:([^:]+):grant:([^:]+):revision:([1-9][0-9]*):credential:([^:]+):scope:[^:]+$/;
 const PRINCIPAL_OWNER_PATTERN =
-  /^principal:([^:]+):grant:([^:]+):credential:([^:]+):answer-scope:[^:]+$/;
+  /^principal:([^:]+):grant:([^:]+):credential:([^:]+):answer-scope:[^:]+(?::host:[^:]+)?$/;
 
 function parsePrincipalOwner(ownerId: string): PrincipalOwnerIdentity | null {
   const match = PRINCIPAL_OWNER_PATTERN.exec(ownerId);

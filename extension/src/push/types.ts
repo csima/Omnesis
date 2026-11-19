@@ -52,12 +52,13 @@ export interface DurableStore {
  * persistence are uniform:
  *   - `document` → `POST /documents` (content plane, `web-page` docs).
  *   - `visit`    → `POST /analytics/ingest` (analytics plane, `page_visits`).
+ *   - `preview`  → `PUT /documents/preview` (a page screenshot, after its page).
  *
  * Each carries a client-minted `id` for de-dup within the queue (so a retry
  * loop never enqueues the same item twice) and an `attempts` counter the
  * backoff schedule reads.
  */
-export type QueueItem = DocumentQueueItem | VisitQueueItem;
+export type QueueItem = DocumentQueueItem | VisitQueueItem | PreviewQueueItem;
 
 interface QueueItemBase {
   /** Stable per-item id for in-queue de-dup (NOT the document externalId). */
@@ -96,6 +97,31 @@ export interface PageVisit {
 export interface VisitQueueItem extends QueueItemBase {
   kind: "visit";
   visit: PageVisit;
+}
+
+/**
+ * A page screenshot on its way to `PUT /documents/preview`, named the way the
+ * page document it belongs to is named. `contentHash` is the page text's hash
+ * at capture time: a later capture of the same page re-takes the shot only
+ * when it changed.
+ */
+export interface PagePreviewUpload {
+  providerId: string;
+  sourceId: string;
+  externalId: string;
+  contentHash: string;
+  contentType: "image/webp" | "image/jpeg";
+  width: number;
+  height: number;
+  /** ISO-8601 time the screenshot was taken. */
+  capturedAt: string;
+  /** The encoded image, base64. */
+  image: string;
+}
+
+export interface PreviewQueueItem extends QueueItemBase {
+  kind: "preview";
+  preview: PagePreviewUpload;
 }
 
 /** Tuning for the retry/backoff schedule. All durations in milliseconds. */

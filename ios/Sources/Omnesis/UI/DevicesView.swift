@@ -305,7 +305,7 @@ struct DevicesList: View {
                     groupHeader("Live connections", count: grouped.live.count)
                     if grouped.live.isEmpty {
                         Text("No other live connections right now.")
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textMuted)
                     } else {
                         ForEach(grouped.live) { device in
@@ -396,7 +396,7 @@ struct DevicesList: View {
     private func groupHeader(_ title: String, count: Int?) -> some View {
         HStack(spacing: 8) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .tracking(0.5)
                 .foregroundStyle(Theme.textMuted)
             if let count {
@@ -409,7 +409,7 @@ struct DevicesList: View {
 
     private func countPill(_ n: Int) -> some View {
         Text("\(n)")
-            .font(.system(size: 11, weight: .medium))
+            .scaledFont(size: 11, weight: .medium)
             .foregroundStyle(Theme.textSecondary)
             .monospacedDigit()
             .padding(.horizontal, 7)
@@ -427,7 +427,7 @@ struct DevicesList: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Theme.textMuted)
                 Text("OTHER DEVICES")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .tracking(0.5)
                     .foregroundStyle(Theme.textMuted)
                 countPill(count)
@@ -504,7 +504,7 @@ struct DevicesList: View {
 
     private func noticeBanner(_ notice: Notice) -> some View {
         Text(notice.text)
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(notice.ok ? Theme.success : Theme.danger)
             .padding(Theme.Spacing.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -549,18 +549,18 @@ struct DevicesList: View {
     private func statChip(value: Int, label: String) -> some View {
         HStack(spacing: 4) {
             Text("\(value)")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textMuted)
         }
     }
 
     private var footerNote: some View {
         Text("Tap a device to see its credentials.")
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textMuted)
             .padding(.top, Theme.Spacing.sm)
     }

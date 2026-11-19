@@ -18,13 +18,13 @@ struct AgentTurnFailureView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Theme.danger)
                 Text(failure.message)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let detail = failure.detailLine {
                 Text(detail)
-                    .font(Theme.monospace(size: 10))
+                    .scaledFont(size: 10, design: .monospaced)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)

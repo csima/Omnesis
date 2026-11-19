@@ -116,7 +116,32 @@ export interface AnthropicCatalogEntry extends CatalogEntryBase {
    * unavailable; runtimes may then fall back to model-family detection.
    */
   adaptiveThinking?: boolean;
+  /**
+   * Which `thinking` request types the Models API reports the model accepts.
+   * Undefined for bundled fallback entries whose capability metadata is
+   * unavailable. A one-shot call reads it to ask the model not to think in a
+   * form that model accepts; see `anthropic-messages.ts` in the gateway.
+   */
+  thinkingTypes?: AnthropicThinkingTypes;
+  /**
+   * The `output_config.effort` levels the Models API reports the model
+   * accepts; empty when it accepts none. Undefined when unknown.
+   */
+  effortLevels?: readonly AnthropicEffortLevel[];
 }
+
+export interface AnthropicThinkingTypes {
+  /** The model decides whether and how long to think. */
+  adaptive: boolean;
+  /** Thinking off, with progress notes only between tool calls. */
+  betweenTools: boolean;
+  /** Thinking off. */
+  disabled: boolean;
+  /** Extended thinking with a token budget. */
+  enabled: boolean;
+}
+
+export type AnthropicEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type CatalogEntry = GgufCatalogEntry | AnthropicCatalogEntry;
 

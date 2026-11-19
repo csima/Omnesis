@@ -445,8 +445,10 @@ describe("popup — current page and the exclude control", () => {
   it.each([
     ["excluded-domain", "Excluded — this site is on your list"],
     ["owned-domain", "Covered by another source"],
-    ["skipped-path", "Sign-in or payment page"],
-    ["password-field", "Password field on this page"],
+    ["built-in-domain", "Mail, messaging or password site"],
+    ["own-site", "One of your own tools"],
+    ["skipped-path", "Sign-in, payment or credentials page"],
+    ["sensitive-field", "Password, code or card field on this page"],
     ["paused", "Capture paused"],
     ["removed-page", "Deleted from your index"],
     ["gateway-host", "This is your Omnesis gateway"],
@@ -565,5 +567,71 @@ describe("popup — recently synced pages", () => {
     const empty = openPopup(pairedStorage());
     await waitForState(empty, "ready");
     expect(empty.$("recent-wrap").hidden).toBe(true);
+  });
+});
+
+describe("popup — page screenshots", () => {
+  it("is hidden while unpaired", async () => {
+    const popup = openPopup({});
+    await waitForState(popup, "unpaired");
+    expect(popup.$("screenshots-wrap").hidden).toBe(true);
+  });
+
+  it("shows the shared switch, says what it saves, and turns it on through the worker", async () => {
+    const popup = openPopup(pairedStorage(), (chrome) => {
+      chrome.respond = (message) => {
+        if (message.type === "set-screenshots") {
+          chrome.storage[CAPTURE_POLICY_KEY] = cachedPolicy(
+            policyBody({ screenshots: { enabled: message.enabled === true } }),
+          );
+        }
+        return { ok: true };
+      };
+    });
+    await waitForState(popup, "ready");
+    await vi.waitFor(() => expect(popup.$("screenshots-wrap").hidden).toBe(false));
+    const toggle = popup.$("screenshots-toggle") as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(popup.text("screenshots-wrap").replace(/\s+/g, " ")).toContain(
+      "Screenshots are not redacted like text; each is deleted with its page.",
+    );
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new popup.window.Event("change"));
+    await vi.waitFor(() =>
+      expect(popup.chrome.sent("set-screenshots")).toEqual([
+        { type: "set-screenshots", enabled: true },
+      ]),
+    );
+    expect(popup.chrome.permissionRequests).toEqual([{ origins: ["<all_urls>"] }]);
+    await vi.waitFor(() =>
+      expect((popup.$("screenshots-toggle") as HTMLInputElement).checked).toBe(true),
+    );
+  });
+
+  it("does not turn screenshots on when Chrome refuses this browser the grant", async () => {
+    const popup = openPopup(pairedStorage(), (chrome) => {
+      chrome.grantScreenshots = false;
+    });
+    await waitForState(popup, "ready");
+    await vi.waitFor(() => expect(popup.$("screenshots-wrap").hidden).toBe(false));
+    const toggle = popup.$("screenshots-toggle") as HTMLInputElement;
+    toggle.checked = true;
+    toggle.dispatchEvent(new popup.window.Event("change"));
+    await vi.waitFor(() => expect(popup.chrome.permissionRequests).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(Boolean((popup.$("screenshots-toggle") as HTMLInputElement).checked)).toBe(false),
+    );
+    expect(popup.chrome.sent("set-screenshots")).toEqual([]);
+  });
+
+  it("says when screenshots are on but this browser has not been allowed to take them", async () => {
+    const popup = openPopup(
+      pairedStorage({
+        [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })),
+      }),
+    );
+    await waitForState(popup, "ready");
+    await vi.waitFor(() => expect(popup.$("screenshots-grant").hidden).toBe(false));
   });
 });

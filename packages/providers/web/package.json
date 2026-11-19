@@ -6,7 +6,8 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./capture-policy": "./src/capture-policy.ts"
+    "./capture-policy": "./src/capture-policy.ts",
+    "./redact-secrets": "./src/redact-secrets.ts"
   },
   "dependencies": {
     "@omnesis/core": "*",

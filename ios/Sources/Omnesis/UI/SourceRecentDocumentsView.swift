@@ -111,7 +111,7 @@ struct SourceRecentDocumentsView: View {
                                     onDeleted: { removeDoc(id: $0) }
                                 )
                             } label: {
-                                recentRow(doc)
+                                RecentDocumentRow(doc: doc, store: store)
                                     .padding(.horizontal, Theme.Spacing.md)
                                     .padding(.vertical, 10)
                             }
@@ -169,54 +169,6 @@ struct SourceRecentDocumentsView: View {
                 emptyState
             }
         }
-    }
-
-    private func recentRow(_ doc: RecentDocument) -> some View {
-        // Stripe lives in a leading-aligned overlay so different
-        // intrinsic content heights across rows can't shift the icon
-        // column horizontally (see comment in SearchResultRow).
-        HStack(alignment: .top, spacing: 10) {
-            SourceIconView(sourceId: doc.sourceId, store: store)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(doc.title.isEmpty ? "(untitled)" : doc.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(2)
-                metaRow(doc: doc)
-                if let preview = doc.contentPreview, !preview.isEmpty {
-                    Text(preview)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textSecondary)
-                        .lineLimit(2)
-                }
-            }
-        }
-        .padding(.leading, 13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .leading) {
-            Theme.docTypeAccent(doc.documentType)
-                .frame(width: 3)
-                .clipShape(RoundedRectangle(cornerRadius: 1.5))
-        }
-    }
-
-    @ViewBuilder
-    private func metaRow(doc: RecentDocument) -> some View {
-        let parts = recentMetaParts(doc: doc)
-        if !parts.isEmpty {
-            Text(parts.joined(separator: " · "))
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textMuted)
-                .lineLimit(1)
-        }
-    }
-
-    private func recentMetaParts(doc: RecentDocument) -> [String] {
-        var parts: [String] = []
-        if let label = docTypeLabel(doc.documentType) { parts.append(label) }
-        if let when = formatTimeAgo(doc.sourceCreatedAt) { parts.append(when) }
-        return parts
     }
 
     private var emptyState: some View {
@@ -392,7 +344,7 @@ struct RecentAnalyticsRowsView: View {
                 "\(table) · \(pagingCountLabel(rows.count, countIsPartial: paging.countIsPartial)) "
                     + "\(rows.count == 1 ? "row" : "rows")"
             )
-            .font(Theme.monospace(size: 11))
+            .scaledFont(size: 11, design: .monospaced)
             .foregroundStyle(Theme.textMuted)
             .lineLimit(1)
         }
@@ -485,6 +437,59 @@ private struct RecentAnalyticsTableRow: View {
     }
 }
 
+/// One document row in a source's recent items: icon, title, type and age,
+/// a content excerpt, and the document's preview thumbnail when it has one.
+/// The doc-type stripe sits in a leading overlay so rows of different
+/// heights never shift the icon column.
+@available(iOS 17.0, *)
+struct RecentDocumentRow: View {
+    let doc: RecentDocument
+    let store: AppStore
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            SourceIconView(sourceId: doc.sourceId, store: store)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(doc.title.isEmpty ? "(untitled)" : doc.title)
+                    .scaledFont(size: 14, weight: .semibold)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(2)
+                metaRow
+                if let preview = doc.contentPreview, !preview.isEmpty {
+                    Text(preview)
+                        .scaledFont(size: 12)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let preview = doc.preview {
+                DocumentPreviewThumbnail(preview: preview)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.leading, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) {
+            Theme.docTypeAccent(doc.documentType)
+                .frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 1.5))
+        }
+    }
+
+    @ViewBuilder
+    private var metaRow: some View {
+        let parts = [docTypeLabel(doc.documentType), formatTimeAgo(doc.sourceCreatedAt)].compactMap { $0 }
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " · "))
+                .scaledFont(size: 11)
+                .foregroundStyle(Theme.textMuted)
+                .lineLimit(1)
+        }
+    }
+}
+
 #if DEBUG
 @available(iOS 17.0, *)
 #Preview("Source recent — documents") {
@@ -495,6 +500,15 @@ private struct RecentAnalyticsTableRow: View {
                 statusesBySource: PreviewMocks.syncStatuses,
                 deviceNames: PreviewMocks.deviceNames
             ))
+    }
+}
+
+@available(iOS 17.0, *)
+#Preview("Source recent — documents with previews") {
+    NavigationStack {
+        SourceRecentPreviewWrapper(arm: .documents(PreviewMocks.recentDocumentsWithPreviews))
+            .environment(AppStore.preview())
+            .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
     }
 }
 
@@ -559,31 +573,9 @@ struct SourceRecentPreviewWrapper: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(docs.enumerated()), id: \.element.id) { idx, doc in
-                            HStack(alignment: .top, spacing: 10) {
-                                SourceIconView(sourceId: doc.sourceId, store: store)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(doc.title)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(Theme.textPrimary)
-                                    if let preview = doc.contentPreview {
-                                        Text(preview)
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(Theme.textSecondary)
-                                            .lineLimit(2)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .padding(.leading, Theme.Spacing.md + 13)
-                            .padding(.trailing, Theme.Spacing.md)
-                            .padding(.vertical, 10)
-                            .overlay(alignment: .leading) {
-                                Theme.docTypeAccent(doc.documentType)
-                                    .frame(width: 3)
-                                    .clipShape(RoundedRectangle(cornerRadius: 1.5))
-                                    .padding(.vertical, 10)
-                                    .padding(.leading, Theme.Spacing.md)
-                            }
+                            RecentDocumentRow(doc: doc, store: store)
+                                .padding(.horizontal, Theme.Spacing.md)
+                                .padding(.vertical, 10)
                             if idx < docs.count - 1 {
                                 Divider().background(Theme.borderLight).padding(.leading, 44)
                             }
@@ -610,7 +602,7 @@ struct SourceRecentPreviewWrapper: View {
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "tray")
-                            .font(.system(size: 36))
+                            .scaledFont(size: 36)
                             .foregroundStyle(Theme.textMuted)
                         Text("No recent items yet")
                             .font(.headline)

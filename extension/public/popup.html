@@ -74,6 +74,22 @@
       </p>
     </div>
 
+    <!-- The shared page-screenshot switch; shown once paired. -->
+    <div id="screenshots-wrap" class="controls" hidden>
+      <label class="consent" for="screenshots-toggle">
+        <input id="screenshots-toggle" type="checkbox" />
+        Save a screenshot of each page
+      </label>
+      <p class="hint">
+        The visible part of the page, shared by every paired browser. Screenshots are not redacted
+        like text; each is deleted with its page.
+      </p>
+      <p id="screenshots-grant" class="hint" hidden>
+        Chrome has not allowed this browser to take screenshots yet. Turn the switch off and on, or
+        use Pairing settings.
+      </p>
+    </div>
+
     <!-- Capture controls: pause buttons when active; countdown + resume when paused. -->
     <div id="controls" class="controls" hidden></div>
 

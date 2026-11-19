@@ -139,6 +139,51 @@ describe("corpus authorization", () => {
     expect(externalAnswerOwnerId(changedSources)).not.toBe(externalAnswerOwnerId(authorization));
   });
 
+  test("gives each agent of an agent host, acting for each person, its own Answer owner", () => {
+    const authorization = createCorpusAuthorization(
+      identity,
+      [
+        {
+          capability: "answer",
+          sourceMode: "all",
+          sourceIds: [],
+          releaseMode: "unreviewed",
+          policyFamilyId: null,
+          policyRevision: null,
+          privacyPolicy: null,
+        },
+      ],
+      "answer",
+    )!;
+    const unbound = externalAnswerOwnerId(authorization);
+    const caller = {
+      issuer: "https://agents.example.org",
+      person: "maya.reeves@example.com",
+      agent: "instance:researcher-1",
+    };
+    const researcher = externalAnswerOwnerId(authorization, caller);
+    const planner = externalAnswerOwnerId(authorization, {
+      ...caller,
+      agent: "instance:planner-7",
+    });
+    const forAnotherPerson = externalAnswerOwnerId(authorization, {
+      ...caller,
+      person: "jamie.lopez@example.com",
+    });
+    const fromAnotherHost = externalAnswerOwnerId(authorization, {
+      ...caller,
+      issuer: "https://agents.example.net",
+    });
+
+    expect(unbound).toMatch(
+      /^principal:principal-example:grant:grant-example:credential:credential-example:answer-scope:[A-Za-z0-9_-]+$/,
+    );
+    expect(researcher).toMatch(new RegExp(`^${unbound}:host:[A-Za-z0-9_-]+$`));
+    expect(new Set([unbound, researcher, planner, forAnotherPerson, fromAnotherHost]).size).toBe(5);
+    expect(researcher).not.toContain("maya.reeves");
+    expect(externalAnswerOwnerId(authorization, { ...caller })).toBe(researcher);
+  });
+
   test("fails closed for a stored empty allowlist and normalizes an empty denylist", () => {
     const emptyAllowlist = createCorpusAuthorization(
       identity,

@@ -15,11 +15,11 @@ struct NoteProcessingNotice: View {
         if let notice = (previewStatus ?? store.statusSnapshot?.noteAgent)?.notice {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text(notice)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Open Agent settings") { showSettings = true }
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.accent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

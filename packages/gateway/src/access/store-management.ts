@@ -7,6 +7,7 @@ import { privacyPolicyDeletionBlockedReason } from "../privacy/policy-history.js
 
 import { oauthClientAuthenticates } from "./store-clients.js";
 import { appendAudit, getActiveCredential, hashSecret } from "./store-helpers.js";
+import { releaseHostIdentityOfGoneConnection } from "./store-host-identity.js";
 import { listAccessLevels } from "./store-level-summaries.js";
 import { capabilityToRule, getGrantCapabilities } from "./store-rules.js";
 import type { Db } from "../data/types.js";
@@ -96,6 +97,7 @@ export function revokeAccessGrant(
       actorTokenId,
       now,
     });
+    releaseHostIdentityOfGoneConnection(db, grant.principal_id, actorTokenId, now);
     return true;
   })();
 }
@@ -119,6 +121,7 @@ export function revokeAccessPrincipal(
       actorTokenId,
       now,
     });
+    releaseHostIdentityOfGoneConnection(db, principalId, actorTokenId, now);
     return true;
   })();
 }

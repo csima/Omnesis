@@ -22,6 +22,7 @@ import {
   ensurePrivateDirSync,
   experimentalEnabled,
   experimentalVisible,
+  GATEWAY_PREVIEW_STORE_FILE,
   loadManifest,
   primeSecretFileKeyCache,
   resolveWorkerEntry,
@@ -30,6 +31,9 @@ import {
 import { type OmnesisConfig } from "@omnesis/config";
 import { Ontology } from "@omnesis/watch";
 import { setActivityMarker } from "@omnesis/agent";
+import { DocumentPreviewStore } from "./previews/store.js";
+import { deletePreviewsSafely } from "./previews/service.js";
+import { scheduleOrphanPreviewSweep } from "./previews/orphan-sweep.js";
 import { dotEnvKeysAtBoot } from "./load-env.js";
 import {
   resolveAnthropicApiKey,
@@ -37,13 +41,26 @@ import {
   resolveTypeSafeApiKey,
 } from "./model-credentials.js";
 import { DecisionService } from "./inference/decision/decision-service.js";
-import { createDatabase, getDocumentTitlesAndSources, openReadOnlyDatabase } from "./db.js";
+import {
+  closeDrainingWal,
+  createDatabase,
+  getDocumentTitlesAndSources,
+  openReadOnlyDatabase,
+} from "./db.js";
 import { createServer } from "./server.js";
+import { attachClientErrorResponses } from "./http/client-error.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { ReleaseCheckService } from "./release-check/service.js";
 import { createReleaseCheckTask } from "./release-check/task.js";
 import { GatewayHttpShutdown } from "./gateway-http-shutdown.js";
 import { seedWebSourceMeta } from "./sources/web/source-meta.js";
+import {
+  WEB_PAGES_REDACTION_KEY,
+  WEB_VISITS_REDACTION_KEY,
+  WebRedactionBackfill,
+  redactStoredWebVisits,
+  webRedactionIsCurrent,
+} from "./sources/web/backfill.js";
 import { dictationFeatureStatus } from "./dictation/index.js";
 import { documentsAwaitingTranscription } from "./voice-notes/index.js";
 import {
@@ -90,6 +107,7 @@ import { drainTranscriptEvictions } from "./brain/transcript-eviction.js";
 import { createActivityRetentionTask } from "./activity-retention/task.js";
 import { createAbsenceSweepTask } from "./absence/task.js";
 import { createOwnershipRepairTask } from "./analytics/ownership-repair-task.js";
+import { createTemporalProjectionRelinker } from "./analytics/projection-relink.js";
 import { directIndexWriteGate } from "./indexer/index-write-gate.js";
 import { cascadeCognitiveStateThroughGate } from "./brain/cognitive-state-cascade.js";
 import { resolveRelaySettings } from "./push/relay-settings.js";
@@ -140,6 +158,7 @@ import { reconcileConfig } from "./config-reconcile.js";
 import {
   createIndexDatabase,
   purgeUsearchSidecars,
+  getUsearchEncoding,
   getUsearchSavedSeq,
   getUsearchSavedChangeSeq,
   getUsearchBackfillCursor,
@@ -240,6 +259,7 @@ import { BackgroundJobsRegistry } from "./background-jobs/index.js";
 import { periodicJob } from "./background-jobs/scheduler-job.js";
 import { StatelessTracker } from "./background-jobs/trackers.js";
 import { derivationSlaTasks } from "./scheduler/tasks/derivation-sla.js";
+import { sweepCollapsedCandidates } from "./scheduler/tasks/backfill-helpers.js";
 import { DERIVATION_STAGES, type DerivationStage } from "./domain/DocumentDerivation.js";
 import { subscribeDerivationNudge } from "./scheduler/tasks/derivation-nudge.js";
 import { SubscriptionDeliveryService } from "./subscriptions/delivery.js";
@@ -441,6 +461,19 @@ const storageEncryption = await resolveGatewayStorageEncryptionKeys(configDir).c
 const storagePosture = storageEncryptionPosture(storageEncryption.enabled);
 log[storagePosture.level](storagePosture.message);
 
+// The document preview store. A store that will not open (a newer build's
+// schema, a damaged file) leaves the gateway running without previews rather
+// than refusing to start: nothing else depends on it.
+const previewDbPath = join(configDir, GATEWAY_PREVIEW_STORE_FILE);
+let previewStore: DocumentPreviewStore | undefined;
+try {
+  previewStore = DocumentPreviewStore.open(previewDbPath, storageEncryption.previewDbKey);
+} catch (err) {
+  log.error(
+    `The preview store could not be opened; previews are off: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
+
 // Indexer cycle / reconcile / reindex-missing cadences are resolved
 // further down against the loaded config (env > config > default) —
 // see the `runtime` object.
@@ -498,7 +531,10 @@ const indexerStatus = new IndexerStatusReporter();
 // only connection with write access from this point on.
 {
   const bootDb = createDatabase(DB_PATH, { encryptionKey: storageEncryption.mainDbKey });
-  bootDb.close();
+  const drained = closeDrainingWal(bootDb, (frames) =>
+    log.info(`draining ${frames}-frame WAL before start`),
+  );
+  if (drained.frames > 0) log.info(`drained ${drained.frames}-frame WAL in ${drained.ms}ms`);
 }
 
 // Scheduler is the single brain for "an IO task that needs to be done"
@@ -1212,6 +1248,47 @@ const analyticsDb = new AnalyticsDb(analyticsDbPath, {
   onFatal: () => requestShutdown(1),
 });
 await analyticsDb.open();
+// A rekey changes temporal projection ids in DuckDB; the annotations linking
+// them live in SQLite and follow through the move ledger. Draining it at boot
+// finishes any rekey whose links a crash left behind.
+const temporalProjectionRelinker = createTemporalProjectionRelinker({
+  ledger: analyticsDb,
+  relink: (moves) => writeGate.relinkTemporalAnnotationProjections(moves),
+  log: log.child("analytics"),
+});
+const relinkMovedTemporalProjections = (): void => {
+  temporalProjectionRelinker.drain().catch((err: unknown) => {
+    log.warn(
+      `Temporal annotation relink failed; it retries at the next projection move or boot: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
+};
+analyticsDb.onTemporalProjectionsMoved(relinkMovedTemporalProjections);
+relinkMovedTemporalProjections();
+// Web pages and visits stored before ingest redacted them are redacted in the
+// background with the shaped rules, a page per writer turn; a recorded rules
+// version makes every later boot skip the pass.
+void new WebRedactionBackfill({
+  isCurrent: () => webRedactionIsCurrent(db, WEB_PAGES_REDACTION_KEY),
+  plan: (cursor) => ioGate.planWebRedactionPage(cursor),
+  apply: (mutations, finishedKey) => writeGate.applyWebRedactionPage(mutations, finishedKey),
+})
+  .run()
+  .catch((error: unknown) =>
+    log.warn(
+      `Redacting stored web pages failed: ${error instanceof Error ? error.message : String(error)}`,
+    ),
+  );
+void redactStoredWebVisits(analyticsDb, {
+  isCurrent: () => webRedactionIsCurrent(db, WEB_VISITS_REDACTION_KEY),
+  markCurrent: async () => {
+    await writeGate.applyWebRedactionPage([], WEB_VISITS_REDACTION_KEY);
+  },
+}).catch((error: unknown) =>
+  log.warn(
+    `Redacting stored page visits failed: ${error instanceof Error ? error.message : String(error)}`,
+  ),
+);
 // Cross-store search hydration: a hit whose source declares a
 // `boundDocument` carries its co-described analytics row when the request sets
 // `includeBoundRow`. Wired here (not at pipeline construction) because the
@@ -1233,6 +1310,7 @@ const backupService = new BackupService({
   // function here keeps the backup service independent of boot ordering.
   watchDbPath: watchJournalPath(configDir),
   watchDbKeyHex: storageEncryption.watchDbKeyHex,
+  ...(previewStore ? { previewDbPath, previewDbKeyHex: storageEncryption.previewDbKeyHex } : {}),
   analyticsDbPath,
   analyticsBackup: (dest) => analyticsDb.backupTo(dest),
   minFreeDiskBytes: () => resolveRuntimeSettings(configStore.get()).minFreeDiskMb * 1024 * 1024,
@@ -1248,6 +1326,7 @@ const exportService = new ExportService({
   exportsDir,
   gatewayDbPath: DB_PATH,
   gatewayDbKeyHex: storageEncryption.mainDbKeyHex,
+  ...(previewStore ? { previewDbPath, previewDbKeyHex: storageEncryption.previewDbKeyHex } : {}),
   analyticsExport: (destDir) => analyticsDb.exportTablesToCsv(destDir),
 });
 
@@ -1703,6 +1782,7 @@ const indexerLifecycle = new IndexerLifecycle({
   indexDb,
   configDir,
   memoryBudget,
+  isUserActive: () => scheduler.isAdmissionPaused(),
   initialModelInfo: {
     name: embeddingModelName,
     path: embeddingModelPath,
@@ -2396,6 +2476,7 @@ const diskUsage = new DiskUsageMonitor(() =>
     indexDbPath,
     analyticsDbPath,
     watchDbPath: journal.path,
+    ...(previewStore ? { previewDbPath } : {}),
     transcriptsDir: cognitionTranscriptsDir(configDir),
     conversationsDir,
     modelsDir: MODELS_DIR,
@@ -2445,6 +2526,7 @@ const taskEffects: TaskEffects = {
 };
 const taskService = new TaskService(db, writeGate, briefsVirtualClock ?? Date.now, taskEffects);
 const app = createServer(db, DB_PATH, {
+  previewStore,
   interest: interestEngine,
   taskEffects,
   getDiskUsage: () => diskUsage.snapshot(),
@@ -2603,7 +2685,7 @@ const app = createServer(db, DB_PATH, {
         if (result.added + result.changed + result.removed > 0) {
           scheduler.kickPeriodic("backfill.interactionScoresRefresh");
           scheduler.kickPeriodic("backfill.peopleCountsRefresh");
-          await writeGate.sweepCollapsedMergeCandidates();
+          await sweepCollapsedCandidates(ioGate, writeGate);
         }
       }),
   },
@@ -3150,6 +3232,7 @@ function startServer() {
 
   injectWebSocket(server);
   httpShutdown.attach(server);
+  attachClientErrorResponses(server);
   return server;
 }
 
@@ -3255,6 +3338,18 @@ const backfillBundle = createBackfillTasks(
       });
       return provider ? withSpendRecording(provider, recordCompleterSpend("token-identity")) : null;
     },
+    // The merge judge asks the decision model, which is not a Brain feature:
+    // it runs whenever an operator turns it on and a decision model is assigned.
+    getDecision: () => decisionService.get(),
+    getMergeJudgeMode: () => configStore.get().gateway?.backfill?.mergeCandidates?.judge ?? "off",
+    recordMergeJudgeSpend: (modelId, inputTokens) =>
+      recordDecisionSpend(
+        writeGate,
+        cognitionSpendDay(Date.now()),
+        "merge-judge",
+        modelId,
+        inputTokens,
+      ),
     readDb: db,
     backgroundWorkerNice: runtime.backgroundWorkerNice,
     ...(storageEncryption.mainDbKey ? { derivedStoreKey: storageEncryption.mainDbKey } : {}),
@@ -3311,26 +3406,6 @@ const offNearDupInbox = subscribeNearDupInbox({
     }
   }
 }
-
-// Boot-time seed of materialized people counts. Fire-and-forget so it
-// doesn't block startIndexer() — the people-counts periodic task does the
-// same refresh on every cycle, so a delayed boot-seed is fine.
-void (async () => {
-  const startMs = Date.now();
-  try {
-    const rows = await ioGate.peopleCounts();
-    const computedMs = Date.now() - startMs;
-    const { updated } = await writeGate.upsertPeopleCounts(rows);
-    const tookMs = Date.now() - startMs;
-    log.info(
-      `startup refreshPeopleCounts in ${tookMs}ms (compute=${computedMs}ms, ${updated} of ${rows.length} rows changed)`,
-    );
-  } catch (err) {
-    log.error(
-      `startup refreshPeopleCounts failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-})();
 
 // Token-usage flush — periodic drain of the buffer the auth middleware
 // fills. One task replaces the inline Map+coalesce in server.ts.
@@ -3469,8 +3544,10 @@ const absenceSweepBundle = createAbsenceSweepTask(
     ioGate,
     indexWriteGate: directIndexWriteGate(indexDb),
     analyticsDb,
-    cascadeCognitionFor: (documentIds) =>
-      cascadeCognitiveStateThroughGate(db, writeGate, documentIds),
+    cascadeCognitionFor: async (documentIds) => {
+      await cascadeCognitiveStateThroughGate(db, writeGate, documentIds);
+      await deletePreviewsSafely(previewStore, documentIds);
+    },
     getMinObservations: () =>
       resolveRuntimeSettings(configStore.get()).snapshotAbsenceMinObservations,
     getMinAgeMs: () => resolveRuntimeSettings(configStore.get()).snapshotAbsenceMinAgeMs,
@@ -3480,6 +3557,15 @@ const absenceSweepBundle = createAbsenceSweepTask(
   scheduler,
 );
 const absenceSweepHandle = scheduler.schedule(absenceSweepBundle.task);
+
+// The backstop behind every delete path's preview cascade: previews whose
+// document is gone, left by a crash between the two deletes.
+const stopOrphanPreviewSweep = previewStore
+  ? scheduleOrphanPreviewSweep(db, previewStore, {
+      firstDelayMs: 5 * 60 * 1000,
+      intervalMs: 6 * 60 * 60 * 1000,
+    })
+  : undefined;
 void absenceSweepHandle;
 configStore.onChange((_before, _after, changedPaths) => {
   if (changedPaths.some((path) => path.startsWith("/gateway/snapshotAbsence"))) {
@@ -3859,6 +3945,7 @@ const doShutdown = async (): Promise<void> => {
           vectorWriteSeq: savedSeq,
           embedModel: model.name,
           embedDim: model.dim,
+          encoding: getUsearchEncoding(indexDb),
           ...(savedChangeSeq !== null ? { changeSeq: savedChangeSeq } : {}),
           backfillCursor: getUsearchBackfillCursor(indexDb),
         });
@@ -3922,6 +4009,12 @@ const doShutdown = async (): Promise<void> => {
     watchV2?.stop();
   } catch (err) {
     log.error(`watchV2.stop threw: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    stopOrphanPreviewSweep?.();
+    previewStore?.close();
+  } catch (err) {
+    log.error(`previewStore.close threw: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     indexDb.close();
