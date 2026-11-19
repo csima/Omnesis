@@ -1131,6 +1131,11 @@ final class PreviewSnapshotTests: XCTestCase {
     /// the home-indicator strip. That safe-area-specific behaviour is
     /// verified by hand against a real app process via the
     /// `DEMO_AGENT_PREVIEW=tall` launch route (see `OmnesisApp`).
+    ///
+    /// The capture pass can still apply the simulator screen's own insets
+    /// to a window sized for another display. `ignoresHostSafeArea` lays the
+    /// view out across the whole window instead, so a render sized for a
+    /// display other than the one the simulator is showing keeps its width.
     private func renderInWindow(
         _ view: some View,
         name: String,
@@ -1138,7 +1143,8 @@ final class PreviewSnapshotTests: XCTestCase {
         capturePresentedChrome: Bool = false,
         settle: TimeInterval = 0.6,
         size: CGSize? = nil,
-        primeLayout: Bool = false
+        primeLayout: Bool = false,
+        ignoresHostSafeArea: Bool = false
     ) {
         let isDark = scheme == .dark
         let screen = CGRect(origin: .zero, size: size ?? UIScreen.main.bounds.size)
@@ -1148,6 +1154,7 @@ final class PreviewSnapshotTests: XCTestCase {
                 .environment(\.appearanceStore, AppearanceStore(mode: isDark ? .dark : .light))
                 .preferredColorScheme(scheme)
         )
+        if ignoresHostSafeArea { host.safeAreaRegions = [] }
         host.overrideUserInterfaceStyle = isDark ? .dark : .light
         window.overrideUserInterfaceStyle = isDark ? .dark : .light
         window.rootViewController = host
@@ -4652,8 +4659,6 @@ final class PreviewSnapshotTests: XCTestCase {
     /// to the leading ~⅔ and the docked Timeline column fills the
     /// trailing ~⅓, both legible at once. The headline new layout.
     func testAgentIPadLandscapeSplitOpen() {
-        AgentLayout.idiomOverride = true
-        defer { AgentLayout.idiomOverride = nil }
         let store = AppStore.preview(agentPreview: iPadSplitSeed())
         let view = AgentView(
             menuOpen: .constant(false),
@@ -4661,15 +4666,28 @@ final class PreviewSnapshotTests: XCTestCase {
             previewCitationsOpen: true,
             previewWidth: 1366
         ).environment(store)
-        snapshot(view, name: "76-agent-ipad-landscape-split-open", size: CGSize(width: 1366, height: 1024))
+        let size = CGSize(width: 1366, height: 1024)
+        renderSized(view, name: "76-agent-ipad-landscape-split-open", size: size)
+        renderSized(view, name: "76-agent-ipad-landscape-split-open-light", scheme: .light, size: size)
+    }
+
+    /// The smaller iPad in landscape still fits the conversation, its
+    /// toolbar and the composer beside the open Timeline.
+    func testAgentIPadCompactLandscapeSplitOpen() {
+        let size = CGSize(width: 1180, height: 820)
+        let view = AgentView(
+            menuOpen: .constant(false),
+            previewLayoutMode: .sidePanel,
+            previewCitationsOpen: true,
+            previewWidth: size.width
+        ).environment(AppStore.preview(agentPreview: iPadSplitSeed()))
+        renderSized(view, name: "76c-agent-ipad-compact-landscape-split-open", size: size)
     }
 
     /// iPad landscape with the Timeline closed — the conversation spans
     /// the full width, no sticky-tab gutter (those belong to overlay
     /// mode). Confirms the split collapses cleanly to a plain chat.
     func testAgentIPadLandscapeSplitClosed() {
-        AgentLayout.idiomOverride = true
-        defer { AgentLayout.idiomOverride = nil }
         let store = AppStore.preview(agentPreview: iPadSplitSeed())
         let view = AgentView(
             menuOpen: .constant(false),
@@ -4677,15 +4695,15 @@ final class PreviewSnapshotTests: XCTestCase {
             previewCitationsOpen: false,
             previewWidth: 1366
         ).environment(store)
-        snapshot(view, name: "77-agent-ipad-landscape-split-closed", size: CGSize(width: 1366, height: 1024))
+        let size = CGSize(width: 1366, height: 1024)
+        renderSized(view, name: "77-agent-ipad-landscape-split-closed", size: size)
+        renderSized(view, name: "77-agent-ipad-landscape-split-closed-light", scheme: .light, size: size)
     }
 
     /// iPad portrait keeps the iPhone overlay: opening the Timeline
     /// slides a near-full-width drawer over the conversation. Verifies
     /// iPad-portrait == iPhone behaviour.
     func testAgentIPadPortraitOverlay() {
-        AgentLayout.idiomOverride = true
-        defer { AgentLayout.idiomOverride = nil }
         let store = AppStore.preview(agentPreview: iPadSplitSeed())
         let view = AgentView(
             menuOpen: .constant(false),
@@ -4974,9 +4992,8 @@ final class PreviewSnapshotTests: XCTestCase {
         snapshot(view.environment(store), name: "85-menu-reveal-overflowing-end")
     }
 
-    /// iPad landscape. The menu is ~1066pt wide there, which throws the Ask
-    /// capsule and the Settings button to opposite ends of the action bar —
-    /// a layout no phone-width render can show.
+    /// iPad landscape. The container is wide enough that the menu docks as a
+    /// sidebar beside the app instead of opening under it.
     func testMenuRevealOpenIPadLandscape() {
         let store = AppStore.preview(agentPreview: PreviewMocks.agentConversationsRich)
         let view = MenuRevealContainer(isOpen: .constant(true)) {
@@ -4988,11 +5005,339 @@ final class PreviewSnapshotTests: XCTestCase {
         } content: {
             AgentView(menuOpen: .constant(true))
         }
-        snapshot(
-            view.environment(store),
-            name: "86-menu-reveal-ipad-landscape",
-            size: CGSize(width: 1366, height: 1024)
+        let size = CGSize(width: 1366, height: 1024)
+        renderSized(view.environment(store), name: "86-menu-reveal-ipad-landscape", size: size)
+        renderSized(view.environment(store), name: "86-menu-reveal-ipad-landscape-light", scheme: .light, size: size)
+    }
+
+    // MARK: - iPhone Duo
+
+    /// The foldable's displays, in points: folded (outer), and open upright
+    /// and on its side (inner).
+    private static let duoOuter = CGSize(width: 466, height: 678)
+    private static let duoInnerUpright = CGSize(width: 669, height: 951)
+    private static let duoInnerOnItsSide = CGSize(width: 951, height: 669)
+
+    private func duoHome(
+        menuOpen: Bool,
+        agent: AppStore.AgentPreviewSeed = PreviewMocks.agentConversationsRich
+    )
+        -> some View {
+        let store = AppStore.preview(agentPreview: agent)
+        return MenuRevealContainer(isOpen: .constant(menuOpen)) {
+            MainMenuDrawer(
+                isOpen: .constant(menuOpen),
+                selection: .constant(.agent),
+                onOpenSettings: {}
+            )
+        } content: {
+            AgentView(menuOpen: .constant(menuOpen))
+        }
+        .environment(store)
+    }
+
+    /// Renders in a window of `size` whichever display the simulator is
+    /// showing, without that display's insets.
+    private func renderSized(_ view: some View, name: String, scheme: ColorScheme = .dark, size: CGSize) {
+        renderInWindow(view, name: name, scheme: scheme, size: size, ignoresHostSafeArea: true)
+    }
+
+    /// Folded, the outer display is a phone: the menu is still the drawer the
+    /// app slides aside to reveal.
+    func testDuoOuterDisplayMenuDrawer() {
+        renderSized(duoHome(menuOpen: true), name: "400a-duo-outer-menu-drawer", size: Self.duoOuter)
+        renderSized(
+            duoHome(menuOpen: true),
+            name: "400a-duo-outer-menu-drawer-light",
+            scheme: .light,
+            size: Self.duoOuter
         )
+    }
+
+    /// Unfolded on its side, the menu stands beside the app as a sidebar.
+    func testDuoInnerOnItsSideDockedSidebar() {
+        renderSized(duoHome(menuOpen: false), name: "400b-duo-inner-side-sidebar", size: Self.duoInnerOnItsSide)
+        renderSized(
+            duoHome(menuOpen: false),
+            name: "400b-duo-inner-side-sidebar-light",
+            scheme: .light,
+            size: Self.duoInnerOnItsSide
+        )
+    }
+
+    /// Unfolded upright: still a sidebar, with the section keeping a phone's
+    /// width beside it.
+    func testDuoInnerUprightDockedSidebar() {
+        renderSized(duoHome(menuOpen: false), name: "400c-duo-inner-upright-sidebar", size: Self.duoInnerUpright)
+    }
+
+    /// Opening the foldable with the drawer open hands the menu to the
+    /// sidebar: no scrim, no slid-aside app.
+    func testDuoInnerWithDrawerOpenShowsTheSidebar() {
+        renderSized(duoHome(menuOpen: true), name: "400d-duo-inner-drawer-open", size: Self.duoInnerOnItsSide)
+    }
+
+    /// The agent screen given the whole inner display on its side splits the
+    /// Timeline beside the conversation, as on an iPad.
+    func testDuoInnerAgentSplit() {
+        var seed = PreviewMocks.agentRichTranscript
+        seed.trailAnnotations = PreviewMocks.trailVoucherAnnotations
+        XCTAssertEqual(AgentLayout.mode(for: Self.duoInnerOnItsSide), .sidePanel)
+        let view = AgentView(
+            menuOpen: .constant(false),
+            previewLayoutMode: .sidePanel,
+            previewCitationsOpen: true,
+            previewWidth: Self.duoInnerOnItsSide.width
+        ).environment(AppStore.preview(agentPreview: seed))
+        renderSized(view, name: "400e-duo-inner-agent-split", size: Self.duoInnerOnItsSide)
+        renderSized(view, name: "400e-duo-inner-agent-split-light", scheme: .light, size: Self.duoInnerOnItsSide)
+    }
+
+    /// A conversation beside the docked sidebar keeps the phone layout, with
+    /// the Timeline as a drawer, and fits the width the sidebar leaves it.
+    func testDuoInnerConversationBesideTheSidebar() {
+        var seed = PreviewMocks.agentRichTranscript
+        seed.trailAnnotations = PreviewMocks.trailVoucherAnnotations
+        for (label, size) in [("upright", Self.duoInnerUpright), ("side", Self.duoInnerOnItsSide)] {
+            renderSized(
+                duoHome(menuOpen: false, agent: seed),
+                name: "400i-duo-inner-\(label)-conversation",
+                size: size
+            )
+        }
+    }
+
+    private func duoCapture(size: CGSize) -> some View {
+        CaptureView(speech: .preview(state: .listening), previewText: PreviewMocks.voiceEntryText)
+            .environment(AppStore.preview())
+            .environment(\.foldHinge, AdaptiveLayout.hinge(windowSize: size))
+    }
+
+    /// Tell Omnesis unfolded on its side: the mic in the leading pane, the
+    /// note and Done in the trailing one, and nothing on the crease.
+    func testDuoCaptureSideBySide() {
+        let size = Self.duoInnerOnItsSide
+        XCTAssertEqual(
+            CaptureView.arrangement(
+                hinge: AdaptiveLayout.hinge(windowSize: size),
+                frameInWindow: CGRect(origin: .zero, size: size)
+            ),
+            .sideBySide(leading: size.width / 2 - AdaptiveLayout.hingeClearance)
+        )
+        renderSized(duoCapture(size: size), name: "400f-duo-capture-side-by-side", size: size)
+        renderSized(duoCapture(size: size), name: "400f-duo-capture-side-by-side-light", scheme: .light, size: size)
+    }
+
+    /// Upright: the note above the crease, the mic and Done below it, on the
+    /// half a half-folded phone stands on.
+    func testDuoCaptureStacked() {
+        let size = Self.duoInnerUpright
+        XCTAssertEqual(
+            CaptureView.arrangement(
+                hinge: AdaptiveLayout.hinge(windowSize: size),
+                frameInWindow: CGRect(origin: .zero, size: size)
+            ),
+            .stacked(
+                top: size.height / 2 - AdaptiveLayout.hingeClearance,
+                bottom: size.height / 2 - AdaptiveLayout.hingeClearance
+            )
+        )
+        renderSized(duoCapture(size: size), name: "400g-duo-capture-stacked", size: size)
+    }
+
+    // MARK: - Device and text-size matrix
+
+    /// Current iPhones and iPads, in points, upright unless named otherwise.
+    private static let matrixDevices: [(name: String, size: CGSize)] = [
+        ("se", CGSize(width: 375, height: 667)),
+        ("iphone-e", CGSize(width: 390, height: 844)),
+        ("iphone", CGSize(width: 402, height: 874)),
+        ("air", CGSize(width: 420, height: 912)),
+        ("pro-max", CGSize(width: 440, height: 956)),
+        ("duo-outer", CGSize(width: 466, height: 678)),
+        ("duo-inner-side", CGSize(width: 951, height: 669)),
+        ("ipad-mini", CGSize(width: 744, height: 1133)),
+        ("ipad-air-side", CGSize(width: 1180, height: 820)),
+        ("ipad-pro-side", CGSize(width: 1376, height: 1032)),
+    ]
+
+    /// The default text size and the largest the app allows on every device;
+    /// the largest standard size on the smallest phone.
+    private static let matrixTextSizes: [(name: String, size: DynamicTypeSize)] = [
+        ("default", .large),
+        ("ax3", .accessibility3),
+    ]
+
+    private func renderMatrix(_ surface: String, _ build: (CGSize) -> some View) {
+        for device in Self.matrixDevices {
+            for text in Self.matrixTextSizes {
+                renderSized(
+                    build(device.size).dynamicTypeSize(text.size),
+                    name: "500-\(surface)-\(device.name)-\(text.name)",
+                    size: device.size
+                )
+            }
+        }
+        renderSized(
+            build(Self.matrixDevices[0].size).dynamicTypeSize(.xxxLarge),
+            name: "500-\(surface)-se-xxxl",
+            size: Self.matrixDevices[0].size
+        )
+    }
+
+    func testMatrixHome() {
+        // At the default text size every design size is exactly as designed.
+        for size: CGFloat in [9, 11, 13, 15, 17, 20, 22, 28, 34] {
+            XCTAssertEqual(ScaledType.size(size, at: .large), size, accuracy: 0.01)
+        }
+        XCTAssertGreaterThan(ScaledType.size(17, at: .accessibility3), 17)
+        renderMatrix("home") { _ in
+            MenuRevealContainer(isOpen: .constant(false)) {
+                MainMenuDrawer(isOpen: .constant(false), selection: .constant(.agent), onOpenSettings: {})
+            } content: {
+                AgentView(menuOpen: .constant(false))
+            }
+            .environment(AppStore.preview(agentPreview: PreviewMocks.agentConversationsRich))
+        }
+    }
+
+    func testMatrixHomeMenuOpen() {
+        renderMatrix("menu") { _ in
+            MenuRevealContainer(isOpen: .constant(true)) {
+                MainMenuDrawer(isOpen: .constant(true), selection: .constant(.agent), onOpenSettings: {})
+            } content: {
+                AgentView(menuOpen: .constant(true))
+            }
+            .environment(AppStore.preview(agentPreview: PreviewMocks.agentConversationsRich))
+        }
+    }
+
+    func testMatrixAgentTranscript() {
+        renderMatrix("agent") { _ in
+            AgentView(menuOpen: .constant(false))
+                .environment(AppStore.preview(agentPreview: PreviewMocks.agentRichTranscript))
+        }
+    }
+
+    func testMatrixCapture() {
+        renderMatrix("capture") { size in
+            CaptureView(speech: .preview(state: .listening), previewText: PreviewMocks.voiceEntryText)
+                .environment(AppStore.preview())
+                .environment(\.foldHinge, AdaptiveLayout.hinge(windowSize: size))
+        }
+    }
+
+    func testMatrixSources() {
+        renderMatrix("sources") { _ in
+            SourcesView(menuOpen: .constant(false)).environment(AppStore.preview(
+                sources: PreviewMocks.sources,
+                statusesBySource: PreviewMocks.syncStatuses,
+                deviceNames: PreviewMocks.deviceNames,
+                statusSnapshot: PreviewMocks.statusSnapshot,
+                indexStats: PreviewMocks.indexStats
+            ))
+        }
+    }
+
+    func testMatrixPeople() {
+        renderMatrix("people") { _ in
+            PeoplePreviewWrapper().environment(AppStore.preview())
+        }
+    }
+
+    func testMatrixSettings() {
+        renderMatrix("settings") { _ in
+            SettingsView(initialDestination: .root, previewData: true).environment(AppStore.preview())
+        }
+    }
+
+    /// The outer display's system strip down the trailing side, which the
+    /// app's content stays clear of.
+    private static let duoOuterStripWidth: CGFloat = 84
+
+    /// Folded, with the Timeline closed: nothing of the parked panel may show
+    /// in the strip beside the conversation. The strip is stood in for by a
+    /// trailing safe-area inset of its width, which the render shows as
+    /// background.
+    func testDuoOuterClosedTimelineStaysOutOfTheStrip() {
+        var seed = PreviewMocks.agentRichTranscript
+        seed.trailAnnotations = PreviewMocks.trailVoucherAnnotations
+        let view = AgentView(menuOpen: .constant(false))
+            .environment(AppStore.preview(agentPreview: seed))
+            .safeAreaInset(edge: .trailing, spacing: 0) {
+                Color.clear.frame(width: Self.duoOuterStripWidth)
+            }
+        renderSized(view, name: "400j-duo-outer-timeline-closed-strip", size: Self.duoOuter)
+    }
+
+    // MARK: - iPhone Duo — accessibility
+
+    /// At an accessibility text size the docked sidebar widens so its rows
+    /// stay legible, on the inner display on its side.
+    func testDuoInnerOnItsSideSidebarLargeText() {
+        renderSized(
+            duoHome(menuOpen: false).dynamicTypeSize(.accessibility3),
+            name: "401a-duo-inner-side-sidebar-ax3",
+            size: Self.duoInnerOnItsSide
+        )
+    }
+
+    /// Upright at an accessibility text size the sidebar would leave the
+    /// section too narrow, so the menu stays a drawer and the section keeps
+    /// the full width.
+    func testDuoInnerUprightLargeTextKeepsTheDrawer() {
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: Self.duoInnerUpright.width, largeText: true))
+        renderSized(
+            duoHome(menuOpen: false).dynamicTypeSize(.accessibility3),
+            name: "401b-duo-inner-upright-ax3",
+            size: Self.duoInnerUpright
+        )
+    }
+
+    /// Upright at an accessibility text size the stacked halves are too short
+    /// for the note, so Tell Omnesis keeps its single column.
+    func testDuoCaptureUprightLargeTextKeepsTheColumn() {
+        let size = Self.duoInnerUpright
+        XCTAssertEqual(
+            CaptureView.arrangement(
+                hinge: AdaptiveLayout.hinge(windowSize: size),
+                frameInWindow: CGRect(origin: .zero, size: size),
+                largeText: true
+            ),
+            .column
+        )
+        renderSized(
+            duoCapture(size: size).dynamicTypeSize(.accessibility3),
+            name: "401c-duo-capture-upright-ax3",
+            size: size
+        )
+    }
+
+    /// On its side the panes are tall enough at an accessibility text size,
+    /// so the mic stays clear of the crease.
+    func testDuoCaptureSideBySideLargeText() {
+        let size = Self.duoInnerOnItsSide
+        renderSized(
+            duoCapture(size: size).dynamicTypeSize(.accessibility3),
+            name: "401d-duo-capture-side-by-side-ax3",
+            size: size
+        )
+    }
+
+    /// Beside a docked sidebar the crease falls near the capture surface's
+    /// leading edge, too close for two panes: it stays one column, whose
+    /// centre is already clear of the crease.
+    func testDuoCaptureBesideTheSidebarStaysOneColumn() {
+        let size = Self.duoInnerOnItsSide
+        let sidebar = MenuReveal.sidebarWidth(forContainerWidth: size.width)
+        XCTAssertEqual(
+            CaptureView.arrangement(
+                hinge: AdaptiveLayout.hinge(windowSize: size),
+                frameInWindow: CGRect(x: sidebar, y: 0, width: size.width - sidebar, height: size.height)
+            ),
+            .column
+        )
+        renderSized(duoCapture(size: Self.duoOuter), name: "400h-duo-outer-capture", size: Self.duoOuter)
     }
 
     /// The attention banner rides with the app rather than hanging over the

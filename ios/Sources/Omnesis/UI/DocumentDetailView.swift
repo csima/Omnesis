@@ -258,11 +258,11 @@ struct DocumentDetailView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.accent)
             Text("\(count)")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
         }
         .padding(.horizontal, 6)
@@ -327,12 +327,12 @@ struct DocumentDetailView: View {
             HStack(spacing: 6) {
                 FileTypePill(mimeType: doc.metadataString("mimeType"), filename: doc.title)
                 Text(textExcludingDocLabel(doc: doc))
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textSecondary)
             }
         } else {
             Text(text)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -594,7 +594,7 @@ struct DocumentDetailPreviewWrapper: View {
                             .font(.title3.bold())
                             .foregroundStyle(Theme.textPrimary)
                         Text(meta)
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                     }
                 }
@@ -655,7 +655,7 @@ struct NotesDayPreviewWrapper: View {
                             .font(.title3.bold())
                             .foregroundStyle(Theme.textPrimary)
                         Text("Notes · note")
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                     }
                 }
@@ -696,11 +696,11 @@ private struct PreviewQuickFact: View {
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.accent)
             Text("\(count)")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textMuted)
         }
         .padding(.horizontal, 6)

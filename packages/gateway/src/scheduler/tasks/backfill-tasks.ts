@@ -35,6 +35,7 @@ import {
 import { withResolvedTargets } from "../../domain/LinkExtraction.js";
 import { classifyTokens } from "../../token-identity-classifier.js";
 import { DEFAULT_MERGE_CANDIDATE_MAX_RESULTS } from "../../merge-candidates.js";
+import { MERGE_JUDGE_MAX_PER_PASS, runMergeJudgePass } from "../../domain/merge/merge-judge.js";
 import { SQLITE_CATALOG_TABLES, type SqliteTableStatsRow } from "../../sqlite-catalog.js";
 import {
   occRefreshTask,
@@ -969,8 +970,17 @@ export function mergeCandidatesDetectTask(
           reconciled = (await writeGate.reconcilePendingMergeCandidates(proposals)).deleted;
         }
         // Promote the structurally high-confidence survivors to reversible system
-        // merges so only the uncertain ones remain for the operator to review.
-        const { approved } = await writeGate.autoApproveHighConfidenceCandidates();
+        // merges so only the uncertain ones remain for the operator to review —
+        // unless the merge judge is deciding, in which case name shape alone
+        // never merges anyone: the decision model reads each candidate instead.
+        const judging =
+          opts.getMergeJudgeMode?.() === "enforce" && (opts.getDecision?.() ?? null) !== null;
+        const { approved } = judging
+          ? { approved: 0 }
+          : await writeGate.autoApproveHighConfidenceCandidates();
+        if (judging && result.inserted + result.refreshed > 0) {
+          opts.kickPeriodic("backfill.mergeJudge");
+        }
         const tookMs = Date.now() - startMs;
         trackers.mergeCandidatesDetect.recordSweepCompleted({
           checked: proposals.length,
@@ -982,6 +992,56 @@ export function mergeCandidatesDetectTask(
           );
         }
         return { idle: false, detected: true as const, approved };
+      });
+    },
+  };
+}
+
+/** Cadence of the merge judge while it has candidates to judge, and once it has none. */
+const MERGE_JUDGE_INTERVAL_MS = 2 * 60_000;
+const MERGE_JUDGE_IDLE_MS = 30 * 60_000;
+
+/**
+ * The merge judge: the decision model reads each pending merge candidate's
+ * evidence and decides whether its two sides are one person. See
+ * `domain/merge/merge-judge.ts`. Idle when the judge is off, no decision model
+ * is assigned, or nothing is due.
+ */
+export function mergeJudgeTask(opts: BackfillTaskOptsInternal): PeriodicTask<unknown, IdleResult> {
+  const { ioGate, writeGate, log, trackers } = opts;
+  const taskName = "backfill.mergeJudge";
+  const shadowSeen = new Set<string>();
+  return {
+    name: taskName,
+    runner: "main",
+    priority: "background",
+    periodMs: MERGE_JUDGE_INTERVAL_MS,
+    idlePeriodMs: MERGE_JUDGE_IDLE_MS,
+    startDelayMs: 150_000,
+    initialArgs: undefined,
+    isIdle: isIdleResult,
+    async run() {
+      return runBackfillTick(taskName, log, async () => {
+        const mode = opts.getMergeJudgeMode?.() ?? "off";
+        const decision = mode === "off" ? null : (opts.getDecision?.() ?? null);
+        if (!decision) return { idle: true };
+        trackers.mergeJudge.recordSweepStarted();
+        const res = await runMergeJudgePass({
+          mode,
+          decision,
+          listWork: (limit) => ioGate.mergeJudgeWork(limit),
+          apply: (input) => writeGate.applyMergeAdjudication(input),
+          recordSpend: opts.recordMergeJudgeSpend ?? (() => Promise.resolve()),
+          log: log.child("merge-judge"),
+          shadowSeen,
+        });
+        trackers.mergeJudge.recordSweepCompleted({
+          checked: res.judged + res.unavailable,
+          affected: mode === "enforce" ? res.merge + res.distinct : 0,
+        });
+        if (mode === "enforce" && res.merge > 0) opts.kickPeriodic("backfill.mergeRulesEval");
+        // A full pass means more may be due; an unanswered one waits for the idle delay.
+        return { idle: res.judged < MERGE_JUDGE_MAX_PER_PASS || res.unavailable > 0 };
       });
     },
   };

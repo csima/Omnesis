@@ -18,6 +18,45 @@ extension MenuReveal {
     }
 }
 
+/// How the main menu is on screen, published by `MenuRevealContainer` to
+/// everything inside it: a drawer the app slides aside to reveal, or a
+/// sidebar docked beside the app on a wide container.
+enum MenuPresentation: Equatable {
+    case drawer
+    case sidebar(collapsed: Bool)
+
+    var isSidebar: Bool {
+        if case .sidebar = self { return true }
+        return false
+    }
+
+    /// Whether the menu is standing on screen without having been opened.
+    var showsSidebar: Bool {
+        self == .sidebar(collapsed: false)
+    }
+}
+
+private struct MenuPresentationKey: EnvironmentKey {
+    static let defaultValue: MenuPresentation = .drawer
+}
+
+private struct ToggleSidebarKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var menuPresentation: MenuPresentation {
+        get { self[MenuPresentationKey.self] }
+        set { self[MenuPresentationKey.self] = newValue }
+    }
+
+    /// Shows or hides the docked sidebar. Nil while the menu is a drawer.
+    var toggleSidebar: (() -> Void)? {
+        get { self[ToggleSidebarKey.self] }
+        set { self[ToggleSidebarKey.self] = newValue }
+    }
+}
+
 /// Frames of the regions that own horizontal drags themselves.
 ///
 /// A reference box rather than `@State`: the frames change on every frame of
@@ -95,9 +134,18 @@ extension View {
 /// lay out alone — `offset` and `mask` are draw-time only — so the app keeps
 /// its own safe areas, and the width the offset is measured against is read
 /// from a background probe rather than a wrapping `GeometryReader`.
+///
+/// From `MenuReveal.dockMinimumWidth` up — the inner display of a foldable
+/// iPhone, an iPad — the menu docks as a sidebar beside the app instead, and
+/// the toolbar button shows or hides it. Both modes keep the same view tree:
+/// docking only pads the app clear of the sidebar and parks the reveal at
+/// rest, so folding or unfolding mid-task never rebuilds the section and the
+/// user stays exactly where they were.
 @available(iOS 17.0, *)
 struct MenuRevealContainer<Menu: View, Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var isOpen: Bool
     /// Freezes the reveal at a fixed point of its travel (0 closed, 1 open),
     /// ignoring `isOpen` and any drag. Previews and snapshot tests use it to
@@ -118,6 +166,10 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
     @State private var dragDistance: CGFloat = 0
     @State private var exclusions = MenuRevealExclusions()
     @State private var feedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
+    /// Whether the user has hidden the docked sidebar. Per scene, so it
+    /// survives a relaunch and a fold, and means nothing while the menu is a
+    /// drawer.
+    @SceneStorage("menuReveal.sidebarCollapsed") private var sidebarCollapsed = false
 
     init(
         isOpen: Binding<Bool>,
@@ -141,7 +193,31 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
         isOpen ? travel : 0
     }
 
+    /// Whether the menu stands beside the app rather than under it.
+    private var docked: Bool {
+        width > 0 && MenuReveal.docksMenu(containerWidth: width, largeText: dynamicTypeSize.isAccessibilitySize)
+    }
+
+    private var sidebarVisible: Bool {
+        docked && !sidebarCollapsed
+    }
+
+    private var sidebarWidth: CGFloat {
+        MenuReveal.sidebarWidth(forContainerWidth: width, largeText: dynamicTypeSize.isAccessibilitySize)
+    }
+
+    private var sidebarToggle: (() -> Void)? {
+        guard docked else { return nil }
+        return { toggleSidebar() }
+    }
+
+    private var presentation: MenuPresentation {
+        docked ? .sidebar(collapsed: sidebarCollapsed) : .drawer
+    }
+
     private var progress: CGFloat {
+        // Docked, the reveal has nothing to do: the app never slides.
+        if docked { return 0 }
         if let progressOverride { return MenuReveal.clamped(unit: progressOverride) }
         return MenuReveal.progress(
             restingDistance: restingDistance,
@@ -153,7 +229,8 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
     /// Width the menu lays out in. `nil` before first layout, which leaves it
     /// unconstrained for that one frame rather than collapsing it to nothing.
     private var menuWidth: CGFloat? {
-        width > 0 ? travel : nil
+        guard width > 0 else { return nil }
+        return docked ? sidebarWidth : travel
     }
 
     var body: some View {
@@ -168,22 +245,47 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
                 // Settings button at its trailing edge, underneath the
                 // standing strip where they are permanently unreachable.
                 .frame(width: menuWidth, alignment: .leading)
+                // A hidden sidebar slides out past the leading edge rather
+                // than vanishing, so showing it again reads as the same panel
+                // coming back. With Reduce Motion it fades in place instead.
+                .offset(x: docked && !sidebarVisible && !reduceMotion ? -sidebarWidth : 0)
+                .opacity(docked && !sidebarVisible && reduceMotion ? 0 : 1)
+                // Docked, the menu is a region of its own that VoiceOver's
+                // rotor can jump to, rather than rows run into the section.
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(docked ? "Sidebar" : "Menu")
                 // Inert until the menu has fully arrived, so a finger that
                 // lands on a row and then swipes the app back over it does not
                 // also fire that row on release.
-                .disabled(progress < 1)
+                .disabled(docked ? !sidebarVisible : progress < 1)
                 // Hidden from VoiceOver on the *committed* state, not on
                 // `progress`: a pair of thresholds either side of a moving
                 // value leaves mid-travel with both layers hidden and nothing
                 // at all to read.
-                .accessibilityHidden(!isOpen)
+                .accessibilityHidden(docked ? !sidebarVisible : !isOpen)
             contentLayer
+                // Applied outside every layer of the app's own drawing, so
+                // the room left for the sidebar is transparent and the menu
+                // beneath shows through it.
+                .padding(.leading, sidebarVisible ? sidebarWidth : 0)
+        }
+        .environment(\.menuPresentation, presentation)
+        .environment(\.toggleSidebar, sidebarToggle)
+        // Unfolding with the drawer open hands its job to the sidebar; the
+        // drawer must not still be "open" when the window narrows again.
+        .onChange(of: docked) { _, nowDocked in
+            if nowDocked, isOpen {
+                isOpen = false
+                dragDistance = 0
+            }
         }
         .background {
             GeometryReader { geo in
                 Color.clear
-                    .onAppear { width = geo.size.width }
-                    .onChange(of: geo.size.width) { _, newWidth in width = newWidth }
+                    .onAppear { width = MenuReveal.settledWidth(current: width, measured: geo.size.width) }
+                    .onChange(of: geo.size.width) { _, newWidth in
+                        width = MenuReveal.settledWidth(current: width, measured: newWidth)
+                    }
             }
         }
         .coordinateSpace(.named(MenuReveal.coordinateSpace))
@@ -204,12 +306,14 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
                         width: width,
                         isOpen: isOpen,
                         exclusions: exclusions.frames
-                    ) == .horizontal && progressOverride == nil
+                    ) == .horizontal && progressOverride == nil && !docked
                     if accepted { feedbackGenerator.prepare() }
                     return accepted
                 },
+                // A docked sidebar is never dragged, so the leading edge goes
+                // back to whatever scrolls there.
                 claimsEdge: { start in
-                    progressOverride == nil && MenuReveal.claimsEdge(startX: start.x, isOpen: isOpen)
+                    progressOverride == nil && !docked && MenuReveal.claimsEdge(startX: start.x, isOpen: isOpen)
                 },
                 onChanged: { translation in
                     dragDistance = MenuReveal.clampDragDistance(
@@ -262,6 +366,15 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
                 revealShape
                     .strokeBorder(Theme.border.opacity(Double(progress)), lineWidth: 1)
                     .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+            // The docked sidebar's edge: the same hairline the reveal draws
+            // on its cut edge, standing for as long as the sidebar does.
+            .overlay(alignment: .leading) {
+                Theme.border
+                    .frame(width: 1)
+                    .ignoresSafeArea()
+                    .opacity(sidebarVisible ? 1 : 0)
                     .allowsHitTesting(false)
             }
             // The shadow is cast by a bare shape *behind* the app rather than
@@ -345,6 +458,13 @@ struct MenuRevealContainer<Menu: View, Content: View>: View {
     private func close() {
         withAnimation(MenuReveal.openCloseAnimation) { isOpen = false }
     }
+
+    private func toggleSidebar() {
+        withAnimation(reduceMotion ? nil : MenuReveal.openCloseAnimation) { sidebarCollapsed.toggle() }
+        // VoiceOver focus inside a sidebar that has just gone would be left on
+        // nothing; tell it the layout changed so it lands on what is there.
+        UIAccessibility.post(notification: .layoutChanged, argument: nil)
+    }
 }
 
 #if DEBUG
@@ -357,7 +477,7 @@ private struct MenuRevealPreviewContent: View {
             HStack {
                 Image(systemName: "line.3.horizontal").foregroundStyle(Theme.textPrimary)
                 Spacer()
-                Text("Ask").font(.system(size: 17, weight: .semibold))
+                Text("Ask").scaledFont(size: 17, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Image(systemName: "square.and.pencil").foregroundStyle(Theme.textPrimary)
@@ -381,10 +501,10 @@ private struct MenuRevealPreviewContent: View {
 private struct MenuRevealPreviewMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            Text("Omnesis").font(.system(size: 22, weight: .semibold))
+            Text("Omnesis").scaledFont(size: 22, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
             ForEach(["Search", "Tasks", "Sources", "People"], id: \.self) { label in
-                Text(label).font(.system(size: 18)).foregroundStyle(Theme.textPrimary)
+                Text(label).scaledFont(size: 18).foregroundStyle(Theme.textPrimary)
             }
             Spacer()
         }

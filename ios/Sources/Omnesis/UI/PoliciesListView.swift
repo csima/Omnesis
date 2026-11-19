@@ -50,7 +50,7 @@ struct PoliciesListView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 Text("A policy is the text an answer is judged against before it leaves Omnesis. "
                     + "Policies can only be edited on the web portal.")
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,19 +167,19 @@ struct PolicyFamilyRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small))
             VStack(alignment: .leading, spacing: 3) {
                 Text(privacyPolicyDisplayName(family.name))
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(
                     "\(privacyPolicyShortRevision(family.currentRevision)) · "
                         + privacyPolicyGovernanceLine(grantCount: family.affectedGrantIds.count)
                 )
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.textSecondary)
                 .monospacedDigit()
                 if isDefault {
                     Text("Default policy")
-                        .font(.system(size: 10, weight: .semibold))
+                        .scaledFont(size: 10, weight: .semibold)
                         .foregroundStyle(Theme.textMuted)
                         .textCase(.uppercase)
                         .tracking(0.5)

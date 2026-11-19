@@ -35,6 +35,8 @@ import {
   type PersonBrowseCursor,
   type PersonSortBy,
 } from "../data/repositories/PersonRepository.js";
+import { getPersonDocuments } from "../data/repositories/DocumentPeopleRepository.js";
+import { listMergeJudgeWork } from "../domain/merge/merge-judge.js";
 import { assemblePersonLookup } from "../domain/person-lookup.js";
 import { countMessagesByPerson, type MessageCountsQuery } from "../domain/message-counts.js";
 import { likeSearchDocuments } from "../search/like-search.js";
@@ -239,6 +241,18 @@ export const ioHandlers = {
     limit: number,
     options: { sortBy?: PersonSortBy; after?: PersonBrowseCursor },
   ) => searchPeople(db, query, limit, options),
+
+  // A page of a person's documents (GET /people/:id/documents). On the main
+  // thread, a person on millions of documents froze the gateway for minutes.
+  "io.personDocuments": (
+    db: Db,
+    personId: string,
+    options: { role?: string; limit?: number; offset?: number },
+  ) => getPersonDocuments(db, personId, options),
+
+  // The merge judge's evidence packs: bounded per candidate, but they read
+  // documents and co-interactors of people who can sit on millions of them.
+  "io.mergeJudgeWork": (db: Db, limit: number) => listMergeJudgeWork(db, limit),
 
   // Person lookup (agent `lookup_people`). The same heavy `searchPeople` join
   // as browse, plus up to ~limit per-candidate follow-ups; on the main thread

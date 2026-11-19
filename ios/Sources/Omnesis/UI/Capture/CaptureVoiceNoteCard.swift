@@ -35,11 +35,11 @@ struct CaptureVoiceNoteCard: View {
                     .frame(width: 34)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(title) · \(VoiceNoteCaptureState.clock(duration))")
-                        .font(.system(size: 17, weight: .semibold))
+                        .scaledFont(size: 17, weight: .semibold)
                         .monospacedDigit()
                         .foregroundStyle(Theme.textPrimary)
                     Text("Your gateway will transcribe it.")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.textSecondary)
                 }
                 .accessibilityElement(children: .ignore)

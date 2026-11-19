@@ -118,7 +118,7 @@ struct RepairDeviceForm: View {
 
                 if let error {
                     Text(error)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.danger)
                 }
 
@@ -128,7 +128,7 @@ struct RepairDeviceForm: View {
                     HStack {
                         if submitting { ProgressView().controlSize(.small) }
                         Text(submitting ? "Generating…" : "Generate repair code")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -196,7 +196,7 @@ struct PairDeviceForm: View {
 
                 if let error {
                     Text(error)
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.danger)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -207,7 +207,7 @@ struct PairDeviceForm: View {
                     HStack {
                         if submitting { ProgressView().controlSize(.small) }
                         Text(submitting ? "Generating…" : "Generate pairing code")
-                            .font(.system(size: 14, weight: .semibold))
+                            .scaledFont(size: 14, weight: .semibold)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -222,7 +222,7 @@ struct PairDeviceForm: View {
     private func field(_ title: String, @ViewBuilder _ control: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.textSecondary)
             control()
         }
@@ -343,7 +343,7 @@ struct PairingResultView: View {
                     id: \.self
                 ) { command in
                     Text(command)
-                        .font(.system(size: 12, design: .monospaced))
+                        .scaledFont(size: 12, design: .monospaced)
                         .foregroundStyle(Theme.textPrimary)
                         .textSelection(.enabled)
                         .padding(Theme.Spacing.sm)
@@ -367,11 +367,11 @@ struct PairingResultView: View {
     private var codeBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("PAIRING CODE")
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
                 .tracking(0.6)
                 .foregroundStyle(Theme.textMuted)
             Text(pending.pairingCode)
-                .font(.system(size: 22, weight: .bold, design: .monospaced))
+                .scaledFont(size: 22, weight: .bold, design: .monospaced)
                 .foregroundStyle(Theme.textPrimary)
                 .textSelection(.enabled)
             ExpiryCountdown(expiresAt: pending.expiresAt)
@@ -384,7 +384,7 @@ struct PairingResultView: View {
         if identities.count > 1 {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(repairDeviceName.map { "Address \($0) will connect to" } ?? "Address the new device will connect to")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.textSecondary)
                 Picker("Host", selection: $selectedIdx) {
                     ForEach(Array(hosts.enumerated()), id: \.offset) { idx, host in
@@ -407,7 +407,7 @@ struct PairingResultView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     HStack(spacing: Theme.Spacing.sm) {
                         Text("Or paste this payload manually")
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.textSecondary)
                         Spacer(minLength: 0)
                         Button {
@@ -415,14 +415,14 @@ struct PairingResultView: View {
                             copied = true
                         } label: {
                             Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                                .font(.system(size: 12, weight: .medium))
+                                .scaledFont(size: 12, weight: .medium)
                                 .foregroundStyle(Theme.accent)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Copy pairing payload")
                     }
                     Text(payload)
-                        .font(.system(size: 10, design: .monospaced))
+                        .scaledFont(size: 10, design: .monospaced)
                         .foregroundStyle(Theme.textMuted)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -466,7 +466,7 @@ struct ExpiryCountdown: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let remaining = max(0, (expiresAt - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
             Text(remaining > 0 ? "expires in \(remaining)s" : "expired — generate a new code")
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(remaining > 0 ? Theme.textMuted : Theme.danger)
         }
     }

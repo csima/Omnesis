@@ -127,17 +127,17 @@ struct HealthSampleProbeView: View {
                         ForEach(group.rows) { row in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(row.uuid)
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .scaledFont(size: 11, design: .monospaced)
                                     .foregroundStyle(Theme.textPrimary)
                                 Text(HealthSampleProbe.format(row.endDate))
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .scaledFont(size: 11, design: .monospaced)
                                     .foregroundStyle(Theme.textMuted)
                             }
                             .textSelection(.enabled)
                         }
                     } header: {
                         Text(group.typeIdentifier)
-                            .font(.system(size: 11, design: .monospaced))
+                            .scaledFont(size: 11, design: .monospaced)
                             .textCase(nil)
                     }
                     .listRowBackground(Theme.bgSecondary)

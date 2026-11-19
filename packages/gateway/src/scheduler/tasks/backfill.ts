@@ -41,6 +41,7 @@ import {
   mergeRulesEvalTask,
   autoDetectTask,
   mergeCandidatesDetectTask,
+  mergeJudgeTask,
   tokenIdentityClassifyTask,
   catalogRefreshTask,
   plannerStatisticsTask,
@@ -48,7 +49,8 @@ import {
   nearDupDfRefreshTask,
   nearDupAlgoSweepTask,
 } from "./backfill-tasks.js";
-import type { CompleteCapability, Logger } from "@omnesis/core";
+import type { CompleteCapability, DecisionCapability, Logger } from "@omnesis/core";
+import type { MergeJudgeMode } from "../../domain/merge/merge-judge.js";
 import type { BackgroundJob } from "../../background-jobs/types.js";
 import type { IoGate } from "../io-ops.js";
 import type { CpuGate } from "../cpu-ops.js";
@@ -100,6 +102,8 @@ interface BackfillTrackers {
   /** Token-identity classifier — sweep style; coverage flips to 1 once all
    *  high-spread tokens are labeled. */
   tokenIdentityClassify: ScanTracker;
+  /** Merge judge — one sweep per pass over the candidates due a judgement. */
+  mergeJudge: ScanTracker;
   /** Near-dup compute drip — decrements as inbox rows drain. */
   nearDupCompute: QueueTracker;
   /** Periodic full DF rebuild — sweep style. */
@@ -217,6 +221,14 @@ export interface BackfillTaskOpts {
    */
   getCompletionProvider: () => CompleteCapability | null;
   /**
+   * The decision model and the merge judge's mode, read per tick so an
+   * assignment or config change applies without re-spawning the task graph.
+   * Absent: the judge never runs and name matching keeps auto-approving.
+   */
+  getDecision?: () => DecisionCapability | null;
+  getMergeJudgeMode?: () => MergeJudgeMode;
+  recordMergeJudgeSpend?: (modelId: string, inputTokens: number) => Promise<void>;
+  /**
    * Read-only `omnesis.db` handle for the cheap inbox-count poll that
    * drives the `nearDupCompute` BackgroundJob tracker. The compute
    * pass runs on the compute worker; this poll is for the UI surface.
@@ -270,6 +282,7 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
     mergeRulesEval: new ScanTracker(),
     mergeCandidatesDetect: new ScanTracker(),
     tokenIdentityClassify: new ScanTracker(),
+    mergeJudge: new ScanTracker(),
     nearDupCompute: new QueueTracker({ initialRemaining: 0 }),
     nearDupDfRefresh: new ScanTracker(),
     nearDupAlgoSweep: new ScanTracker(),
@@ -295,6 +308,7 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
   const autoDetect = autoDetectTask(internal);
   const mergeCandidatesDetect = mergeCandidatesDetectTask(internal);
   const tokenIdentityClassify = tokenIdentityClassifyTask(internal);
+  const mergeJudge = mergeJudgeTask(internal);
   const nearDupCompute = nearDupComputeTask(internal);
   const nearDupDfRefresh = nearDupDfRefreshTask(internal);
   const nearDupAlgoSweep = nearDupAlgoSweepTask(internal);
@@ -312,6 +326,7 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
     mergeRulesEval,
     autoDetect,
     mergeCandidatesDetect,
+    mergeJudge,
     tokenIdentityClassify,
     nearDupCompute,
     nearDupDfRefresh,
@@ -416,6 +431,14 @@ export function createBackfillTasks(opts: BackfillTaskOpts, scheduler: Scheduler
         "Fuzzy detection of probable identity matches via name-token IDF scoring. Surfaces candidates to the operator portal; runs only when merge_rules + interaction_scores are caught up so it sees a steady-state graph.",
       category: "people",
       tracker: trackers.mergeCandidatesDetect,
+    }),
+    periodicJob(mergeJudge, {
+      scheduler,
+      displayName: "Merge judge",
+      description:
+        "Asks the decision model whether each pending merge candidate is the same person, then merges, dismisses or leaves it for review.",
+      category: "people",
+      tracker: trackers.mergeJudge,
     }),
     periodicJob(tokenIdentityClassify, {
       scheduler,

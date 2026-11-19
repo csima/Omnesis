@@ -280,7 +280,7 @@ private struct ThemePalettePreview: View {
                 HStack {
                     Theme.docTypeAccent(type).frame(width: 3, height: 18)
                     Text(type)
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.textPrimary)
                 }
             }
@@ -337,7 +337,7 @@ struct FlatSectionHeader: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title.uppercased())
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .tracking(0.5)
                 .foregroundStyle(Theme.textSecondary)
             if showRule {
@@ -348,7 +348,7 @@ struct FlatSectionHeader: View {
             }
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.textMuted)
                     .monospacedDigit()
             }

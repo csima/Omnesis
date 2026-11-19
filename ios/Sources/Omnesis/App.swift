@@ -164,11 +164,13 @@ public struct OmnesisApp: App {
 
     /// Resolves the `DEMO_AGENT_PREVIEW` launch environment to a seeded
     /// transcript, or `nil` for the normal app root. `tall` is a uniform
-    /// long conversation (bottom-fade visual check); `scroll-stress` mixes
+    /// long conversation (bottom-fade visual check); `timeline` adds Timeline
+    /// content to the rich transcript; `scroll-stress` mixes
     /// short and very tall turns to drive the scroll-to-bottom UI test.
     static var agentPreviewSeed: AppStore.AgentPreviewSeed? {
         switch ProcessInfo.processInfo.environment["DEMO_AGENT_PREVIEW"] {
         case "store": PreviewMocks.agentStoreTranscript
+        case "timeline": PreviewMocks.agentTimelineTranscript
         case "conversation-controls": PreviewMocks.agentConversationControls
         case "tall": PreviewMocks.agentTallTranscript
         case "scroll-stress", "scroll-stress-delayed": PreviewMocks.agentScrollStressTranscript
@@ -336,6 +338,7 @@ private struct MenuRevealDemoRoot: View {
         }
         .environment(AppStore.preview())
         .environment(\.appearanceStore, AppearanceStore(mode: .dark))
+        .publishesFoldHinge()
     }
 
     private var listSurface: some View {
@@ -3474,6 +3477,10 @@ struct RootView: View {
 
     var body: some View {
         RootContent()
+            // Text follows the reader's size up to the third accessibility
+            // size; past it the dense screens, built in fixed point sizes,
+            // would truncate more than they gain.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility3)
             // Shake-to-annotate (developer mode only): a hidden channel for filing
             // data-quality notes on the current entity for later engineering review.
             .developerAnnotationCapture()
