@@ -25,7 +25,7 @@ final class HomeBackgroundSnapshotUITests: XCTestCase {
         super.tearDown()
     }
 
-    func testAppSettlesWhenSnapshottedInTheBackground() throws {
+    func testAppSettlesWhenSnapshottedInTheBackground() {
         let app = XCUIApplication()
         app.launchEnvironment["DEMO_HOME_PREVIEW"] = "attention"
         app.launchEnvironment["DEMO_INITIAL_TAB"] = "agent"
