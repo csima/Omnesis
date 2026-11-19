@@ -83,7 +83,9 @@ def source_id(kind,root): return kind+':'+root.name
     expect(listing.sources).not.toContain("env:PYTHONPATH");
     const names = listing.sources.filter((s) => s.startsWith("env:")).map((s) => s.slice(4));
     for (const name of names)
-      expect(name).toMatch(/^(HOME|PATH|LANG|LC_[A-Z_]+|TMPDIR|PYTHONDONTWRITEBYTECODE)$/);
+      expect(name).toMatch(
+        /^(HOME|PATH|LANG|LC_[A-Z_]+|TMPDIR|PYTHONDONTWRITEBYTECODE|__CF_USER_TEXT_ENCODING)$/,
+      );
   });
   it("reports an aborted collection as an abort, not a Slack failure", async () => {
     const root = await helper(`import time
