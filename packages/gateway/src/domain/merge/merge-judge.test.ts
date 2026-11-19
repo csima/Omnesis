@@ -54,6 +54,14 @@ function makePerson(name: string, email: string, isSelf = false): string {
   return id;
 }
 
+function personWithEmail(email: string): string {
+  return db
+    .prepare<[string], { person_id: string }>(
+      "SELECT person_id FROM person_aliases WHERE alias = ? AND alias_type = 'email'",
+    )
+    .get(email)!.person_id;
+}
+
 /** A pending candidate between two people's email addresses. */
 function candidate(a: string, b: string): string {
   upsertMergeCandidates(db, [
@@ -64,6 +72,8 @@ function candidate(a: string, b: string): string {
       detectionKind: "name_token_overlap",
       matchedTokens: ["maya", "reeves"],
       matchStrength: 1.7,
+      personA: personWithEmail(a),
+      personB: personWithEmail(b),
     },
   ]);
   const row = listAllMergeCandidates(db, "pending").find((c) =>
