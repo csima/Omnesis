@@ -173,6 +173,7 @@ _FORWARDED_TOOL_NAMES = (
     "list_loops",
     "fetch_loop",
     "list_tables",
+    "list_sources",
     "add_note",
 )
 # How long a forwarded call may take, above the gateway's own 30-second Direct
