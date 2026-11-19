@@ -16,7 +16,10 @@ import type { CompleteCapability, ToolResult } from "@omnesis/core";
 
 const ctx: ToolContext = { sessionId: "s1", messageId: "m1" };
 
-function searchResult(query: string, docs: ReadonlyArray<[string, string]>): ToolResult {
+function searchResult(
+  query: string,
+  docs: ReadonlyArray<[string, string]>,
+): Extract<ToolResult, { kind: "search.results" }> {
   return {
     kind: "search.results",
     query,
@@ -106,6 +109,7 @@ describe("describeRetrieval", () => {
       {
         kind: "sql.rows",
         sql: "select 1",
+        durationMs: 3,
         columns: ["workspace", "n"],
         rows: [
           ["A", 40],
@@ -173,6 +177,7 @@ const cited: ToolResult = { kind: "annotate.batch", items: [] };
 const counted: ToolResult = {
   kind: "sql.rows",
   sql: "select workspace, count(*) from messages group by workspace",
+  durationMs: 3,
   columns: ["workspace", "n"],
   rows: [["A", 40]],
   rowCount: 1,
