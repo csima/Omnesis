@@ -72,7 +72,7 @@ test("knowledge library, readable page, evidence, history and mobile navigation"
           title: "Workshop planning note",
           content: "The workshop begins at ten. Bring paper and pencils.",
           contentHash: "knowledge-browser-v1",
-          metadata: {},
+          metadata: { sourceUrl: "https://example.com/workshop-plan" },
           sourceCreatedAt: "2026-01-01T00:00:00Z",
           sourceUpdatedAt: "2026-01-01T00:00:00Z",
         },

@@ -22,15 +22,17 @@ const STABLE_DIRECT_TOOL_NAMES = [
   "run_sql",
   "temporal_query",
   "list_tables",
+  "list_sources",
 ] as const;
 
 const DIRECT_TOOL_NAMES = [
-  ...STABLE_DIRECT_TOOL_NAMES.filter((name) => name !== "list_tables"),
+  ...STABLE_DIRECT_TOOL_NAMES.filter((name) => name !== "list_tables" && name !== "list_sources"),
   "entity_context",
   "search_loops",
   "list_loops",
   "fetch_loop",
   "list_tables",
+  "list_sources",
 ] as const;
 
 describe("Direct MCP OAuth — synthetic-corpus gateway", () => {
@@ -458,6 +460,7 @@ describe("Direct MCP OAuth — synthetic-corpus gateway", () => {
         "lookup_document_by_url",
         "run_sql",
         "list_tables",
+        "list_sources",
       ]);
       expect(authorized.client.getInstructions()).toContain(
         "restricted to selected source instances",
@@ -494,7 +497,14 @@ describe("Direct MCP OAuth — synthetic-corpus gateway", () => {
         (await authorized.client.listTools(undefined, { cacheMode: "refresh" })).tools.map(
           (tool) => tool.name,
         ),
-      ).toEqual(["search_many", "fetch_many", "lookup_document_by_url", "run_sql", "list_tables"]);
+      ).toEqual([
+        "search_many",
+        "fetch_many",
+        "lookup_document_by_url",
+        "run_sql",
+        "list_tables",
+        "list_sources",
+      ]);
       expect(authorized.provider.savedTokens?.access_token).not.toBe(firstAccessToken);
       expect(authorized.provider.savedClientInformation?.client_id).toBe(clientId);
       expect(authorized.provider.authorizationRedirects).toBe(1);
@@ -608,6 +618,7 @@ describe("Direct MCP OAuth — synthetic-corpus gateway", () => {
           "lookup_document_by_url",
           "run_sql",
           "list_tables",
+          "list_sources",
         ]);
       }
       const allowedInstructions = allowed.client.getInstructions();

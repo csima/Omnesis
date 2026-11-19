@@ -2,10 +2,15 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import "./synth-env.js";
+import { join } from "node:path";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import Database from "better-sqlite3";
 import realWeb from "@omnesis/provider-web";
-import { MINIMUM_CLIENT_VERSIONS, compareProductVersions } from "@omnesis/core";
+import {
+  MINIMUM_CLIENT_VERSIONS,
+  compareProductVersions,
+  GATEWAY_PREVIEW_STORE_FILE,
+} from "@omnesis/core";
 import { defaultScopesForDeviceKind } from "@omnesis/types";
 import {
   CapturePolicyClient,
@@ -58,7 +63,18 @@ import { SyntheticE2EHarness } from "./synth-harness.js";
  *   (8) a running browser keeps its device row's version current without a
  *       re-pair: the version it reports on its probe and its pushes replaces
  *       the one it paired with, a malformed report changes nothing, and a
- *       repeated identical report writes nothing.
+ *       repeated identical report writes nothing;
+ *   (9) the operator's own sites, set once in the gateway's config, are in the
+ *       policy every browser reads, and the built-in mail, messaging and
+ *       password-manager sites and credential paths are refused with no
+ *       policy entry at all — by the browser's judge and again by the
+ *       gateway on ingest;
+ *   (10) a page pushed with credentials in its text — by a browser that did not
+ *       redact them — is stored with them redacted, on both planes;
+ *   (11) a page screenshot is refused while the shared policy has screenshots
+ *       off, is stored behind its page once they are on, is served back with
+ *       its type and an ETag and named on the document, and is deleted with
+ *       its page — deleted for good, or purged with an excluded domain.
  *
  * All fixtures are invented (example.com hosts, fictional titles/text) — never
  * real corpus.
@@ -113,6 +129,19 @@ async function hashText(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The operator's own tools, as `webCapture.ownSites` in the gateway's config. */
+const OWN_SITES = ["agents.example.net", "apps.example.net"];
+
+/** Invented credentials, assembled at run time so no scanner matches this file. */
+const FAKE_GITHUB_TOKEN = ["gh", "p_", "Q7rT2mX9pL4vN8kB3cZ6wY1hJ5dF0sGaAbCd"].join("");
+const FAKE_JWT = [
+  "ey",
+  "JhbGciOiJIUzI1NiJ9",
+  ".ey",
+  "JzdWIiOiJmaWN0aW9uYWwifQ",
+  ".c2lnbmF0dXJl",
+].join("");
+
 describe("Browser-capture push path (spawned gateway)", () => {
   let harness: SyntheticE2EHarness;
   let gatewayUrl: string;
@@ -121,7 +150,10 @@ describe("Browser-capture push path (spawned gateway)", () => {
   let browserProfile: { deviceId: string; label: string };
 
   beforeAll(async () => {
-    harness = new SyntheticE2EHarness({ gatewayMode: "stable" });
+    harness = new SyntheticE2EHarness({
+      gatewayMode: "stable",
+      extraGatewayConfig: { webCapture: { ownSites: OWN_SITES } },
+    });
     await harness.start();
     gatewayUrl = harness.gatewayUrl;
     gatewayLogPath = harness.getGatewayLogPath();
@@ -628,6 +660,136 @@ describe("Browser-capture push path (spawned gateway)", () => {
     ).toBe(1);
     expect((await searchDocs("soup recipe")).some((d) => d.source_id === "web")).toBe(true);
   });
+  test("(11) a page screenshot is stored behind its page, served back, and deleted with it", async () => {
+    const policy = new CapturePolicyClient(gatewayUrl, webToken, nodeFetch);
+    expect((await policy.read()).screenshots).toEqual({ enabled: false });
+
+    /** An invented WebP: the RIFF/WEBP framing the gateway checks, then filler. */
+    const image = Buffer.alloc(2_048, 7);
+    image.write("RIFF", 0, "ascii");
+    image.write("WEBP", 8, "ascii");
+
+    const pageUrl = "https://gallery.example.org/invented-exhibit";
+    const text = "An invented exhibition page with enough words to be worth a preview.";
+    const page = await buildWebPageDocument({
+      normalizedUrl: pageUrl,
+      title: "Invented exhibition",
+      text,
+      contentHash: await hashText(text),
+      visitedAt: new Date().toISOString(),
+      browserProfile,
+    });
+    const screenshot = (contentHash: string) => ({
+      providerId: "web",
+      sourceId: "web",
+      externalId: page.externalId,
+      contentHash,
+      contentType: "image/webp" as const,
+      width: 1280,
+      height: 800,
+      capturedAt: new Date().toISOString(),
+      image: image.toString("base64"),
+    });
+
+    /** The document id, and whether the preview store holds a row for it. */
+    const documentIdOf = (externalId: string): string | undefined => {
+      const db = new Database(harness.getDbPath(), { readonly: true });
+      try {
+        return db
+          .prepare<[string], { id: string }>("SELECT id FROM documents WHERE external_id = ?")
+          .get(externalId)?.id;
+      } finally {
+        db.close();
+      }
+    };
+    const previewRows = (documentId: string): number => {
+      const db = new Database(join(harness.getConfigDir(), GATEWAY_PREVIEW_STORE_FILE), {
+        readonly: true,
+      });
+      try {
+        return db
+          .prepare<[string], { n: number }>(
+            "SELECT COUNT(*) AS n FROM document_previews WHERE document_id = ?",
+          )
+          .get(documentId)!.n;
+      } finally {
+        db.close();
+      }
+    };
+
+    // Off: the page lands, its screenshot is refused and leaves the queue quietly.
+    const off = newClient(new MemStore());
+    await off.enqueueDocument(page);
+    await off.enqueuePreview(screenshot("first"));
+    expect(await off.drain()).toMatchObject({ delivered: 1, suppressed: 1, retained: 0 });
+    const documentId = documentIdOf(page.externalId);
+    expect(documentId, "the page was stored").toBeDefined();
+    expect((await harness.gatewayFetch(`/documents/${documentId}/preview`)).status).toBe(404);
+
+    // On: the shot is uploaded after its page and served back.
+    expect((await policy.setScreenshots(true)).screenshots).toEqual({ enabled: true });
+    const on = newClient(new MemStore());
+    await on.enqueueDocument(page);
+    await on.enqueuePreview(screenshot("second"));
+    expect(await on.drain()).toMatchObject({ delivered: 2, suppressed: 0, retained: 0 });
+    expect(await on.previewWanted(page.externalId, "second")).toBe(false);
+
+    const served = await harness.gatewayFetch(`/documents/${documentId}/preview`);
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toBe("image/webp");
+    expect(served.headers.get("cache-control")).toMatch(/^private/);
+    const etag = served.headers.get("etag");
+    expect(etag).toBeTruthy();
+    expect(Buffer.from(await served.arrayBuffer())).toEqual(image);
+    const notModified = await harness.gatewayFetch(`/documents/${documentId}/preview`, {
+      headers: { "If-None-Match": etag! },
+    });
+    expect(notModified.status).toBe(304);
+    const doc = (await harness.gatewayJson(`/documents/${documentId}`)) as {
+      preview?: { url: string; contentType: string; width: number; height: number };
+    };
+    expect(doc.preview).toMatchObject({
+      url: `/documents/${documentId}/preview`,
+      contentType: "image/webp",
+      width: 1280,
+      height: 800,
+    });
+    expect(previewRows(documentId!)).toBe(1);
+
+    // Deleted for good: the preview goes with the page.
+    await harness.gatewayJson(`/documents/${documentId}`, { method: "DELETE" });
+    expect(previewRows(documentId!)).toBe(0);
+    expect((await harness.gatewayFetch(`/documents/${documentId}/preview`)).status).toBe(404);
+
+    // Purged with an excluded domain: the preview goes with the page.
+    const purgedUrl = "https://archive.example.net/invented-catalogue";
+    const purgedText = "An invented catalogue page on a domain about to be excluded.";
+    const purgedPage = await buildWebPageDocument({
+      normalizedUrl: purgedUrl,
+      title: "Invented catalogue",
+      text: purgedText,
+      contentHash: await hashText(purgedText),
+      visitedAt: new Date().toISOString(),
+      browserProfile,
+    });
+    const purger = newClient(new MemStore());
+    await purger.enqueueDocument(purgedPage);
+    await purger.enqueuePreview({ ...screenshot("third"), externalId: purgedPage.externalId });
+    expect((await purger.drain()).delivered).toBe(2);
+    const purgedId = documentIdOf(purgedPage.externalId)!;
+    expect(previewRows(purgedId)).toBe(1);
+    expect((await policy.addExcludedDomain("archive.example.net", true)).purged).toBe(1);
+    expect(previewRows(purgedId)).toBe(0);
+
+    // A page on the excluded domain is refused a screenshot outright.
+    const refused = newClient(new MemStore());
+    await refused.enqueuePreview({ ...screenshot("fourth"), externalId: purgedPage.externalId });
+    expect(await refused.drain()).toMatchObject({ delivered: 0, suppressed: 1 });
+
+    await policy.removeExcludedDomain("archive.example.net");
+    expect((await policy.setScreenshots(false)).screenshots).toEqual({ enabled: false });
+  });
+
   test("(8) the browser's reported version follows an update without a re-pair", async () => {
     const gatewayVersion = ((await harness.gatewayJson("/health")) as { version: string }).version;
     // Paired on the oldest supported build, so the row reads `behind` until the
@@ -750,5 +912,96 @@ describe("Browser-capture push path (spawned gateway)", () => {
       }
     ).items.find((d) => d.id === browserProfile.deviceId);
     expect(sibling?.version ?? null).not.toBe(nextVersion);
+  });
+
+  test("(9) own sites come from the gateway's config; built-in sites and credential paths need no entry", async () => {
+    const policy = await new CapturePolicyClient(gatewayUrl, webToken, nodeFetch).read();
+    expect(policy.ownSites).toEqual(OWN_SITES);
+    const context = { gatewayHost: new URL(gatewayUrl).hostname, now: Date.now() };
+    expect(judgeCaptureUrl(policy, "https://agents.example.net/browser", context)).toEqual({
+      allowed: false,
+      reason: "own-site",
+    });
+    expect(judgeCaptureUrl(policy, "https://notes-app.apps.example.net/", context)).toEqual({
+      allowed: false,
+      reason: "own-site",
+    });
+    // No source owns a password manager and the policy names none.
+    expect(policy.ownedDomains).not.toContain("bitwarden.com");
+    expect(policy.excludedDomains).not.toContain("bitwarden.com");
+    expect(judgeCaptureUrl(policy, "https://vault.bitwarden.com/#/vault", context)).toEqual({
+      allowed: false,
+      reason: "built-in-domain",
+    });
+    // The gateway applies the same verdicts on ingest: a browser that ignored
+    // them gets its page turned away, like one deleted for good.
+    const pusher = newClient(new MemStore());
+    for (const url of ["https://agents.example.net/browser", "https://vault.bitwarden.com/vault"]) {
+      await pusher.enqueueDocument(
+        await buildWebPageDocument({
+          normalizedUrl: url,
+          title: `Invented page at ${url}`,
+          text: `Invented body for ${url}, long enough to be kept by the extractor.`,
+          contentHash: await hashText(url),
+          visitedAt: new Date().toISOString(),
+          browserProfile,
+        }),
+      );
+    }
+    const before = await webDocCount();
+    expect(await pusher.drain()).toMatchObject({ delivered: 0, suppressed: 2 });
+    expect(await webDocCount()).toBe(before);
+    for (const url of [
+      "https://code.example.org/settings/tokens",
+      "https://cloud.example.org/account/api-keys",
+      "https://team.example.org/cdn-cgi/access/login/team.example.org",
+      "https://app.example.org/reset/Zm9yZ290LXBhc3N3b3JkLXRva2Vu",
+    ]) {
+      expect(judgeCaptureUrl(policy, url, context), url).toEqual({
+        allowed: false,
+        reason: "skipped-path",
+      });
+    }
+  });
+
+  test("(10) credentials a browser did not redact are redacted on ingest, on both planes", async () => {
+    const client = newClient(new MemStore());
+    const url = "https://wiki.example.org/runbooks/fictional-deploy";
+    const title = `Deploy runbook ${FAKE_GITHUB_TOKEN}`;
+    const text = `The invented Northstar deploy reads DEPLOY_TOKEN=${FAKE_GITHUB_TOKEN} and sends Authorization: Bearer ${FAKE_JWT} with every request.`;
+    const visitedAt = new Date().toISOString();
+    await client.enqueueDocument(
+      await buildWebPageDocument({
+        normalizedUrl: url,
+        title,
+        text,
+        contentHash: await hashText(text),
+        visitedAt,
+        browserProfile,
+      }),
+    );
+    await client.enqueueVisit(
+      buildPageVisit({ normalizedUrl: url, title, visitedAt, dwellMs: 6100, browserProfile }),
+    );
+    expect((await client.drain()).delivered).toBe(2);
+
+    const hit = (await searchDocs("Northstar deploy")).find((d) => d.source_id === "web");
+    expect(hit, "the redacted page is still searchable by its text").toBeDefined();
+    const stored = (await harness.gatewayJson(`/documents/${hit!.id}`)) as {
+      title: string;
+      content: string;
+      contentHash?: string;
+      content_hash?: string;
+    };
+    expect(stored.title).toBe("Deploy runbook [redacted]");
+    expect(stored.content).toBe(
+      "The invented Northstar deploy reads DEPLOY_TOKEN=[redacted] and sends Authorization: [redacted] with every request.",
+    );
+    expect(stored.content).not.toContain(FAKE_GITHUB_TOKEN);
+    expect(stored.content).not.toContain(FAKE_JWT);
+    expect(stored.contentHash ?? stored.content_hash).toBe(await hashText(stored.content));
+
+    const visits = await sql(`SELECT title FROM page_visits WHERE url = '${url}'`);
+    expect(visits.rows.map((row) => String(row[0]))).toEqual(["Deploy runbook [redacted]"]);
   });
 });

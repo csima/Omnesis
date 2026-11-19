@@ -21,6 +21,7 @@ import { PAIRING_ATTEMPT_KEY } from "./chrome/pairing-attempt.js";
 import { CAPTURE_POLICY_KEY } from "./capture/policy.js";
 import { PUSH_SERVER_STATE_KEY } from "./push/observability.js";
 import { QUEUE_CORRUPTION_KEY, QUEUE_OVERFLOW_KEY, QUEUE_STORAGE_KEY } from "./push/queue.js";
+import { PREVIEW_LEDGER_KEY } from "./push/client.js";
 
 /**
  * Every `chrome.storage.local` key the extension writes is an on-disk contract
@@ -47,6 +48,7 @@ describe("chrome.storage.local keys are append-only", () => {
       QUEUE_CORRUPTION_KEY,
       QUEUE_OVERFLOW_KEY,
       PUSH_SERVER_STATE_KEY,
+      PREVIEW_LEDGER_KEY,
       PAIRING_ATTEMPT_KEY,
       NOTES_STATE_KEY,
       NOTES_TOKEN_KEY,
@@ -70,6 +72,8 @@ describe("chrome.storage.local keys are append-only", () => {
       QUEUE_CORRUPTION_KEY: "omnesis.push.queueCorruption.v1",
       QUEUE_OVERFLOW_KEY: "omnesis.push.queueOverflow.v1",
       PUSH_SERVER_STATE_KEY: "omnesis.push.serverState.v1",
+      // Which page text each page's last uploaded screenshot was taken of.
+      PREVIEW_LEDGER_KEY: "omnesis.push.previewLedger.v1",
       PAIRING_ATTEMPT_KEY: "omnesis.pairing.attempt.v1",
       NOTES_STATE_KEY: "omnesis.notes.state.v1",
       NOTES_TOKEN_KEY: "omnesis.notes.token.v1",

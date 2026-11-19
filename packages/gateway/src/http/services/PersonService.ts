@@ -41,6 +41,7 @@ import type {
   PersonSortBy,
   PersonSummary,
 } from "../../data/repositories/PersonRepository.js";
+import type { PersonDocumentEntry } from "../../data/repositories/DocumentPeopleRepository.js";
 import type { WriteGate } from "../../write-gate.js";
 import type Database from "better-sqlite3";
 
@@ -59,6 +60,10 @@ export interface PeopleBrowseGate {
     limit: number,
     options: { sortBy?: PersonSortBy; after?: PersonBrowseCursor },
   ): Promise<PersonSummary[]>;
+  personDocuments?(
+    personId: string,
+    options: NonNullable<Parameters<typeof getPersonDocuments>[2]>,
+  ): Promise<PersonDocumentEntry[]>;
   enrichedMergeCandidates?(opts: {
     status: "pending" | "accepted" | "denied";
     limit: number;
@@ -358,8 +363,14 @@ export class PersonService {
     };
   }
 
-  getDocuments(id: string, opts: Parameters<typeof getPersonDocuments>[2]) {
-    return getPersonDocuments(this.db, id, opts);
+  /** A page of a person's documents, read off the main thread when a gate is wired. */
+  async getDocuments(
+    id: string,
+    opts: NonNullable<Parameters<typeof getPersonDocuments>[2]>,
+  ): Promise<PersonDocumentEntry[]> {
+    return this.ioGate?.personDocuments
+      ? this.ioGate.personDocuments(id, opts)
+      : getPersonDocuments(this.db, id, opts);
   }
 
   getForDocument(id: string) {
@@ -511,8 +522,8 @@ export class PersonService {
       )`);
       params.push(pattern, pattern, pattern);
     }
-    const cursor = opts.before ? "WHERE (latest < ? OR (latest = ? AND display_key < ?))" : "";
-    if (opts.before) params.push(opts.before.latest, opts.before.latest, opts.before.key);
+    const cursor = opts.before ? "WHERE (latest, display_key) < (?, ?)" : "";
+    if (opts.before) params.push(opts.before.latest, opts.before.key);
     params.push(opts.limit + 1);
     const groupRows = this.db
       .prepare<

@@ -20,13 +20,13 @@ struct AccessAuthorizationCodeEntry: View {
                     .font(.system(size: 34))
                     .foregroundStyle(Theme.accent)
                 Text("Enter the code shown by the app that wants to connect.")
-                    .font(.system(size: 20, weight: .semibold))
+                    .scaledFont(size: 20, weight: .semibold)
                     .foregroundStyle(Theme.textPrimary)
                 Text(
                     "The notification contains no request details. " +
                         "Omnesis shows who is connecting only after your phone verifies this code."
                 )
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.textSecondary)
             }
             TextField("ABCD-EFGH", text: $code)
@@ -39,7 +39,7 @@ struct AccessAuthorizationCodeEntry: View {
                 .accessibilityLabel("Authorization code")
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.warning)
                     .accessibilityLabel("Authorization lookup failed")
             }
@@ -47,7 +47,7 @@ struct AccessAuthorizationCodeEntry: View {
                 HStack {
                     if loading { ProgressView().tint(.white) }
                     Text(loading ? "Checking…" : "Continue")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                 }
                 .frame(maxWidth: .infinity)
             }

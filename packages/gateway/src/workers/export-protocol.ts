@@ -27,9 +27,23 @@ export interface ExportWorkerInput {
   sourceId?: string;
   /** Keyset page size — rows fetched (and flushed) per batch. */
   batchSize: number;
+  /**
+   * The document preview store (`previews.db`), opened read-only. When set,
+   * each exported document's preview is written under `previews/` beside an
+   * index, `previews.jsonl`.
+   */
+  previewDbPath?: string;
+  previewDbKeyHex?: string;
 }
 
 export type ExportWorkerMessage =
   | { type: "progress"; documents: number }
-  | { type: "done"; documents: number; bytes: number; perSource: Record<string, number> }
+  | {
+      type: "done";
+      documents: number;
+      bytes: number;
+      perSource: Record<string, number>;
+      /** Preview files written, relative to the export directory (index first). */
+      previewFiles: string[];
+    }
   | { type: "error"; error: string };

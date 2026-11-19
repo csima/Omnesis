@@ -61,10 +61,11 @@ export function isCaptureHandoffFailure(value: unknown): value is CaptureHandoff
 
 /**
  * Why the popup says a page is not being captured: every refusal the policy can
- * return, plus the one rule the page decides for itself — a password field in
- * the document, which no policy verdict describes.
+ * return, plus the one rule the page decides for itself — a password,
+ * one-time-code or card field in the document, which no policy verdict
+ * describes.
  */
-export type CaptureExclusionReason = CaptureIneligibility | "password-field";
+export type CaptureExclusionReason = CaptureIneligibility | "sensitive-field";
 
 export interface CaptureContentStatus {
   state: "checking" | "watching" | "excluded" | "handoff-delayed" | "policy-pending";
@@ -140,7 +141,14 @@ export type PopupToSwMessage =
   | CheckNowMessage
   | { type: "dismiss-diagnostics" }
   | ReadPolicyMessage
-  | AddExcludedDomainMessage;
+  | AddExcludedDomainMessage
+  | SetScreenshotsMessage;
+
+/**
+ * Switch page screenshots on or off for every paired browser. Sent by the
+ * popup and the options page; the worker applies it on the gateway.
+ */
+type SetScreenshotsMessage = { type: "set-screenshots"; enabled: boolean };
 
 /**
  * Sent by both the popup (on open) and the options page (after a pair) so the
@@ -163,7 +171,8 @@ export type OptionsToSwMessage =
   | AddExcludedDomainMessage
   | { type: "remove-excluded-domain"; domain: string }
   | ReadPolicyMessage
-  | CheckNowMessage;
+  | CheckNowMessage
+  | SetScreenshotsMessage;
 
 /** The browser's copy of the shared policy, or null before the first read succeeds. */
 export interface CapturePolicySnapshot {

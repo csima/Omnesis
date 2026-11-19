@@ -44,6 +44,7 @@ export const FORWARDED_TOOL_NAMES = [
   "list_loops",
   "fetch_loop",
   "list_tables",
+  "list_sources",
   "add_note",
 ] as const;
 

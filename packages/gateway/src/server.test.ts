@@ -21,6 +21,7 @@ import {
   PROTOCOL_VERSION,
   PAIRING_PROTOCOL_VERSION,
   SOURCE_CONTRACT_WIRE_RANGE,
+  resolveSourceMaxAge,
 } from "@omnesis/core";
 import { computeSnapshotAbsencePlan, createDatabase, getSyncState, getWipeEpoch } from "./db.js";
 import { LATEST_SCHEMA_VERSION } from "./data/migrations.js";
@@ -245,6 +246,49 @@ test("production server wires analytics adoption into an exclusive to partitione
     cleanupDb(analyticsPath);
     if (existsSync(`${analyticsPath}.wal`)) unlinkSync(`${analyticsPath}.wal`);
   }
+});
+
+describe("source settings mirrored to the config file", () => {
+  test("a source edit does not copy an inherited maxAge into the source's own block", async () => {
+    const configDir = `/tmp/omnesis-source-mirror-${randomUUID()}`;
+    const configStore = new ConfigStore({
+      filePath: `${configDir}/omnesis.json`,
+      watchDebounceMs: 40,
+    });
+    await configStore.load();
+    try {
+      const owner = createDevice(db, {
+        name: "mirror-host",
+        kind: "collector",
+        capabilities: { hostableSourceTypes: ["notes-synth"] },
+      });
+      const source = createSource(db, {
+        type: SourceType("notes-synth"),
+        accountId: AccountId("fictional-mirror"),
+        deviceId: owner.id,
+        config: { maxAge: "2y", syncInterval: "5m" },
+      });
+      await configStore.put({ sources: { "notes-synth": { maxAge: "2y" } } });
+      const mirrorApp = createServer(db, undefined, { configStore });
+
+      const res = await mirrorApp.request(`/admin/sources/${encodeURIComponent(source.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TEST_TOKEN}` },
+        body: JSON.stringify({ config: { maxAge: "2y", syncInterval: "15m" } }),
+      });
+      expect(res.status).toBe(200);
+
+      const own = configStore.get().sources?.[source.id];
+      expect(own).toEqual({ syncInterval: "15m" });
+      expect(resolveSourceMaxAge(configStore.get(), source.id)).toBe("2y");
+
+      await configStore.put({ sources: { [source.id]: own! } });
+      expect(resolveSourceMaxAge(configStore.get(), source.id)).toBeUndefined();
+    } finally {
+      configStore.stop();
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("mode-transition config publication ordering", () => {
@@ -2186,6 +2230,23 @@ describe("device management endpoints", () => {
       body: JSON.stringify({ kind: "portal", repairDeviceId: target.id }),
     });
     expect(response.status).toBe(400);
+  });
+
+  test("a pairing code's ttlMs is bounded to between one minute and two hours", async () => {
+    for (const ttlMs of [59_999, 7_200_001, 1.5]) {
+      const refused = await req("/admin/devices/pair", {
+        method: "POST",
+        body: JSON.stringify({ kind: "collector", ttlMs }),
+      });
+      expect(refused.status).toBe(400);
+    }
+    for (const ttlMs of [60_000, 7_200_000]) {
+      const accepted = await req("/admin/devices/pair", {
+        method: "POST",
+        body: JSON.stringify({ kind: "collector", ttlMs }),
+      });
+      expect(accepted.status).toBe(200);
+    }
   });
 
   test("a repair pairing refuses a kind that is not the target's", async () => {

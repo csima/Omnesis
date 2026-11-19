@@ -310,11 +310,21 @@ function retireAbandonedLevels(db: Db, reaped: readonly ReapedRequestRow[], now:
         AND NOT EXISTS (SELECT 1 FROM access_grants g WHERE g.level_id = l.id)
         AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.access_level_id = l.id)`,
   );
+  const hostAgentGrantsTable = db
+    .prepare<[], { name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'access_host_agent_grants'",
+    )
+    .get();
+  const usedByHostAgent = db.prepare<[string], { present: number }>(
+    hostAgentGrantsTable
+      ? "SELECT 1 AS present FROM access_host_agent_grants WHERE level_id = ? LIMIT 1"
+      : "SELECT 1 AS present WHERE 0 AND ? IS NOT NULL",
+  );
   const retire = db.prepare("UPDATE access_levels SET revoked_at = ?, updated_at = ? WHERE id = ?");
   for (const row of reaped) {
     if (row.created_level_id === null) continue;
     const level = findAbandoned.get(row.created_level_id);
-    if (!level) continue;
+    if (!level || usedByHostAgent.get(row.created_level_id)) continue;
     retire.run(now, now, row.created_level_id);
     appendAudit(db, {
       eventType: "level-deleted",

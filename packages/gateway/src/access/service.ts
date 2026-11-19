@@ -13,6 +13,7 @@ import {
   getOAuthClient,
   listAccessAuditEvents,
   listAccessOverview,
+  listHostIdentity,
   listPendingAuthorizationRequests,
   lookupPrincipalAccessToken,
   preflightAuthorizationRequest,
@@ -44,6 +45,11 @@ import type {
   OAuthClientMetadataDocument,
   OAuthTokenExchangeInput,
   McpToolInvocationAuditInput,
+  HostAgentDefaultInput,
+  HostAgentGrantCreateInput,
+  HostAgentGrantRevokeInput,
+  HostIdentityBindingInput,
+  HostIdentityUnbindInput,
 } from "./types.js";
 
 /** Keeps durable-before-egress audit writes from flooding the shared writer queue. */
@@ -209,6 +215,37 @@ export class AccessService {
 
   renamePrincipal(input: AccessPrincipalRenameInput) {
     return this.writer.renameAccessPrincipal(input);
+  }
+
+  /** Every connection bound to an agent host, with its live host agent grants. */
+  hostIdentity() {
+    return listHostIdentity(this.reader);
+  }
+
+  bindHostIdentity(input: HostIdentityBindingInput) {
+    return this.writer.setHostIdentityBinding(input);
+  }
+
+  unbindHostIdentity(input: HostIdentityUnbindInput) {
+    return this.writer.removeHostIdentityBinding(input);
+  }
+
+  grantHostAgent(input: HostAgentGrantCreateInput) {
+    return this.writer.createHostAgentGrant(input);
+  }
+
+  revokeHostAgent(input: HostAgentGrantRevokeInput) {
+    return this.writer.revokeHostAgentGrant(input);
+  }
+
+  /** Give one agent its level, or deny it with `levelId: null`, replacing the grant it has. */
+  setHostAgent(input: HostAgentGrantCreateInput) {
+    return this.writer.setHostAgentGrant(input);
+  }
+
+  /** Set or clear the level a person's agents get when no grant names them. */
+  setHostAgentDefault(input: HostAgentDefaultInput) {
+    return this.writer.setHostAgentDefault(input);
   }
 
   revoke(input: AccessRevocationInput) {

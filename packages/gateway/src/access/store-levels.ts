@@ -4,6 +4,7 @@
 import { appendAudit, getActiveGrant } from "./store-helpers.js";
 import {
   getLiveLevelRow,
+  levelHasHostAgentGrants,
   liveLevelDevices,
   liveLevelMemberGrantIds,
   loadAccessLevelSummary,
@@ -144,7 +145,8 @@ export function deleteAccessLevel(
     if (!level) return { ok: false, error: "not-found" };
     if (
       liveLevelMemberGrantIds(db, level.id, now).length > 0 ||
-      liveLevelDevices(db, level.id).size > 0
+      liveLevelDevices(db, level.id).size > 0 ||
+      levelHasHostAgentGrants(db, level.id)
     ) {
       return { ok: false, error: "level-in-use" };
     }

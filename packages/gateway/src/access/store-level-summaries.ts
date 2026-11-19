@@ -28,6 +28,24 @@ export function getLiveLevelRow(db: Db, levelId: string): AccessLevelRow | null 
   );
 }
 
+/** Whether any live host agent grant uses a level, which keeps the level from being retired. */
+export function levelHasHostAgentGrants(db: Db, levelId: string): boolean {
+  const present = db
+    .prepare<[], { name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'access_host_agent_grants'",
+    )
+    .get();
+  if (!present) return false;
+  return (
+    db
+      .prepare<[string], { present: number }>(
+        `SELECT 1 AS present FROM access_host_agent_grants
+          WHERE level_id = ? AND revoked_at IS NULL LIMIT 1`,
+      )
+      .get(levelId) !== undefined
+  );
+}
+
 /** The live grants that carry a level's rules, through the level index. */
 export function liveLevelMemberGrantIds(db: Db, levelId: string, now: number): string[] {
   return db

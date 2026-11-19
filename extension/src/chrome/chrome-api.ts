@@ -160,6 +160,7 @@ declare global {
         url?: string;
         title?: string;
         incognito?: boolean;
+        active?: boolean;
       }
       function create(details: { url: string; active?: boolean }): Promise<Tab>;
       function query(queryInfo: {
@@ -171,9 +172,14 @@ declare global {
       function update(tabId: number, details: { active?: boolean; url?: string }): Promise<Tab>;
       function update(details: { active?: boolean; url?: string }): Promise<Tab>;
       function sendMessage<T = unknown>(tabId: number, message: unknown): Promise<T>;
+      function captureVisibleTab(
+        windowId: number,
+        options: { format?: "jpeg" | "png"; quality?: number },
+      ): Promise<string>;
     }
     namespace windows {
       const WINDOW_ID_CURRENT: number;
+      function get(windowId: number): Promise<{ id?: number; focused: boolean; state?: string }>;
       function update(windowId: number, details: { focused: boolean }): Promise<unknown>;
       function getCurrent(): Promise<{ id?: number }>;
     }

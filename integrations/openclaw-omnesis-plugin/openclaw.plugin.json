@@ -20,6 +20,7 @@
       "omnesis_list_loops",
       "omnesis_fetch_loop",
       "omnesis_list_tables",
+      "omnesis_list_sources",
       "omnesis_add_note"
     ]
   },

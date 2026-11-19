@@ -60,7 +60,7 @@ final class GatewayLiveE2ETests: XCTestCase {
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         session = URLSession(
             configuration: config,
-            delegate: AcceptAnyCertDelegate(),
+            delegate: LiveSessionDelegate(),
             delegateQueue: nil
         )
     }
@@ -180,6 +180,94 @@ final class GatewayLiveE2ETests: XCTestCase {
         _ = try await tasks.perform(.delete, on: task.id)
     }
 
+    // MARK: - Background upload session
+
+    /// A one-request batch handed to a real background `URLSession`: the
+    /// request it builds is one the gateway takes, the system finishes it,
+    /// and its result settles the batch — removed from the buffer, mark
+    /// and outbox file gone, and the row queryable on the gateway.
+    ///
+    /// What it does not prove: certificate pinning, and behaviour on a
+    /// locked phone. The scratch gateway's certificate is self-signed, so
+    /// trust goes to `LiveSessionDelegate` rather than the shared
+    /// session's pinning delegate, and the phone is taken as always
+    /// unlocked (`protectedDataAvailable` is `true`). The locked case is
+    /// covered by unit tests against a fake queue; the background
+    /// session's routing of trust challenges to the pinning delegate has no
+    /// test at all.
+    func testBackgroundUploadDeliversABatch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omnesis-e2e-background-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = BackgroundUploadSession(
+            identifier: "dev.omnesis.e2e.uploads.\(UUID().uuidString)",
+            trustOverride: LiveSessionDelegate()
+        )
+        defer { transport.finishAndInvalidate() }
+        let buffer = OfflineBuffer(directory: directory)
+        let uploader = Uploader(
+            gateway: GatewayClient(baseURL: baseURL, token: apiKey, session: session),
+            buffer: buffer,
+            background: BackgroundUploads(
+                transport: transport,
+                isEnabled: { true },
+                protectedDataAvailable: { true }
+            )
+        )
+        let recorded = expectation(description: "background result recorded")
+        transport.setHandler { completion in
+            await uploader.finishBackgroundUpload(completion)
+            recorded.fulfill()
+        }
+
+        let rowId = "bg-\(UUID().uuidString)"
+        try await buffer.enqueue(Batch(
+            id: Batch.makeId(),
+            sourceId: "synthetic:test@example.com",
+            tableName: Self.backgroundTable.tableName,
+            records: [["id": .string(rowId), "label": .string("alpha")]],
+            schema: Self.backgroundTable,
+            deletedIds: [],
+            createdAt: Date()
+        ))
+        let stats = try await uploader.drain()
+        XCTAssertEqual(stats.handedOff, 1)
+        XCTAssertEqual(stats.uploaded, 0)
+
+        await fulfillment(of: [recorded], timeout: 60)
+
+        let remaining = try await buffer.count()
+        XCTAssertEqual(remaining, 0, "the delivered batch leaves the buffer")
+        let marks = try await buffer.backgroundUploadMarks()
+        XCTAssertTrue(marks.isEmpty)
+        let outbox = directory.appendingPathComponent("outbox")
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: outbox.path)) ?? []
+        XCTAssertTrue(files.isEmpty, "the outbox file is deleted")
+
+        var query = URLRequest(url: baseURL.appendingPathComponent("analytics/sql"))
+        query.httpMethod = "POST"
+        query.setValue("Bearer \(apiKey!)", forHTTPHeaderField: "Authorization")
+        query.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        query.httpBody = try JSONSerialization.data(withJSONObject: [
+            "sql": "SELECT COUNT(*) FROM \(Self.backgroundTable.tableName) WHERE id = '\(rowId)'",
+        ])
+        let (body, response) = try await session.data(for: query)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        struct Rows: Decodable { let rows: [[Int]] }
+        XCTAssertEqual(try JSONDecoder().decode(Rows.self, from: body).rows.first?.first, 1)
+    }
+
+    private static let backgroundTable = AnalyticsTableSchema(
+        tableName: "e2e_background_rows",
+        displayName: "Background rows",
+        description: "Fictional rows for the background upload E2E",
+        columns: [
+            ColumnDefinition(name: "id", type: .varchar, description: "Row"),
+            ColumnDefinition(name: "label", type: .varchar, description: "Label"),
+        ],
+        primaryKey: ["id"]
+    )
+
     // MARK: - AdminClient (admin-scope paths)
 
     /// Lists registered devices — should at least return a parseable
@@ -208,10 +296,16 @@ final class GatewayLiveE2ETests: XCTestCase {
 
 // MARK: - Helpers
 
-/// `URLSessionDelegate` that accepts any server TLS cert. Test-only —
-/// production uses `OmnesisURLSession.shared`, which pins the gateway's
-/// leaf fingerprint via Keychain.
-private final class AcceptAnyCertDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+/// The live suite's session delegate. Test-only — production uses
+/// `OmnesisURLSession.shared`, which pins the gateway's leaf fingerprint via
+/// Keychain.
+///
+/// It accepts any server TLS cert, and logs where each request spent its time.
+/// A request that times out says nothing about how far it got, so this line is
+/// what separates a client that never connected from a gateway that never
+/// answered: a phase that started and did not finish reads `unfinished`, and one
+/// never reached reads `-`.
+private final class LiveSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
@@ -222,5 +316,32 @@ private final class AcceptAnyCertDelegate: NSObject, URLSessionDelegate, @unchec
         } else {
             completionHandler(.performDefaultHandling, nil)
         }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didFinishCollecting metrics: URLSessionTaskMetrics
+    ) {
+        let request = "\(task.originalRequest?.httpMethod ?? "?") \(task.originalRequest?.url?.path ?? "?")"
+        let total = String(format: "%.2fs", metrics.taskInterval.duration)
+        for transaction in metrics.transactionMetrics {
+            let phases = [
+                "reused=\(transaction.isReusedConnection)",
+                "dns=\(span(transaction.domainLookupStartDate, transaction.domainLookupEndDate))",
+                "connect=\(span(transaction.connectStartDate, transaction.connectEndDate))",
+                "tls=\(span(transaction.secureConnectionStartDate, transaction.secureConnectionEndDate))",
+                "wait=\(span(transaction.requestEndDate, transaction.responseStartDate))",
+                "body=\(span(transaction.responseStartDate, transaction.responseEndDate))",
+                "peer=\(transaction.remoteAddress ?? "-")",
+            ].joined(separator: " ")
+            NSLog("[live-e2e] %@ total=%@ %@", request, total, phases)
+        }
+    }
+
+    private func span(_ start: Date?, _ end: Date?) -> String {
+        guard let start else { return "-" }
+        guard let end else { return "unfinished" }
+        return String(format: "%.2fs", end.timeIntervalSince(start))
     }
 }

@@ -390,7 +390,24 @@ describe("content script — page start", () => {
     const page = openPage({
       html: ARTICLE_HTML.replace("<nav>", '<form><input type="password"></form><nav>'),
     });
-    await waitForState(page, "excluded", "password-field");
+    await waitForState(page, "excluded", "sensitive-field");
+    expect(page.clock.pending()).toBe(0);
+  });
+
+  it.each([
+    ["a one-time-code field", '<form><input autocomplete="one-time-code"></form>'],
+    ["a card number field", '<form><input name="cardnumber"></form>'],
+  ])("treats a page that carries %s as excluded", async (_label, field) => {
+    const page = openPage({ html: ARTICLE_HTML.replace("<nav>", `${field}<nav>`) });
+    await waitForState(page, "excluded", "sensitive-field");
+    expect(page.clock.pending()).toBe(0);
+  });
+
+  it("treats a page with a card field inside an open shadow root as excluded", async () => {
+    const page = openPage({ html: ARTICLE_HTML.replace("<nav>", '<div id="pay"></div><nav>') });
+    const shadow = page.document.getElementById("pay")!.attachShadow({ mode: "open" });
+    shadow.innerHTML = '<input autocomplete="cc-csc">';
+    await waitForState(page, "excluded", "sensitive-field");
     expect(page.clock.pending()).toBe(0);
   });
 });
@@ -539,8 +556,40 @@ describe("content script — popup status responder", () => {
     const results = [...page.chrome.messageListeners].map((listener) =>
       listener({ type: "something-else" }, {}, respond),
     );
-    expect(results).toEqual([false]);
+    expect(results.every((result) => result === false)).toBe(true);
     expect(respond).not.toHaveBeenCalled();
+  });
+});
+
+describe("content script — screenshot confirmation", () => {
+  function ask(page: Page, url: string, contentHash: string): unknown {
+    let answer: unknown;
+    for (const listener of page.chrome.messageListeners) {
+      listener({ type: "screenshot-check", url, contentHash }, {}, (response) => {
+        answer ??= response;
+      });
+    }
+    return answer;
+  }
+
+  it("confirms the capture it emitted, and refuses once the page navigated on the same site", async () => {
+    const page = openPage();
+    await waitForState(page, "watching");
+    await page.clock.tick(5_000);
+    await vi.waitFor(() => expect(page.chrome.captures()).toHaveLength(1));
+    const { contentHash } = page.chrome.captures()[0]!.emission;
+
+    expect(ask(page, PAGE_URL, contentHash)).toEqual({ ok: true });
+    expect(ask(page, PAGE_URL, "f".repeat(64))).toEqual({ ok: false, reason: "other-capture" });
+
+    page.location.href = "https://news.example.com/account/billing";
+    expect(ask(page, PAGE_URL, contentHash)).toEqual({ ok: false, reason: "navigated" });
+  });
+
+  it("refuses before the page has emitted any capture", async () => {
+    const page = openPage();
+    await waitForState(page, "watching");
+    expect(ask(page, PAGE_URL, "a".repeat(64))).toEqual({ ok: false, reason: "other-capture" });
   });
 });
 
@@ -587,7 +636,7 @@ describe("content script — teardown on context invalidation", () => {
     await waitForState(page, "watching");
     expect(page.window.listenerCount()).toBe(4);
     expect(page.chrome.storageListeners.size).toBe(1);
-    expect(page.chrome.messageListeners.size).toBe(1);
+    expect(page.chrome.messageListeners.size).toBe(2);
 
     page.chrome.live.runtimeId = undefined;
     page.location.href = "https://news.example.com/after-reload";

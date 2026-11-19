@@ -115,6 +115,8 @@ async function boundCapture(
 async function startBackground(
   fetchImpl: typeof fetch,
   initialStorage: Record<string, unknown> = {},
+  extraChrome: Record<string, unknown> = {},
+  grants: { screenshots?: boolean } = {},
 ): Promise<BackgroundHarness> {
   vi.resetModules();
   const storage: Record<string, unknown> = {
@@ -217,7 +219,10 @@ async function startBackground(
           throw new Error("fictional permission API failure");
         }
         return {
-          origins: hostPermissionGranted ? ["https://*/*"] : [],
+          origins: [
+            ...(hostPermissionGranted ? ["https://*/*"] : []),
+            ...(grants.screenshots ? ["<all_urls>"] : []),
+          ],
           permissions: ["alarms", "storage"],
         };
       }),
@@ -268,6 +273,7 @@ async function startBackground(
         return Promise.resolve();
       }),
     },
+    ...extraChrome,
   });
   await import("./background.js");
   if (!listener) throw new Error("background did not register its message listener");
@@ -2230,5 +2236,249 @@ describe("MV3 background restart", () => {
     expect(delivered.some((body) => body.includes("Restart other-gateway-page"))).toBe(false);
     // With the outbox empty the standing handoff-failure notice is withdrawn.
     expect(storage[CAPTURE_HANDOFF_FAILURE_KEY]).toBe("");
+  });
+});
+
+describe("MV3 background page screenshots", () => {
+  const PAGE = "https://news.example.com/invented-story";
+
+  function emissionFor(url = PAGE): CaptureEmission {
+    return {
+      kind: "visit",
+      normalizedUrl: url,
+      title: "An invented story",
+      text: "Invented readable text of a fictional story.",
+      contentHash: TEST_CONTENT_HASH,
+      visitedAt: "2026-01-01T00:00:00.000Z",
+      dwellMs: 5_000,
+      contentChanged: true,
+    };
+  }
+
+  /** `chrome.tabs` / `chrome.windows` for one focused window showing tab 7 on `url`. */
+  function screenFor(url = PAGE, confirm: () => Promise<unknown> = async () => ({ ok: true })) {
+    const captureVisibleTab = vi.fn(async () => "data:image/jpeg;base64,AAAA");
+    const sendMessage = vi.fn((_tabId: number, _message: unknown) => confirm());
+    return {
+      captureVisibleTab,
+      sendMessage,
+      extra: {
+        tabs: {
+          get: vi.fn(async () => ({ id: 7, windowId: 2, active: true, url })),
+          captureVisibleTab,
+          sendMessage,
+        },
+        windows: { get: vi.fn(async () => ({ id: 2, focused: true, state: "normal" })) },
+      },
+    };
+  }
+
+  function stubCanvas(): void {
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => ({ width: 2560, height: 1600, close: vi.fn() })),
+    );
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        constructor(
+          readonly width: number,
+          readonly height: number,
+        ) {}
+        getContext() {
+          return { drawImage: vi.fn(), imageSmoothingQuality: "low" };
+        }
+        async convertToBlob(options: { type: string }) {
+          const bytes = new Uint8Array(16);
+          bytes.set(new TextEncoder().encode("RIFF"), 0);
+          bytes.set(new TextEncoder().encode("WEBP"), 8);
+          return new Blob([bytes], { type: options.type });
+        }
+      },
+    );
+  }
+
+  function recordingFetch(screenshots: boolean, requests: string[]): typeof fetch {
+    return policyAwareFetch(
+      () => policyBody({ screenshots: { enabled: screenshots } }),
+      (input, init) => {
+        requests.push(`${init.method} ${new URL(input).pathname}`);
+        return input.includes("/documents/preview")
+          ? jsonResponse(200, { stored: true, preview: {} })
+          : jsonResponse(200, { ingested: 1, deleted: 0 });
+      },
+    );
+  }
+
+  it("uploads a downscaled screenshot after the page when the shared policy asks for one", async () => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = screenFor();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"));
+    expect(requests.indexOf("POST /documents")).toBeLessThan(
+      requests.indexOf("PUT /documents/preview"),
+    );
+    expect(screen.captureVisibleTab).toHaveBeenCalledWith(2, { format: "jpeg", quality: 92 });
+    const upload = (fetch as unknown as Mock).mock.calls.find(([url]) =>
+      String(url).includes("/documents/preview"),
+    );
+    const body = JSON.parse(String((upload?.[1] as { body: string }).body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body).toMatchObject({
+      providerId: "web",
+      sourceId: "web",
+      externalId: await hashText(PAGE),
+      contentType: "image/webp",
+      width: 1280,
+      height: 800,
+    });
+    expect(body).not.toHaveProperty("contentHash");
+  });
+
+  it("takes no screenshot while the shared policy has them off", async () => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = screenFor();
+    const { listener } = await startBackground(recordingFetch(false, requests), {}, screen.extra);
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+    expect(requests).not.toContain("PUT /documents/preview");
+  });
+
+  it.each([
+    ["the tab moved to another page of the same site", () => screenFor(`${PAGE}/signin`)],
+    [
+      "the page declines the shot",
+      () => screenFor(PAGE, async () => ({ ok: false, reason: "typing" })),
+    ],
+    ["the page does not answer", () => screenFor(PAGE, () => new Promise(() => undefined))],
+  ])("takes no screenshot when %s", async (_label, makeScreen) => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = makeScreen();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      url: PAGE,
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+    expect(requests).not.toContain("PUT /documents/preview");
+  });
+
+  it("asks the page to confirm the exact capture before shooting it", async () => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = screenFor();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      url: PAGE,
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"));
+    expect(screen.sendMessage).toHaveBeenCalledWith(7, {
+      type: "screenshot-check",
+      url: PAGE,
+      contentHash: TEST_CONTENT_HASH,
+    });
+  });
+
+  it("takes no screenshot in a browser Chrome has not allowed to take one", async () => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = screenFor();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+    );
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+  });
+
+  it("does not shoot the page again until its text changes", async () => {
+    stubCanvas();
+    const requests: string[] = [];
+    const screen = screenFor();
+    const { listener } = await startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+    const sender = { id: "extension-test", tab: { id: 7, url: PAGE } };
+    await sendMessage(listener, await boundCapture(emissionFor()), sender);
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"));
+    await sendMessage(
+      listener,
+      await boundCapture({ ...emissionFor(), visitedAt: "2026-01-01T01:00:00.000Z" }),
+      sender,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.captureVisibleTab).toHaveBeenCalledTimes(1);
+    await sendMessage(
+      listener,
+      await boundCapture({ ...emissionFor(), contentHash: "b".repeat(64) }),
+      sender,
+    );
+    await vi.waitFor(() => expect(screen.captureVisibleTab).toHaveBeenCalledTimes(2));
+  });
+
+  it("can switch the shared setting from the popup and adopts the gateway's answer", async () => {
+    let enabled = false;
+    const fetchImpl = policyAwareFetch(
+      () => policyBody({ screenshots: { enabled } }),
+      () => jsonResponse(200, { ingested: 0, deleted: 0 }),
+      (input, init) => {
+        if (input.endsWith("/web-capture-policy/screenshots") && init.method === "PUT") {
+          enabled = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled;
+        }
+        return policyBody({ screenshots: { enabled } });
+      },
+    );
+    const { listener, storage } = await startBackground(fetchImpl);
+    await expect(
+      sendMessage(listener, { type: "set-screenshots", enabled: true }, popupSender),
+    ).resolves.toEqual({ ok: true });
+    expect(enabled).toBe(true);
+    const cached = JSON.parse(String(storage[CAPTURE_POLICY_KEY])) as {
+      policy: WebCapturePolicy;
+    };
+    expect(cached.policy.screenshots).toEqual({ enabled: true });
   });
 });

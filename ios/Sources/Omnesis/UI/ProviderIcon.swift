@@ -133,7 +133,7 @@ struct BackendBrandIcon: View {
             HStack(spacing: 8) {
                 ProviderIcon(providerId: id, size: 18)
                 Text(id)
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.textPrimary)
             }
         }

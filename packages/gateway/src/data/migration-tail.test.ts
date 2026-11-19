@@ -73,6 +73,16 @@ const WOUND_BACK = [
   210,
   // 211 lowers cursor stamps; its input is the sync_state rows a test plants.
   211,
+  // 212 recreates the date pending-age index that 203 drops during the replay;
+  // an install below the tail had it from migration 100.
+  212,
+  // 213 creates the host agent grant tables, which undoHostAgentGrants drops.
+  213,
+  // 214 re-redacts stored web pages; it repairs data, not shape.
+  214,
+  // 215 rebuilds the host agent grants that undoHostAgentGrants drops, so 213
+  // recreates them in the shape 215 relaxes.
+  215,
 ];
 
 let dir: string;
@@ -136,6 +146,12 @@ function undoVocabulary(db: Db): void {
     .all();
   if (pendingVoiceColumns.some((row) => row.name === "allow_vocabulary"))
     db.exec("ALTER TABLE voice_note_transcriptions DROP COLUMN allow_vocabulary");
+}
+
+/** Undo migration 206: no agent host bindings and no host agent grants. */
+function undoHostAgentGrants(db: Db): void {
+  db.exec("DROP TABLE IF EXISTS access_host_agent_grants");
+  db.exec("DROP TABLE IF EXISTS access_host_identity_bindings");
 }
 
 /** Undo migration 204: no interest ledger and no thumbs on brief items. */
@@ -257,6 +273,7 @@ function undoKnowledge(db: Db): void {
  */
 function windBack(db: Db): void {
   db.exec("ALTER TABLE agent_messages DROP COLUMN author_json");
+  undoHostAgentGrants(db);
   undoInterest(db);
   undoDecisionAnchors(db);
   undoTaskSuggestions(db);

@@ -3,6 +3,7 @@
 
 import { z } from "zod";
 import { createLogger, hostIsOwned } from "@omnesis/core";
+import { normalizeWebCaptureSite } from "@omnesis/config";
 import { SourceId, type DeviceId, type Scope } from "@omnesis/types";
 import {
   DEFAULT_WEB_CAPTURE_RULES,
@@ -29,12 +30,13 @@ const log = createLogger("gateway").child("web-capture-policy");
 /**
  * The gateway-owned capture policy of the Web Pages source.
  *
- * The operator-editable settings — the shared pause and the excluded domains —
- * live under `capture` in the web source's own `sources.config` row, so they
+ * The operator-editable settings — the shared pause, the excluded domains and
+ * the page-screenshot switch — live under `capture` in the web source's own `sources.config` row, so they
  * survive with the source and every paired browser reads the same values. The
  * rest of the policy is derived on read: the hosts other sources own (pushed by
- * the collector), the built-in privacy rules, and the pages the user deleted
- * for good (the source's `removed_documents` tombstones).
+ * the collector), the operator's own sites (the `webCapture.ownSites` setting),
+ * the built-in privacy rules, and the pages the user deleted for good (the
+ * source's `removed_documents` tombstones).
  *
  * Edits are read-modify-write of one JSON column, so they run one at a time
  * through an in-process lane: two browsers adding different domains in the same
@@ -50,6 +52,7 @@ const MAX_EXCLUDED_DOMAINS = 1_000;
 const storedSettingsSchema = z.object({
   pause: z.object({ until: z.number().finite().nullable() }).nullable().default(null),
   excludedDomains: z.array(z.string().max(MAX_CAPTURE_DOMAIN_CHARS)).default([]),
+  screenshots: z.object({ enabled: z.boolean() }).default({ enabled: false }),
   updatedAt: z.string().default(""),
 });
 type StoredSettings = z.infer<typeof storedSettingsSchema>;
@@ -61,6 +64,14 @@ export interface WebCapturePolicyDeps {
   documentService: DocumentService;
   /** The union of every source's `ownedWebDomains`, as the collector last pushed it. */
   ownedDomains: () => readonly string[];
+  /** The operator's `webCapture.ownSites`, read live so a config edit applies on the next read. */
+  ownSites?: () => readonly string[] | undefined;
+  /**
+   * Whether the gateway can keep page screenshots at all. While it cannot (its
+   * preview store did not open), the policy reports screenshots off and
+   * unavailable, so browsers stop taking shots nothing would store.
+   */
+  screenshotsAvailable?: () => boolean;
   /**
    * Invalidates cached source listings after the source row changed. No
    * `source.updated` command is sent: no collector hosts the web source, and
@@ -85,6 +96,26 @@ export class WebCapturePolicyService {
     return this.deps.now?.() ?? Date.now();
   }
 
+  /**
+   * The policy ingest judges captured pages by: the settings, owned domains,
+   * own sites and rules, without the removed-pages list (ingest refuses those
+   * pages through their tombstones) and without the pause (a page captured
+   * before a pause began is still delivered).
+   */
+  ingestPolicy(): WebCapturePolicy {
+    const stored = this.storedSettings();
+    return {
+      updatedAt: stored.updatedAt,
+      pause: null,
+      excludedDomains: stored.excludedDomains,
+      ownedDomains: [...this.deps.ownedDomains()],
+      ownSites: this.ownSites(),
+      rules: DEFAULT_WEB_CAPTURE_RULES,
+      removedPages: [],
+      removedPagesTruncated: false,
+    };
+  }
+
   /** The policy every paired browser enforces. */
   read(): WebCapturePolicy {
     const stored = this.storedSettings();
@@ -94,7 +125,12 @@ export class WebCapturePolicyService {
       // A lapsed timed pause reads as resumed so clients need no clock of their own.
       pause: pauseActive(stored.pause, this.now()) ? stored.pause : null,
       excludedDomains: stored.excludedDomains,
+      screenshots:
+        this.deps.screenshotsAvailable?.() === false
+          ? { enabled: false, available: false }
+          : { enabled: stored.screenshots.enabled },
       ownedDomains: [...this.deps.ownedDomains()],
+      ownSites: this.ownSites(),
       rules: DEFAULT_WEB_CAPTURE_RULES,
       removedPages: removed.ids,
       removedPagesTruncated: removed.truncated,
@@ -144,9 +180,32 @@ export class WebCapturePolicyService {
     return this.read();
   }
 
+  /** Turn page screenshots on or off for every paired browser. */
+  async setScreenshots(enabled: boolean, auth: PolicyAuth): Promise<WebCapturePolicy> {
+    await this.edit(auth, (stored) =>
+      stored.screenshots.enabled === enabled ? null : { ...stored, screenshots: { enabled } },
+    );
+    return this.read();
+  }
+
   async clearPause(auth: PolicyAuth): Promise<WebCapturePolicy> {
     await this.edit(auth, (stored) => (stored.pause === null ? null : { ...stored, pause: null }));
     return this.read();
+  }
+
+  /**
+   * The configured own sites as bare hostnames. An entry that names no usable
+   * host is dropped with a warning rather than failing the policy every
+   * browser depends on.
+   */
+  private ownSites(): string[] {
+    const sites = new Set<string>();
+    for (const entry of this.deps.ownSites?.() ?? []) {
+      const domain = normalizeWebCaptureSite(entry);
+      if (domain) sites.add(domain);
+      else log.warn(`Ignoring webCapture.ownSites entry "${entry}": not a valid host`);
+    }
+    return [...sites].sort();
   }
 
   private storedSettings(): StoredSettings {
@@ -191,6 +250,7 @@ export class WebCapturePolicyService {
     const capture: StoredSettings = {
       pause: settings.pause,
       excludedDomains: settings.excludedDomains,
+      screenshots: settings.screenshots,
       updatedAt: new Date(this.now()).toISOString(),
     };
     const updated = await this.deps.writeGate.updateSource(WEB_SOURCE, {

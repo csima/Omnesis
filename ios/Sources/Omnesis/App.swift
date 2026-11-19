@@ -71,6 +71,8 @@ public struct OmnesisApp: App {
                 RealtimeScrollDemoSurface()
             } else if Self.settingsPreview {
                 settingsPreviewRoot
+            } else if Self.homeAttentionPreview {
+                homeAttentionPreviewRoot
             } else if Self.accessAuthorizationPreview {
                 accessAuthorizationPreviewRoot
             } else if Self.agentReadingAnchorPreview {
@@ -162,11 +164,13 @@ public struct OmnesisApp: App {
 
     /// Resolves the `DEMO_AGENT_PREVIEW` launch environment to a seeded
     /// transcript, or `nil` for the normal app root. `tall` is a uniform
-    /// long conversation (bottom-fade visual check); `scroll-stress` mixes
+    /// long conversation (bottom-fade visual check); `timeline` adds Timeline
+    /// content to the rich transcript; `scroll-stress` mixes
     /// short and very tall turns to drive the scroll-to-bottom UI test.
     static var agentPreviewSeed: AppStore.AgentPreviewSeed? {
         switch ProcessInfo.processInfo.environment["DEMO_AGENT_PREVIEW"] {
         case "store": PreviewMocks.agentStoreTranscript
+        case "timeline": PreviewMocks.agentTimelineTranscript
         case "conversation-controls": PreviewMocks.agentConversationControls
         case "tall": PreviewMocks.agentTallTranscript
         case "scroll-stress", "scroll-stress-delayed": PreviewMocks.agentScrollStressTranscript
@@ -176,6 +180,26 @@ public struct OmnesisApp: App {
 
     static var settingsPreview: Bool {
         ProcessInfo.processInfo.environment["DEMO_SETTINGS_PREVIEW"] == "1"
+    }
+
+    /// `DEMO_HOME_PREVIEW=attention` boots the whole home shell over a
+    /// preview store with phone sources needing attention, so the top banner
+    /// can be checked against each section's own top controls in a real
+    /// process, on any display.
+    static var homeAttentionPreview: Bool {
+        ProcessInfo.processInfo.environment["DEMO_HOME_PREVIEW"] == "attention"
+    }
+
+    private var homeAttentionPreviewRoot: some View {
+        let store = AppStore.preview(
+            sources: PreviewMocks.sources,
+            statusSnapshot: PreviewMocks.statusSnapshot,
+            sourcePermissionHealth: PreviewMocks.sourcePermissionHealth
+        )
+        return HomeView()
+            .environment(store)
+            .environment(store.notificationRouter)
+            .environment(\.appearanceStore, store.appearance)
     }
 
     static var accessAuthorizationPreview: Bool {
@@ -314,6 +338,7 @@ private struct MenuRevealDemoRoot: View {
         }
         .environment(AppStore.preview())
         .environment(\.appearanceStore, AppearanceStore(mode: .dark))
+        .publishesFoldHinge()
     }
 
     private var listSurface: some View {
@@ -1711,6 +1736,7 @@ public final class AppStore {
     /// preferences survive, matching an intentional re-pair.
     private func tearDownAfterPairingLoss(wipeBuffer: Bool) async {
         TranscriptionVocabularyCache.shared.clear()
+        clearDocumentPreviewCaches()
         adminCoord.stopAdmin()
         agentCoord.teardown()
         notesCoord.teardown()
@@ -1775,6 +1801,7 @@ public final class AppStore {
         let stagedRevocation = pairingCoord.stageUnpair()
         guard stagedRevocation != nil || pairingCoord.pairing == nil else { return }
         TranscriptionVocabularyCache.shared.clear()
+        clearDocumentPreviewCaches()
         adminCoord.stopAdmin()
         agentCoord.teardown()
         NotificationClaimCredentials.clear()
@@ -2125,20 +2152,16 @@ public final class AppStore {
         )
         backgroundDelivery = installer
         await installer.install { [weak self] in
-            // The closure is `@Sendable` (runs in the global actor
-            // context). Hop to the main actor to fire-and-forget a sync
-            // on the main-actor-isolated coordinator. `Task<Void, Never>`
-            // pins the overload (throwing vs non-throwing) and the
-            // `_ =` discards the value so `MainActor.run`'s closure
-            // returns `Void` — without that, type inference flips and
-            // the closure body becomes `Task<Void, Never>` instead.
-            await MainActor.run { [weak self] in
-                _ = Task<Void, Never> { [weak self] in
-                    await self?.syncCoord.syncOne(sourceId: "apple-health:local")
-                }
-            }
+            // HealthKit counts the wake as handled when this returns, and iOS
+            // may suspend the app soon after, so it waits for the sync and
+            // its drain (or for the wake's time to run short).
+            await self?.handleHealthKitWake()
         }
         #endif
+    }
+
+    private func handleHealthKitWake() async {
+        await syncCoord.handleHealthKitWake(sourceId: "apple-health:local")
     }
 
     // MARK: - Photos opt-in / opt-out
@@ -3454,6 +3477,10 @@ struct RootView: View {
 
     var body: some View {
         RootContent()
+            // Text follows the reader's size up to the third accessibility
+            // size; past it the dense screens, built in fixed point sizes,
+            // would truncate more than they gain.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility3)
             // Shake-to-annotate (developer mode only): a hidden channel for filing
             // data-quality notes on the current entity for later engineering review.
             .developerAnnotationCapture()

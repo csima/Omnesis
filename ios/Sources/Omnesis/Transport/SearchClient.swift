@@ -17,11 +17,15 @@ public final class SearchClient: Sendable {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let graphCapability = SearchGraphCapability()
+    /// Preview images for the documents this client returns, fetched over
+    /// the same session with the same token.
+    public let previews: DocumentPreviewLoader
 
     public init(baseURL: URL, token: String, session: URLSessionLike = OmnesisURLSession.shared) {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+        self.previews = DocumentPreviewLoader(baseURL: baseURL, token: token, session: session)
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
     }
@@ -628,16 +632,18 @@ public struct SearchResultItem: Decodable, Identifiable, Hashable, Sendable {
     public let refCount: Int?
     public let scoreBreakdown: SearchScoreBreakdown?
     public var provenance: SearchProvenance?
+    public var preview: DocumentPreview?
 
     private enum CodingKeys: String, CodingKey {
         case documentId, sourceId, documentType, title, sourceUrl, appUrl, sourceCreatedAt
-        case author, chunkText, score, refCount, scoreBreakdown, provenance
+        case author, chunkText, score, refCount, scoreBreakdown, provenance, preview
     }
 }
 
 extension SearchResultItem {
-    /// `provenance` is optional enrichment: a block this build cannot read
-    /// decodes as nil for that hit instead of failing the whole response.
+    /// `provenance` and `preview` are optional enrichment: a block this build
+    /// cannot read decodes as nil for that hit instead of failing the whole
+    /// response.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         documentId = try container.decode(String.self, forKey: .documentId)
@@ -653,6 +659,7 @@ extension SearchResultItem {
         refCount = try container.decodeIfPresent(Int.self, forKey: .refCount)
         scoreBreakdown = try container.decodeIfPresent(SearchScoreBreakdown.self, forKey: .scoreBreakdown)
         provenance = try? container.decodeIfPresent(SearchProvenance.self, forKey: .provenance)
+        preview = container.decodeDocumentPreview(forKey: .preview)
     }
 }
 
@@ -847,6 +854,30 @@ public struct RecentDocument: Decodable, Identifiable, Hashable, Sendable {
     public let relevanceScore: Double?
     public let sourceCreatedAt: String
     public let sourceUpdatedAt: String?
+    public var preview: DocumentPreview?
+}
+
+extension RecentDocument {
+    private enum CodingKeys: String, CodingKey {
+        case id, sourceId, externalId, title, contentPreview, documentType
+        case relevanceScore, sourceCreatedAt, sourceUpdatedAt, preview
+    }
+
+    /// Written out so an unreadable `preview` block degrades to nil for that
+    /// row instead of failing the page.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        sourceId = try container.decode(String.self, forKey: .sourceId)
+        externalId = try container.decode(String.self, forKey: .externalId)
+        title = try container.decode(String.self, forKey: .title)
+        contentPreview = try container.decodeIfPresent(String.self, forKey: .contentPreview)
+        documentType = try container.decodeIfPresent(String.self, forKey: .documentType)
+        relevanceScore = try container.decodeIfPresent(Double.self, forKey: .relevanceScore)
+        sourceCreatedAt = try container.decode(String.self, forKey: .sourceCreatedAt)
+        sourceUpdatedAt = try container.decodeIfPresent(String.self, forKey: .sourceUpdatedAt)
+        preview = container.decodeDocumentPreview(forKey: .preview)
+    }
 }
 
 // MARK: - Wire types — document detail
@@ -871,6 +902,9 @@ public struct DocumentDetail: Decodable, Identifiable, Sendable {
     /// True when the document belongs to a gateway-internal source
     /// (a dataset the gateway hosts itself). Absent on older gateways → false.
     public let isInternal: Bool
+    /// The document's preview image, when one was captured. Absent on older
+    /// gateways and on documents without one.
+    public let preview: DocumentPreview?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -886,6 +920,7 @@ public struct DocumentDetail: Decodable, Identifiable, Sendable {
         case ingestedAt = "ingested_at"
         case updatedAt = "updated_at"
         case isInternal = "internal"
+        case preview
     }
 
     /// Metadata is a serialized JSON blob OR a parsed object depending on
@@ -921,6 +956,7 @@ public struct DocumentDetail: Decodable, Identifiable, Sendable {
         // error, never as a silent `false` that shows the wrong
         // (two-button) delete prompt on an internal document.
         self.isInternal = try container.decodeIfPresent(Bool.self, forKey: .isInternal) ?? false
+        self.preview = container.decodeDocumentPreview(forKey: .preview)
     }
 
     /// Convenience: pull a string field out of metadata, or nil if absent.

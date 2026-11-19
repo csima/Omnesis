@@ -201,6 +201,7 @@ try {
       "list_loops",
       "fetch_loop",
       "list_tables",
+      "list_sources",
       "add_note",
     ].map((name) => `omnesis_${name}`),
   ].sort();

@@ -38,14 +38,21 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   after a timeout reuses a stored idempotency key, so the gateway replays the first redemption
   instead of finding the code spent.
 - **Capture policy.** The capture settings live on the gateway: `GET /web-capture-policy` serves the
-  shared pause, the excluded domains, the hosts other sources own, the built-in privacy rules and
-  the pages the user deleted for good. The worker keeps a copy under `omnesis.capture.policy.v1`
+  shared pause, the excluded domains, the page-screenshot switch, the hosts other sources own, the operator's own sites
+  (`webCapture.ownSites` in the gateway's config), the built-in privacy rules and the pages the
+  user deleted for good. `judgeCaptureUrl` also applies rules no gateway can switch off: the
+  built-in mail, messaging and password-manager sites (`BUILT_IN_SKIP_DOMAINS`, in force before
+  any collector announces owned domains), the default credential path segments, Cloudflare Access
+  paths and token links, including in a fragment-routed path (`/#/settings/tokens`). The worker keeps a copy under `omnesis.capture.policy.v1`
   (15-minute TTL, refreshed on the drain alarm, on popup open and from each of its own edits) and
   captures nothing without one. Edits go through the worker to the gateway, so every paired browser
   shares them. The contract lives in `@omnesis/provider-web/capture-policy`.
 - **A page's life.** The content script asks the worker `capture-eligibility` for its URL, applies
-  the password-field rule itself, then runs `CaptureLifecycle`: five seconds of focused dwell,
-  Defuddle + Turndown extraction of the rendered DOM as Markdown, a content hash, an emission the
+  the sensitive-field rule itself (password, one-time-code and card inputs, through open shadow
+  roots: `capture/sensitive-fields.ts`), then runs `CaptureLifecycle`: five seconds of focused
+  dwell, Defuddle + Turndown extraction of the rendered DOM as Markdown with credentials replaced
+  by `[redacted]` (`@omnesis/provider-web/redact-secrets`; the gateway redacts every ingested web
+  page and `page_visits` title again), a content hash, an emission the
   worker turns into one `POST /documents` (a `webpage` document keyed on the SHA-256 of the
   normalized URL) and one `POST /analytics/ingest` row (`page_visits`). Mutations re-extract after
   a debounce and re-push only when the text or title changed. The emission is staged in
@@ -54,6 +61,23 @@ code run under Node in the spawned-gateway E2E and byte for byte in the worker.
   remain available in diagnostic storage but do not trigger a popup warning or toolbar badge:
   they do not establish that an upload was lost. Current handoff failures and confirmed discarded
   uploads still surface in the popup and badge.
+- **Page screenshots.** Off unless the shared policy's `screenshots.enabled` is on. Then, when a
+  capture from a tab is queued, the worker (`chrome/screenshot.ts`) checks that tab is the active
+  tab of a focused, unminimized window at exactly the frame address the capture was sent from,
+  asks the page (`chrome/screenshot-check.ts`) to confirm within a second that it is still that
+  capture, focused, with no password, one-time-code or card field and nothing being typed, calls `chrome.tabs.captureVisibleTab`
+  (Chrome allows it only with `<all_urls>` or an `activeTab` invocation, so the Options page and
+  popup ask for the optional `<all_urls>` grant when screenshots are turned on in that browser,
+  and a browser without it takes none), checks the same again
+  afterwards and drops the shot if anything moved, then scales it to at most 1280 px on its
+  longest side and encodes WebP at 0.7 (JPEG where WebP is unavailable) with `OffscreenCanvas`
+  (`capture/screenshot.ts`), skipping it above 512 KB. It goes through the same durable queue as a
+  `preview` item to `PUT /documents/preview`, always behind its page's document; a refusal drops it
+  quietly, a server error retries that shot alone a few times without holding pages back, and it
+  is the first thing evicted when the queue's byte budget fills.
+  `omnesis.push.previewLedger.v1` remembers which page text each uploaded shot was taken of, so a
+  page is shot again only when its content hash changes. Captures recovered from a tab's outbox
+  get no shot.
 - **The worker.** MV3 workers are evicted within seconds of idling, so `background.ts` holds no
   authoritative state: every wake rebuilds the push client from the durable queue and config, and
   `chrome.alarms` drives the drain cadence. One request per pass, exponential backoff with

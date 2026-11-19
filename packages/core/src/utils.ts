@@ -106,6 +106,20 @@ export const GATEWAY_ANALYTICS_STORE_FILE = "analytics.db";
 /** The watch journal: the only copy of every watch's definition. */
 export const WATCH_JOURNAL_FILENAME = "watch.db";
 
+/**
+ * The gateway's document preview store: one image per document, beside the
+ * document store and owned by it, so image bytes never pass through the main
+ * store's writer.
+ */
+export const GATEWAY_PREVIEW_STORE_FILE = "previews.db";
+
+/**
+ * The preview store's schema generation, stamped in its own `user_version`.
+ * The store is created and upgraded by the gateway on open; this is the number
+ * the compatibility manifest reports for it.
+ */
+export const PREVIEW_STORE_SCHEMA_VERSION = 1;
+
 /** The operator's standing instructions to the agent, in the config directory. */
 export const OPERATOR_INSTRUCTIONS_FILENAME = "OMNESIS.md";
 

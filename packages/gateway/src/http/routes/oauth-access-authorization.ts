@@ -11,6 +11,7 @@ import {
   type ServedResource,
 } from "../../access/served-by-gateway.js";
 import { resolveOAuthOverviewUrls, resolveOAuthUrls } from "../../access/oauth-urls.js";
+import { normalizeHostAudience } from "../../access/host-identity.js";
 import { ClientMetadataDocumentResolver } from "../../access/client-metadata-document.js";
 import { normalizeInteractiveOAuthScope } from "../../access/oauth-scopes.js";
 import { MCP_ACCESS_SCOPE, type AuthorizationRequestPortal } from "../../access/types.js";
@@ -28,6 +29,11 @@ import {
   accessExecutionBindingBody,
   accessExecutionReissueBody,
   accessGrantUpdateBody,
+  accessHostAgentBody,
+  accessHostAgentDefaultBody,
+  accessHostAgentDefaultQuery,
+  accessHostAgentRevokeQuery,
+  accessHostIdentityBody,
   accessLevelCreateBody,
   accessLevelUpdateBody,
   accessLookupBody,
@@ -630,6 +636,202 @@ export function mountOAuthAuthorizationRoutes(
       return c.json(result.value);
     },
   );
+  // An agent host that calls through one connection for many agents says,
+  // per tool call, who is calling. Binding the connection to the host and
+  // giving each host agent its level are access decisions, so they are made
+  // from a portal session like the rest; reading them back is ordinary admin.
+  app.get("/admin/access/host-identity", noStore, scope.admin(), (c) =>
+    c.json(access.hostIdentity()),
+  );
+  app.put(
+    "/admin/access/connections/:id/host-identity",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostIdentityBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const body = c.req.valid("json");
+      // The host's assertions must name this gateway, or every call through
+      // the binding would be refused; a mistyped audience is caught here.
+      const served = resolveOAuthOverviewUrls(
+        c.req.url,
+        options.publicBaseUrl,
+        options.mcpResourceUrls,
+        options.loopbackBaseUrl,
+      )?.supportedResources.map(normalizeHostAudience);
+      const audience = normalizeHostAudience(body.audience);
+      if (!audience || !served?.includes(audience)) {
+        return c.json(
+          {
+            error: "audience-not-served",
+            message: "The audience must be one of this gateway's MCP URLs.",
+            servedAudiences: (served ?? []).filter((value): value is string => value !== null),
+          },
+          400,
+        );
+      }
+      const result = await access.bindHostIdentity({
+        connectionId: connectionId.data,
+        ...body,
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        return c.json({ error: result.error }, result.error === "not-found" ? 404 : 400);
+      }
+      log.info(`Connection ${connectionId.data} bound to agent host ${result.value.issuer}`);
+      return c.json({ binding: result.value });
+    },
+  );
+  app.delete(
+    "/admin/access/connections/:id/host-identity",
+    noStore,
+    scope.portalAdmin(),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.unbindHostIdentity({
+        connectionId: connectionId.data,
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) return c.json({ error: result.error }, 404);
+      log.info(`Connection ${connectionId.data} no longer bound to an agent host`);
+      return c.json({ removed: true });
+    },
+  );
+  app.post(
+    "/admin/access/connections/:id/host-agents",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostAgentBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.grantHostAgent({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        const status =
+          result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
+        return c.json({ error: result.error }, status);
+      }
+      log.info(
+        `Host agent ${result.value.agent} on connection ${connectionId.data} for ${result.value.person} ${result.value.levelId ? `given access level ${result.value.levelId}` : "denied"}`,
+      );
+      return c.json({ agent: result.value }, 201);
+    },
+  );
+  // Give an agent its level, or deny it with `levelId: null`, replacing the
+  // grant it has in one step, so a change never passes through the default.
+  app.put(
+    "/admin/access/connections/:id/host-agents",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostAgentBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.setHostAgent({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        const status =
+          result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
+        return c.json({ error: result.error }, status);
+      }
+      log.info(
+        `Host agent ${result.value.agent} on connection ${connectionId.data} for ${result.value.person} ${result.value.levelId ? `set to access level ${result.value.levelId}` : "denied"}`,
+      );
+      return c.json({ agent: result.value });
+    },
+  );
+  // The level a person's agents get when no grant names them, so an agent
+  // host's new agents need not each be granted one by one. It is set like a
+  // grant, and a grant naming an agent always wins over it.
+  app.put(
+    "/admin/access/connections/:id/host-agent-default",
+    noStore,
+    scope.portalAdmin(),
+    validateJson(accessHostAgentDefaultBody),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      const result = await access.setHostAgentDefault({
+        connectionId: connectionId.data,
+        ...c.req.valid("json"),
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok || !result.value) {
+        const error = result.ok ? "not-found" : result.error;
+        const status = error === "not-found" ? 404 : error === "invalid-selection" ? 400 : 409;
+        return c.json({ error }, status);
+      }
+      log.info(
+        `Default host agent level for ${result.value.person} on connection ${connectionId.data} set to ${result.value.levelId}`,
+      );
+      return c.json({ default: result.value });
+    },
+  );
+  app.delete(
+    "/admin/access/connections/:id/host-agent-default",
+    noStore,
+    scope.portalAdmin(),
+    async (c) => {
+      const connectionId = oauthApprovalId.safeParse(c.req.param("id"));
+      const query = accessHostAgentDefaultQuery.safeParse(c.req.query());
+      if (!connectionId.success) return c.json({ error: "not-found" }, 404);
+      if (!query.success) return c.json({ error: "invalid-selection" }, 400);
+      const result = await access.setHostAgentDefault({
+        connectionId: connectionId.data,
+        person: query.data.person,
+        levelId: null,
+        actorTokenId: c.get("auth").tokenId!,
+      });
+      if (!result.ok) {
+        const status =
+          result.error === "not-found" ? 404 : result.error === "invalid-selection" ? 400 : 409;
+        return c.json({ error: result.error }, status);
+      }
+      log.info(
+        `Default host agent level for ${query.data.person} on connection ${connectionId.data} cleared`,
+      );
+      return c.json({ cleared: true });
+    },
+  );
+  // Revoking an agent's grant while its person has a default would hand the
+  // agent that default, so it is refused unless `?fallback=default` says so.
+  app.delete("/admin/access/host-agents/:id", noStore, scope.portalAdmin(), async (c) => {
+    const grantId = oauthApprovalId.safeParse(c.req.param("id"));
+    const query = accessHostAgentRevokeQuery.safeParse(c.req.query());
+    if (!grantId.success) return c.json({ error: "not-found" }, 404);
+    if (!query.success) return c.json({ error: "invalid-selection" }, 400);
+    const result = await access.revokeHostAgent({
+      grantId: grantId.data,
+      actorTokenId: c.get("auth").tokenId!,
+      ...(query.data.fallback ? { fallback: query.data.fallback } : {}),
+    });
+    if (!result.ok) {
+      if (result.error === "default-would-apply") {
+        return c.json(
+          {
+            error: "default-would-apply",
+            message:
+              "This agent would get its person's default. Revoke with ?fallback=default for that, or deny the agent.",
+          },
+          409,
+        );
+      }
+      return c.json({ error: result.error }, 404);
+    }
+    log.info(
+      `Host agent grant ${grantId.data} revoked${result.value.onDefault ? ", its agent now on the default" : ""}`,
+    );
+    return c.json({ revoked: true, onDefault: result.value.onDefault });
+  });
   // A device's access level decides what its `/answer` requests may read and
   // whether they are reviewed, so it is authored like every other access
   // decision: from a portal session, never with a bearer token.

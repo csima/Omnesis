@@ -5,6 +5,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   CAPTURE_ORIGINS,
+  SCREENSHOT_ORIGINS,
+  hasScreenshotPermission,
+  requestScreenshotPermission,
   hasCapturePermission,
   needsCapturePermissionRepair,
   requestCapturePermission,
@@ -31,7 +34,7 @@ describe("capture host permission", () => {
       content_scripts?: Array<{ matches: string[] }>;
     };
 
-    expect(manifest.optional_host_permissions).toEqual(CAPTURE_ORIGINS);
+    expect(manifest.optional_host_permissions).toEqual([...CAPTURE_ORIGINS, ...SCREENSHOT_ORIGINS]);
     expect(manifest.incognito).toBe("not_allowed");
     expect(manifest.permissions).toContain("scripting");
     expect(manifest.content_scripts).toBeUndefined();
@@ -51,7 +54,9 @@ describe("capture host permission", () => {
     await expect(hasCapturePermission(getAll)).resolves.toBe(false);
     await expect(revokeCapturePermission(remove)).resolves.toBe(true);
     expect(getAll).toHaveBeenCalledExactlyOnceWith();
-    expect(remove).toHaveBeenCalledExactlyOnceWith({ origins: CAPTURE_ORIGINS });
+    expect(remove).toHaveBeenNthCalledWith(1, { origins: SCREENSHOT_ORIGINS });
+    expect(remove).toHaveBeenNthCalledWith(2, { origins: CAPTURE_ORIGINS });
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 
   it("uses Chrome's reported origin inventory for static content-script grants", async () => {
@@ -64,5 +69,27 @@ describe("capture host permission", () => {
     expect(needsCapturePermissionRepair(true, false)).toBe(true);
     expect(needsCapturePermissionRepair(true, true)).toBe(false);
     expect(needsCapturePermissionRepair(false, false)).toBe(false);
+  });
+
+  it("checks and asks for the screenshot grant separately from page capture", async () => {
+    await expect(
+      hasScreenshotPermission(() => Promise.resolve({ origins: ["https://*/*"] })),
+    ).resolves.toBe(false);
+    await expect(
+      hasScreenshotPermission(() => Promise.resolve({ origins: ["https://*/*", "<all_urls>"] })),
+    ).resolves.toBe(true);
+    const request = vi.fn(() => Promise.resolve(false));
+    await expect(requestScreenshotPermission(request)).resolves.toBe(false);
+    expect(request).toHaveBeenCalledExactlyOnceWith({ origins: ["<all_urls>"] });
+  });
+
+  it("still removes the HTTPS grant when the screenshot grant cannot be removed", async () => {
+    const remove = vi.fn((permissions: { origins?: string[] }) =>
+      permissions.origins?.includes("<all_urls>")
+        ? Promise.reject(new Error("not granted"))
+        : Promise.resolve(true),
+    );
+    await expect(revokeCapturePermission(remove)).resolves.toBe(true);
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 });

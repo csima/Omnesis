@@ -42,6 +42,7 @@ import {
   peopleBackfillTask,
   tokenIdentityClassifyTask,
 } from "./backfill-tasks.js";
+import { sweepCollapsedCandidates } from "./backfill-helpers.js";
 import type { BackfillTaskOptsInternal } from "./backfill.js";
 import type { TaskContext } from "../types.js";
 
@@ -79,17 +80,18 @@ function makeEvalOpts(overrides: {
   applied: { added: number; changed: number; removed: number };
 }) {
   const kicked: string[] = [];
-  const sweep = vi.fn(async () => ({ swept: 0 }));
+  const sweep = vi.fn(async (): Promise<string[]> => []);
   const compute = vi.fn(async () => ({
     equivalences: [],
     dirtyVersion: overrides.meta.dirtyVersion,
   }));
   const opts = {
     writeGate: {
-      sweepCollapsedMergeCandidates: sweep,
+      acceptCollapsedMergeCandidates: vi.fn(async (ids: string[]) => ({ swept: ids.length })),
       upsertMergeEquivalences: vi.fn(async () => overrides.applied),
     },
     ioGate: {
+      collapsedMergeCandidates: sweep,
       mergeRulesMeta: vi.fn(async () => overrides.meta),
       mergeEquivalencesData: vi.fn(async () => ({})),
     },
@@ -346,6 +348,34 @@ describe("mergeCandidatesDetectTask — completion report", () => {
     expect(opts.writeGate.autoApproveHighConfidenceCandidates).not.toHaveBeenCalled();
   });
 
+  test("while the merge judge is enforced, name matching hands candidates to it instead of merging", async () => {
+    const { opts } = makeDetectOpts(2, 1);
+    const kicked: string[] = [];
+    Object.assign(opts, {
+      getMergeJudgeMode: () => "enforce",
+      getDecision: () => ({ modelId: "decision-scripted-v1" }),
+      kickPeriodic: (name: string) => kicked.push(name),
+    });
+
+    const outcome = await mergeCandidatesDetectTask(opts).run(undefined, ctx);
+
+    expect(outcome).toEqual({ kind: "done", value: { idle: false, detected: true, approved: 0 } });
+    expect(opts.writeGate.autoApproveHighConfidenceCandidates).not.toHaveBeenCalled();
+    expect(kicked).toEqual(["backfill.mergeJudge"]);
+  });
+
+  test("a shadowed judge, or one with no decision model, leaves auto-approval as it was", async () => {
+    for (const [mode, decision] of [
+      ["shadow", { modelId: "decision-scripted-v1" }],
+      ["enforce", null],
+    ] as const) {
+      const { opts } = makeDetectOpts(2, 1);
+      Object.assign(opts, { getMergeJudgeMode: () => mode, getDecision: () => decision });
+      await mergeCandidatesDetectTask(opts).run(undefined, ctx);
+      expect(opts.writeGate.autoApproveHighConfidenceCandidates).toHaveBeenCalledOnce();
+    }
+  });
+
   test("a tick deferred by an in-flight graph reports no detection", async () => {
     const { opts, meta } = makeDetectOpts(1, 1);
     const task = mergeCandidatesDetectTask(opts);
@@ -356,6 +386,31 @@ describe("mergeCandidatesDetectTask — completion report", () => {
 
     expect(deferred).toEqual({ kind: "done", value: { idle: true } });
     expect(opts.cpuGate.scoreMergeCandidates).toHaveBeenCalledOnce();
+  });
+});
+
+describe("sweepCollapsedCandidates", () => {
+  test("finds candidates on the io gate and hands the writer only their ids", async () => {
+    const accept = vi.fn(async (ids: string[]) => ({ swept: ids.length }));
+    const found = vi.fn(async () => ["synth-candidate-1", "synth-candidate-2"]);
+    expect(
+      await sweepCollapsedCandidates(
+        { collapsedMergeCandidates: found },
+        { acceptCollapsedMergeCandidates: accept },
+      ),
+    ).toEqual({ swept: 2 });
+    expect(accept).toHaveBeenCalledWith(["synth-candidate-1", "synth-candidate-2"]);
+  });
+
+  test("asks nothing of the writer when nothing collapsed", async () => {
+    const accept = vi.fn(async (ids: string[]) => ({ swept: ids.length }));
+    expect(
+      await sweepCollapsedCandidates(
+        { collapsedMergeCandidates: async () => [] },
+        { acceptCollapsedMergeCandidates: accept },
+      ),
+    ).toEqual({ swept: 0 });
+    expect(accept).not.toHaveBeenCalled();
   });
 });
 
@@ -649,6 +704,23 @@ describe("people counts sweep — merge chains are flattened first", () => {
     // Stamped with the version the sweep computed against, so a change
     // during the sweep still leaves dirty ahead of it.
     expect(opts.writeGate.advancePeopleCountsWatermark).toHaveBeenCalledWith(8);
+  });
+
+  // The gateway no longer seeds the counts at boot with one whole-graph read:
+  // on a large graph that read held the single io worker for minutes, and
+  // every user read queued behind it (search provenance among them) waited
+  // for it. A first boot has no computed counts, and this sweep is what
+  // computes them, one bounded chunk at a time.
+  test("sweeps on a first boot, when the counts have never been computed", async () => {
+    const opts = metaOpts({
+      dirtyVersion: 0,
+      lastComputedVersion: 0,
+      lastComputedAt: null,
+    });
+    const task = peopleCountsRefreshTask(opts);
+    await task.run(task.initialArgs, ctx);
+    expect(opts.ioGate.peopleCountsChunk).toHaveBeenCalled();
+    expect(opts.writeGate.upsertPeopleCounts).toHaveBeenCalled();
   });
 
   test("sweeps anyway once the counts are old enough", async () => {

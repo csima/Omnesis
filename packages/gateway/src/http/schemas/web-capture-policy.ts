@@ -23,3 +23,6 @@ export const setCapturePauseBody = z.object({
 
 /** Path parameter of `DELETE /web-capture-policy/excluded-domains/:domain`. */
 export const excludedDomainParam = z.string().min(1).max(MAX_CAPTURE_DOMAIN_CHARS);
+
+// PUT /web-capture-policy/screenshots — the shared page-screenshot switch.
+export const setCaptureScreenshotsBody = z.object({ enabled: z.boolean() });

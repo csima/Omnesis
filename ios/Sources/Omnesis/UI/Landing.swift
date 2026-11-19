@@ -62,6 +62,9 @@ enum LandingPalette {
 /// scales to any device. `focusY` is the subject's centre in unit space so the
 /// halo tracks it instead of a magic constant that drifts when the layout moves.
 struct LandingBackdrop: View {
+    /// Horizontal centre of the subject, in unit space. Centred unless a
+    /// surface sets its subject to one side of a fold.
+    var focusX: CGFloat = 0.5
     var focusY: CGFloat = 0.44
 
     var body: some View {
@@ -93,7 +96,7 @@ struct LandingBackdrop: View {
                         .init(color: LandingPalette.halo.opacity(0.018), location: 0.62),
                         .init(color: LandingPalette.halo.opacity(0), location: 1.0),
                     ],
-                    center: UnitPoint(x: 0.5, y: focusY),
+                    center: UnitPoint(x: focusX, y: focusY),
                     startRadius: 0,
                     endRadius: diagonal * 0.52
                 )

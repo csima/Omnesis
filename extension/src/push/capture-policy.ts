@@ -74,6 +74,11 @@ export class CapturePolicyClient {
     return this.policyRequest("DELETE", "/web-capture-policy/pause");
   }
 
+  /** Switch page screenshots on or off for every paired browser. */
+  setScreenshots(enabled: boolean): Promise<WebCapturePolicy> {
+    return this.policyRequest("PUT", "/web-capture-policy/screenshots", { enabled });
+  }
+
   private async policyRequest(
     method: string,
     path: string,

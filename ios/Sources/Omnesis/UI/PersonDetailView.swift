@@ -144,14 +144,14 @@ struct PersonDetailView: View {
                         .lineLimit(2)
                     if person.isSelf {
                         Text("(self)")
-                            .font(.system(size: 12, weight: .medium))
+                            .scaledFont(size: 12, weight: .medium)
                             .foregroundStyle(Theme.success)
                     }
                 }
                 if let firstSeen = formatTimeAgo(person.firstSeen),
                    let lastSeen = formatTimeAgo(person.lastSeen) {
                     Text("first seen \(firstSeen) · last seen \(lastSeen)")
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.textMuted)
                 }
             }
@@ -177,7 +177,7 @@ struct PersonDetailView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.textMuted)
             Text(alias.alias)
-                .font(Theme.monospace(size: 11))
+                .scaledFont(size: 11, design: .monospaced)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
         }
@@ -221,11 +221,11 @@ struct PersonDetailView: View {
     private func statBlock(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 10))
+                .scaledFont(size: 10)
                 .foregroundStyle(Theme.textMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -255,7 +255,7 @@ struct PersonDetailView: View {
             if docs.isEmpty, !loading,
                !shouldShowPagedContent(itemCount: docs.count, paging: docsPaging) {
                 Text("No documents linked yet.")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.textMuted)
                     .padding(.vertical, Theme.Spacing.sm)
             } else {
@@ -298,7 +298,7 @@ struct PersonDetailView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(displayTitle(doc: doc))
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                 metaRow(doc: doc, roles: entry.roles)
@@ -322,7 +322,7 @@ struct PersonDetailView: View {
     private func metaRow(doc: DocumentDetail?, roles: [String]) -> some View {
         let parts = metaParts(doc: doc, roles: roles)
         Text(parts.joined(separator: " · "))
-            .font(.system(size: 11))
+            .scaledFont(size: 11)
             .foregroundStyle(Theme.textMuted)
             .lineLimit(1)
     }
@@ -606,7 +606,7 @@ struct PersonDetailPreviewWrapper: View {
                         if let firstSeen = formatTimeAgo(person.firstSeen),
                            let lastSeen = formatTimeAgo(person.lastSeen) {
                             Text("first seen \(firstSeen) · last seen \(lastSeen)")
-                                .font(.system(size: 11))
+                                .scaledFont(size: 11)
                                 .foregroundStyle(Theme.textMuted)
                         }
                     }
@@ -620,7 +620,7 @@ struct PersonDetailPreviewWrapper: View {
                                     .font(.system(size: 9))
                                     .foregroundStyle(Theme.textMuted)
                                 Text(alias.alias)
-                                    .font(Theme.monospace(size: 11))
+                                    .scaledFont(size: 11, design: .monospaced)
                                     .foregroundStyle(Theme.textSecondary)
                             }
                             .padding(.horizontal, 8)
@@ -650,10 +650,10 @@ struct PersonDetailPreviewWrapper: View {
                                 .foregroundStyle(Theme.textMuted)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Document \(entry.id)")
-                                    .font(.system(size: 13, weight: .medium))
+                                    .scaledFont(size: 13, weight: .medium)
                                     .foregroundStyle(Theme.textPrimary)
                                 Text(entry.roles.joined(separator: ", "))
-                                    .font(.system(size: 11))
+                                    .scaledFont(size: 11)
                                     .foregroundStyle(Theme.textMuted)
                             }
                             Spacer()
@@ -679,11 +679,11 @@ struct PersonDetailPreviewWrapper: View {
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.textPrimary)
                 .monospacedDigit()
             Text(label)
-                .font(.system(size: 10))
+                .scaledFont(size: 10)
                 .foregroundStyle(Theme.textMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

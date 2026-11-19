@@ -58,7 +58,13 @@ async function armedConfigDir(): Promise<string> {
   await ensureInstallRootKey({ backend: "file", configDir });
   await markSecretFileEncryptionRequired(configDir, { backend: "file" });
   await markStorageEncryptionRequired(configDir, { backend: "file" });
-  for (const keyName of ["main-db", "index-db", "analytics-db", "watch2-db"] as const) {
+  for (const keyName of [
+    "main-db",
+    "index-db",
+    "analytics-db",
+    "watch2-db",
+    "preview-db",
+  ] as const) {
     await ensureStorageKey(keyName, { configDir, backend: "file" });
   }
   return configDir;

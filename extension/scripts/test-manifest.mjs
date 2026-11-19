@@ -6,10 +6,12 @@
  *
  * Two edits, both of which must never reach a shipped build:
  *
- *   - the optional wildcard-HTTPS host permission becomes a mandatory one, so
- *     Chrome grants site access at install time. The real extension asks for
- *     it during pairing through a native dialog that no automation can click;
- *     a headless run would otherwise stall forever at "Pairing…".
+ *   - the optional host permissions become mandatory ones, so Chrome grants
+ *     them at install time: the wildcard-HTTPS one the real extension asks for
+ *     during pairing, and the `<all_urls>` one it asks for when page
+ *     screenshots are turned on in that browser. Both are native dialogs that
+ *     no automation can click; a headless run would otherwise stall forever at
+ *     "Pairing…" and could never take a screenshot.
  *   - a fixed `key` pins the extension id, so `chrome-extension://<id>/…`
  *     URLs are stable across runs and machines.
  *

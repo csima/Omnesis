@@ -266,7 +266,7 @@ struct FileTypePill: View {
                 .font(.system(size: iconSize))
                 .foregroundStyle(kind.color)
             Text(FileTypeIcons.label(mimeType: mimeType, filename: filename))
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
                 .tracking(0.3)
                 .foregroundStyle(Theme.textSecondary)
         }
@@ -302,7 +302,7 @@ struct FileTypePill: View {
                 HStack(spacing: 12) {
                     FileTypeIcon(mimeType: sample.mime, filename: sample.filename, size: 18)
                     Text(sample.filename ?? "—")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.textPrimary)
                     Spacer()
                     FileTypePill(mimeType: sample.mime, filename: sample.filename)

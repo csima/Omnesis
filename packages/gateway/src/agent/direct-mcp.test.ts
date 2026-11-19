@@ -194,7 +194,7 @@ describe("DirectMcpService", () => {
     ]);
 
     expect(service.manifest().map((tool) => tool.name)).toEqual(DIRECT_MCP_TOOL_NAMES);
-    expect(service.manifest()).toHaveLength(12);
+    expect(service.manifest()).toHaveLength(13);
     expect(service.manifest()[0]).toMatchObject({
       name: "search_many",
       description: "Canonical description for search_many",
@@ -306,6 +306,7 @@ describe("DirectMcpService", () => {
       "lookup_document_by_url",
       "run_sql",
       "list_tables",
+      "list_sources",
     ]);
     const instructions = await service.instructions(restrictedAuthorization);
     expect(instructions).toContain("restricted to selected source instances");

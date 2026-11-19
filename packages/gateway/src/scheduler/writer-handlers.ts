@@ -60,6 +60,31 @@ type Db = Database.Database;
 // at the same priority are not trapped behind the entire rebuild.
 const NEAR_DUP_DF_APPLY_SLICE_MS = 100;
 
+// Background batches that loop over many small units give the writer back once
+// this much time is spent, so a write queued at their own priority is served
+// between slices rather than after the whole batch.
+const BACKGROUND_BATCH_SLICE_MS = 100;
+
+// The people backfill's unit is a whole document, and one document can name
+// dozens of people, so it checks against a shorter slice to keep a call's hold
+// (the slice plus the document it is on) inside the same bound.
+const PEOPLE_BACKFILL_SLICE_MS = 50;
+
+// One ANALYZE unit costs a walk of its whole index: this SQLite build enables
+// STAT4, so ANALYZE counts an index's entries exactly whatever the analysis
+// limit. The slice leaves room for one more unit inside the same bound.
+const PLANNER_STATISTICS_SLICE_MS = 50;
+
+function sliceDeadline(token: PreemptToken, sliceMs: number): () => boolean {
+  const deadline = performance.now() + sliceMs;
+  return () => token.requested() || performance.now() >= deadline;
+}
+
+// A compute batch carries up to a hundred docs. Same rule as the DF apply: give
+// the writer back between chunks once the slice is spent, so a background
+// write queued at the same priority does not wait for the whole batch.
+const NEAR_DUP_APPLY_SLICE_MS = 100;
+
 import { type SourceSyncMeta, type SyncCursor } from "@omnesis/source-sdk";
 import { recordLiveVoiceUsage, type LiveVoiceUsageSample } from "../realtime/live-voice-usage.js";
 import {
@@ -86,6 +111,7 @@ import { advanceOccWatermark } from "../data/occ-materialized.js";
 import {
   preparePendingSourcePage,
   acknowledgePendingSourcePage,
+  abandonPendingSourcePage,
   type PreparePendingSourcePage,
 } from "../data/repositories/PendingSourcePageRepository.js";
 import {
@@ -121,6 +147,7 @@ import {
 import { replaceSourceSyncIssues } from "../data/repositories/SourceSyncIssueRepository.js";
 import { promoteSourceWireContract } from "../data/repositories/SourceWireContractRepository.js";
 import { knowledgeWriterHandlers } from "../brain/knowledge/writer.js";
+import { advanceKnowledgeCascade } from "../brain/knowledge/storage.js";
 import { withdrawKnowledgeOwner } from "../brain/knowledge/owner-withdrawal.js";
 
 // Handlers import from canonical homes, not the
@@ -130,6 +157,7 @@ import { withdrawKnowledgeOwner } from "../brain/knowledge/owner-withdrawal.js";
 // `people.ts` (`runMergePass`, `collapseTransitiveChains`,
 // `upsertTransitiveCollapse`) keep their `../people.js` import below
 // — they move out under merge-service-decomposition.
+import { applyWebRedactionPage, type WebRedactionMutation } from "../sources/web/backfill.js";
 import {
   applySourceUrlRecanonicalizationPage,
   finishSourceUrlRecanonicalization,
@@ -163,6 +191,7 @@ import {
   type ActivityRetentionPhase,
 } from "../activity-retention/store.js";
 import { upsertSqliteTableStats, type SqliteTableStatsRow } from "../sqlite-catalog.js";
+import { refreshPlannerStatistics } from "../data/planner-statistics.js";
 import {
   cleanupExpiredAccessStateBatch,
   createAuthorizationRequest,
@@ -176,6 +205,12 @@ import {
   registerOAuthClient,
   reissueExecutionDeviceTokens,
   renameAccessPrincipal,
+  createHostAgentGrant,
+  removeHostIdentityBinding,
+  revokeHostAgentGrant,
+  setHostAgentDefault,
+  setHostAgentGrant,
+  setHostIdentityBinding,
   upsertOAuthMetadataClient,
   revokeAccessEntity,
   touchPrincipalCredentialUsageBatch,
@@ -195,7 +230,7 @@ import {
   applyMergeAdjudication,
   autoApproveHighConfidenceCandidates,
   denyMergeCandidate,
-  sweepCollapsedMergeCandidates,
+  acceptCollapsedMergeCandidates,
   pruneSuppressedMergeCandidates,
   reconcilePendingMergeCandidates,
   upsertTokenLabels,
@@ -228,7 +263,9 @@ import {
   invalidateTemporalAnnotation,
   invalidateTemporalAnnotationsForDoc,
   markTemporalAnnotationsRefilePresented,
+  relinkTemporalAnnotationProjections,
   type CreateTemporalAnnotationInput,
+  type TemporalProjectionMove,
   type UpdateTemporalAnnotationPatch,
   type TemporalAnnotationInvalidationResult,
 } from "../enrichment/temporal-annotations/storage.js";
@@ -602,6 +639,11 @@ import { advanceTranscriptionVocabularyRebuild } from "../transcribe/vocabulary/
 import type { WorthAnswer } from "../worth/answers.js";
 import type { SelfIdentitySource } from "../self-identity-sources.js";
 import type {
+  HostAgentDefaultInput,
+  HostAgentGrantCreateInput,
+  HostAgentGrantRevokeInput,
+  HostIdentityBindingInput,
+  HostIdentityUnbindInput,
   AccessPrincipalRenameInput,
   AccessRevocationInput,
   AccessConnectionLevelInput,
@@ -824,6 +866,8 @@ export const writerHandlers = {
     preparePendingSourcePage(db, args),
   "db.acknowledgePendingSourcePage": (db: Db, args: Omit<PreparePendingSourcePage, "payload">) =>
     acknowledgePendingSourcePage(db, args),
+  "db.abandonPendingSourcePage": (db: Db, args: Omit<PreparePendingSourcePage, "payload">) =>
+    abandonPendingSourcePage(db, args),
   "db.revokeSyncAttempt": (db: Db, sourceId: string, expectedEpoch: number, cursorRow?: string) =>
     revokeSyncAttempt(db, sourceId, expectedEpoch, cursorRow ?? ""),
   "db.resetMemberCursor": (db: Db, sourceId: string, deviceId: string): void => {
@@ -849,6 +893,11 @@ export const writerHandlers = {
   ) => applySourceUrlRecanonicalizationPage(db, cursor, mutations),
   "db.finishSourceUrlRecanonicalization": (db: Db, cursor: SourceUrlRecanonicalizationCursor) =>
     finishSourceUrlRecanonicalization(db, cursor),
+  "db.applyWebRedactionPage": (
+    db: Db,
+    mutations: readonly WebRedactionMutation[],
+    finishedKey: string | null,
+  ) => applyWebRedactionPage(db, mutations, finishedKey),
   // Note: `db.upsertWithCursor` lives in `writerYieldableHandlers` —
   // it's the collector's hot ingest path (realtime priority), so we
   // want it to yield between doc chunks rather than park the writer
@@ -999,7 +1048,6 @@ export const writerHandlers = {
     personIds: readonly string[],
     opts?: { reason?: string | null; createdBy?: string | null },
   ) => mergeCluster(db, personIds, opts ?? {}),
-  "people.sweepCollapsedMergeCandidates": (db: Db) => sweepCollapsedMergeCandidates(db),
   "people.pruneSuppressedMergeCandidates": (db: Db) => pruneSuppressedMergeCandidates(db),
   "people.autoApproveHighConfidenceCandidates": (db: Db) => autoApproveHighConfidenceCandidates(db),
   "people.reconcilePendingMergeCandidates": (
@@ -1081,6 +1129,18 @@ export const writerHandlers = {
   "access.deviceLevelSet": (db: Db, input: AccessDeviceLevelInput) => setDeviceLevel(db, input),
   "access.principalRename": (db: Db, input: AccessPrincipalRenameInput) =>
     renameAccessPrincipal(db, input),
+  "access.hostIdentityBind": (db: Db, input: HostIdentityBindingInput) =>
+    setHostIdentityBinding(db, input),
+  "access.hostIdentityUnbind": (db: Db, input: HostIdentityUnbindInput) =>
+    removeHostIdentityBinding(db, input),
+  "access.hostAgentGrantCreate": (db: Db, input: HostAgentGrantCreateInput) =>
+    createHostAgentGrant(db, input),
+  "access.hostAgentGrantRevoke": (db: Db, input: HostAgentGrantRevokeInput) =>
+    revokeHostAgentGrant(db, input),
+  "access.hostAgentDefaultSet": (db: Db, input: HostAgentDefaultInput) =>
+    setHostAgentDefault(db, input),
+  "access.hostAgentGrantSet": (db: Db, input: HostAgentGrantCreateInput) =>
+    setHostAgentGrant(db, input),
   "access.revoke": (db: Db, input: AccessRevocationInput) => revokeAccessEntity(db, input),
   "access.mcpInvocationAudit": (db: Db, input: McpToolInvocationAuditInput): boolean =>
     recordMcpToolInvocationAudit(db, input),
@@ -1800,6 +1860,10 @@ export const writerHandlers = {
     markTemporalAnnotationsRefilePresented(db, ids, runId);
     return null;
   },
+  "temporalAnnotations.relinkProjections": (
+    db: Db,
+    moves: readonly TemporalProjectionMove[],
+  ): number => relinkTemporalAnnotationProjections(db, moves),
   "cognition.observationCreate": (
     db: Db,
     input: CreateObservationInput,
@@ -2015,6 +2079,15 @@ import type {
 } from "../transcribe/vocabulary/types.js";
 
 export const writerYieldableHandlers = {
+  /**
+   * Bounded by its step limit, by the preempt token and by a time slice
+   * between steps; the frontier is durable per step, so stopping early only
+   * leaves it pending for the caller's next call.
+   */
+  "knowledge.advanceCascade": (db: Db, token: PreemptToken, limit: number, now: number) =>
+    advanceKnowledgeCascade(db, limit, now, undefined, {
+      requested: sliceDeadline(token, BACKGROUND_BATCH_SLICE_MS),
+    }),
   "vocabulary.advanceRebuild": (db: Db, token: PreemptToken, settings: VocabularySettings) =>
     advanceTranscriptionVocabularyRebuild(db, settings, token),
   "vocabulary.applyBatch": (db: Db, token: PreemptToken, docs: ExtractedVocabularyDocument[]) => {
@@ -2099,12 +2172,77 @@ export const writerYieldableHandlers = {
   },
 
   /**
-   * Yieldable people backfill — per-doc transactions, breaks on
-   * higher-priority enqueue. Caller (periodic task on main runner)
-   * sees the partial result and schedules the next tick.
+   * Yieldable people backfill — per-doc transactions. Stops for a
+   * higher-priority enqueue or once the slice is spent, and resumes the rest
+   * of the batch from the back of its lane, carrying the running counts.
    */
-  "people.backfillManyPeople": (db: Db, token: PreemptToken, batchSize?: number) =>
-    backfillManyPeople(db, batchSize, { token }),
+  "people.backfillManyPeople": (
+    db: Db,
+    token: PreemptToken,
+    batchSize = 50,
+    sofar: { processed: number; resolved: number; skipped: number } = {
+      processed: 0,
+      resolved: 0,
+      skipped: 0,
+    },
+  ) => {
+    const r = backfillManyPeople(db, batchSize, {
+      shouldStop: sliceDeadline(token, PEOPLE_BACKFILL_SLICE_MS),
+    });
+    const total = {
+      processed: sofar.processed + r.processed,
+      resolved: sofar.resolved + r.resolved,
+      skipped: sofar.skipped + r.skipped,
+    };
+    if (r.stopped) {
+      return { kind: "yield" as const, resume: [batchSize - r.processed, total] };
+    }
+    return total;
+  },
+
+  /**
+   * Keep `sqlite_stat1` current: the first call asks `PRAGMA optimize` which
+   * tables need analysis, then each call analyzes tables one at a time under
+   * the analysis limit, giving the writer back once the slice is spent.
+   */
+  "db.refreshPlannerStatistics": (
+    db: Db,
+    token: PreemptToken,
+    units?: string[],
+    analyzedSoFar = 0,
+    tablesSoFar: string[] = [],
+  ) => {
+    const result = refreshPlannerStatistics(db, units, {
+      shouldStop: sliceDeadline(token, PLANNER_STATISTICS_SLICE_MS),
+    });
+    const analyzed = analyzedSoFar + result.analyzed.length;
+    const tables = [...new Set([...tablesSoFar, ...result.tables])];
+    if (result.remaining.length > 0) {
+      return { kind: "yield" as const, resume: [result.remaining, analyzed, tables] };
+    }
+    return { analyzed, tables: tables.length };
+  },
+
+  /**
+   * Write half of the collapsed-candidate sweep: re-checks and accepts the
+   * candidates an io reader found collapsed, in chunks, giving the writer back
+   * between them once the slice is spent.
+   */
+  "people.acceptCollapsedMergeCandidates": (
+    db: Db,
+    token: PreemptToken,
+    ids: string[],
+    sweptSoFar = 0,
+  ) => {
+    const result = acceptCollapsedMergeCandidates(db, ids, {
+      shouldStop: sliceDeadline(token, BACKGROUND_BATCH_SLICE_MS),
+    });
+    const swept = sweptSoFar + result.swept;
+    if (result.remaining.length > 0) {
+      return { kind: "yield" as const, resume: [result.remaining, swept] };
+    }
+    return { swept };
+  },
 
   /**
    * Yieldable people rebuild. The `reset` phase clears the people graph +
@@ -2278,14 +2416,14 @@ export const writerYieldableHandlers = {
   },
 
   /**
-   * Yieldable apply of a NearDupApplyBatch. Per-doc sub-transactions
-   * with a token poll between docs. When the token requests yield we
-   * pack the un-applied tail into `remaining` and re-enqueue at the
-   * same priority — the higher-priority op slots in between, and the
-   * next call resumes where we left off.
+   * Yieldable apply of a NearDupApplyBatch. Bounded chunk transactions
+   * with a token poll between them. When the token requests yield or the
+   * time slice is spent we pack the un-applied tail into `remaining` and
+   * re-enqueue at the same priority — the waiting op slots in between,
+   * and the next call resumes where we left off.
    */
   "nearDup.applyBatch": (db: Db, token: PreemptToken, batch: NearDupApplyBatch) => {
-    const result = applyNearDupBatch(db, batch, { token });
+    const result = applyNearDupBatch(db, batch, { token, maxSliceMs: NEAR_DUP_APPLY_SLICE_MS });
     if (result.remaining !== null) {
       return { kind: "yield" as const, resume: [result.remaining] };
     }

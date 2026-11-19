@@ -62,6 +62,8 @@ export const STORAGE_KEY_NAMES = [
    * opens the same data whatever the file is called. The name stays.
    */
   "watch2-db",
+  /** The document preview store (`previews.db`): page screenshots and other document images. */
+  "preview-db",
 ] as const;
 
 export type StorageKeyName = (typeof STORAGE_KEY_NAMES)[number] | `provider:${string}`;
@@ -79,6 +81,7 @@ const STORAGE_KEY_HOSTS: Record<(typeof STORAGE_KEY_NAMES)[number], StorageKeyHo
   "index-db": "gateway",
   "analytics-db": "gateway",
   "watch2-db": "gateway",
+  "preview-db": "gateway",
   "whatsapp-store": "collector",
   "imessage-transcripts": "collector",
   "telegram-store": "collector",

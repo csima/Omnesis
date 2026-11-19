@@ -54,6 +54,7 @@ const DEP_NAMES: DepName[] = [
   "checkNow",
   "readPolicy",
   "mutateExclusions",
+  "setScreenshots",
   "changePairing",
 ];
 
@@ -84,6 +85,7 @@ function makeDeps(): FakeDeps {
     checkNow: vi.fn(() => Promise.resolve()),
     readPolicy: vi.fn(() => Promise.resolve(POLICY_SNAPSHOT)),
     mutateExclusions: vi.fn(() => Promise.resolve({ purged: 2 })),
+    setScreenshots: vi.fn(() => Promise.resolve()),
     changePairing: vi.fn(() => Promise.resolve()),
   };
 }
@@ -187,7 +189,7 @@ const MESSAGE_CASES: Record<string, MessageCase> = {
   capture: {
     message: CAPTURE,
     dep: "handleCapture",
-    args: [CAPTURE],
+    args: [CAPTURE, { id: 7, frameUrl: null }],
     response: { ok: true, accepted: true },
     acceptedBy: ["contentTab"],
   },
@@ -223,6 +225,13 @@ const MESSAGE_CASES: Record<string, MessageCase> = {
     message: { type: "check-now" },
     dep: "checkNow",
     args: [],
+    response: OK,
+    acceptedBy: ["popup", "options"],
+  },
+  "set-screenshots": {
+    message: { type: "set-screenshots", enabled: true },
+    dep: "setScreenshots",
+    args: [true],
     response: OK,
     acceptedBy: ["popup", "options"],
   },
@@ -369,6 +378,12 @@ describe("failure acks", () => {
     ["check-now", { type: "check-now" }, sender.options, "checkNow"],
     ["add-excluded-domain", ADD_DOMAIN, sender.popup, "mutateExclusions"],
     ["remove-excluded-domain", REMOVE_DOMAIN, sender.options, "mutateExclusions"],
+    [
+      "set-screenshots",
+      { type: "set-screenshots", enabled: false },
+      sender.popup,
+      "setScreenshots",
+    ],
     ["pair-browser", PAIR, sender.options, "changePairing"],
     ["unpair", { type: "unpair" }, sender.options, "changePairing"],
     ["revoke-capture-access", { type: "revoke-capture-access" }, sender.options, "changePairing"],
@@ -390,6 +405,41 @@ describe("failure acks", () => {
     deps.changePairing.mockRejectedValue("pairing code expired");
     const { response } = route({ type: "unpair" }, sender.options, deps);
     await expect(response).resolves.toEqual({ ok: false, reason: "pairing code expired" });
+  });
+});
+
+describe("capture frame address", () => {
+  function routeFrom(sender: Parameters<typeof routeBackgroundMessage>[1], deps: FakeDeps) {
+    return new Promise((resolve) => {
+      routeBackgroundMessage(CAPTURE, sender, resolve, deps);
+    });
+  }
+
+  it("hands the worker the exact frame address the capture was sent from", async () => {
+    const deps = makeDeps();
+    await routeFrom(
+      { id: runtimeId, url: `${PAGE_URL}?ref=1`, tab: { id: 7, url: "https://elsewhere.example" } },
+      deps,
+    );
+    expect(deps.handleCapture).toHaveBeenCalledWith(CAPTURE, {
+      id: 7,
+      frameUrl: `${PAGE_URL}?ref=1`,
+    });
+  });
+
+  it("falls back to the tab's address when the sender names no frame", async () => {
+    const deps = makeDeps();
+    await routeFrom({ id: runtimeId, tab: { id: 7, url: PAGE_URL } }, deps);
+    expect(deps.handleCapture).toHaveBeenCalledWith(CAPTURE, { id: 7, frameUrl: PAGE_URL });
+  });
+});
+
+describe("set-screenshots", () => {
+  it.each([{ enabled: "yes" }, {}, { enabled: null }])("refuses a malformed switch %j", (body) => {
+    const deps = makeDeps();
+    const { kept } = route({ type: "set-screenshots", ...body }, sender.popup, deps);
+    expect(kept).toBe(false);
+    expect(deps.setScreenshots).not.toHaveBeenCalled();
   });
 });
 
@@ -495,7 +545,7 @@ describe("malformed payloads are refused before any dep runs", () => {
     ])("accepts %s", (_label, message) => {
       const { kept, deps } = route(message, sender.contentTab);
       expect(kept).toBe(true);
-      expect(deps.handleCapture).toHaveBeenCalledWith(message);
+      expect(deps.handleCapture).toHaveBeenCalledWith(message, { id: 7, frameUrl: null });
     });
   });
 

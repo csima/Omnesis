@@ -15,8 +15,11 @@ import Foundation
 ///      Each page is converted into a `Batch` and appended to the
 ///      `OfflineBuffer`. The cursor advances per-page — so even if the
 ///      phone dies mid-cycle, the next resume starts where we left off.
-///      A cursor saved for a page the buffer later has to drop is not
-///      walked back; the cycle publishes a `CoverageClaim` instead.
+///      Reading never runs ahead of delivery: a pass drains what earlier
+///      ones left before it reads, reads a page only with time left to
+///      upload it, and stops reading while the source has more than a few
+///      batches undelivered or the buffer is full, leaving the cursor
+///      where it is.
 ///   3. Drain the `OfflineBuffer` into the gateway. Batches that fail
 ///      a transient error stay on disk and are retried by the next
 ///      drain invocation.
@@ -117,6 +120,7 @@ public actor CollectorCore {
     private let onLifecycle: LifecycleHandler?
     private let log = AppLog.make(category: "collector.core")
     private let prepareSource: (@Sendable (String, SourceMultiDeviceMode) async throws -> Void)?
+    private let budget: (any ExecutionBudget)?
     private var preparedSourceIds: Set<String> = []
 
     private var inFlight: Set<String> = []
@@ -124,10 +128,18 @@ public actor CollectorCore {
     /// source is already running. Dropping that wake can strand data that
     /// arrived after the active pass took its input snapshot.
     private var pendingReruns: Set<String> = []
+    /// Callers of `sync(sourceId:awaitingFollowUp: true)` that found the
+    /// source already syncing, waiting for the pass that covers their request.
+    private var followUpWaiters: [String: [CheckedContinuation<SyncSummary?, Never>]] = [:]
     private var directDrains = 0
     private var lastSyncAt: [String: Date] = [:]
     private var acceptingSyncs = true
     private var quiescenceWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// A source reads no further page while more of its batches than this
+    /// are waiting for delivery. Each one is a page whose cursor has moved
+    /// on, so the samples in it exist only on the phone until it lands.
+    static let maxUndeliveredBatches = 4
 
     public init(
         gateway: GatewayClient,
@@ -136,6 +148,7 @@ public actor CollectorCore {
         uploader: Uploader,
         sources: [any OmnesisSource],
         prepareSource: (@Sendable (String, SourceMultiDeviceMode) async throws -> Void)? = nil,
+        budget: (any ExecutionBudget)? = nil,
         onProgress: ProgressHandler? = nil,
         onLifecycle: LifecycleHandler? = nil
     ) {
@@ -145,6 +158,7 @@ public actor CollectorCore {
         self.uploader = uploader
         self.sources = sources
         self.prepareSource = prepareSource
+        self.budget = budget
         self.onProgress = onProgress
         self.onLifecycle = onLifecycle
     }
@@ -170,15 +184,72 @@ public actor CollectorCore {
 
     /// Sync a single source by id — used by HealthKit observer callbacks
     /// to target a specific sample type efficiently.
-    public func sync(sourceId: String) async -> SyncSummary? {
+    ///
+    /// A call that finds the source already syncing queues one follow-up pass,
+    /// which the running sync performs before it returns. By default the call
+    /// returns at once; with `awaitingFollowUp` it returns when that pass is
+    /// done, which is what a background wake needs before it reports itself
+    /// handled — the data that woke it may have arrived after the running
+    /// pass read its page.
+    public func sync(sourceId: String, awaitingFollowUp: Bool = false) async -> SyncSummary? {
         guard acceptingSyncs else { return nil }
         guard let source = sources.first(where: { $0.id == sourceId }) else {
             log.warning("No registered source with id \(sourceId, privacy: .private)")
             return nil
         }
+        if awaitingFollowUp, inFlight.contains(source.id) {
+            pendingReruns.insert(source.id)
+            return await withCheckedContinuation { continuation in
+                followUpWaiters[source.id, default: []].append(continuation)
+            }
+        }
         let summary = await syncOne(source: source)
         await emitProgress(nil)
         return summary
+    }
+
+    /// Whether a source still has history to read.
+    public enum HistoryStatus: Sendable, Equatable {
+        case pending
+        /// Nothing left, or nothing this core reads.
+        case finished
+        /// The saved cursor couldn't be read (the gateway out of reach, a
+        /// server error). Never taken for `finished`.
+        case unknown
+
+        /// Whether a scheduled history run is still wanted: unless the
+        /// history is known to be finished, it is.
+        public var wantsHistoryRun: Bool {
+            self != .finished
+        }
+    }
+
+    /// Whether `sourceId` still has history to read, by its last saved
+    /// cursor. `finished` for a source this core doesn't drive; `unknown`
+    /// when the cursor can't be read.
+    public func historyStatus(sourceId: String) async -> HistoryStatus {
+        guard let source = sources.first(where: { $0.id == sourceId }) else { return .finished }
+        do {
+            let cursor = try await cursorStore.load(for: sourceId)
+            return source.hasHistoryPending(cursor: cursor) ? .pending : .finished
+        } catch {
+            return .unknown
+        }
+    }
+
+    /// Reads `sourceId`'s pending history for as long as the calling task
+    /// runs: passes back to back until none is left, a pass fails or reads
+    /// nothing (the phone locked, the gateway out of reach — a pass only
+    /// ends empty-handed with history pending when it can't read it), or
+    /// the task is cancelled, which stops the pass at a page boundary.
+    /// Returns where the history stands then.
+    public func readPendingHistory(sourceId: String, maxPasses: Int = 50) async -> HistoryStatus {
+        for _ in 0 ..< maxPasses {
+            guard acceptingSyncs, !Task.isCancelled, await historyStatus(sourceId: sourceId) == .pending else { break }
+            let summary = await sync(sourceId: sourceId, awaitingFollowUp: true)
+            guard let summary, summary.error == nil, summary.batches > 0 else { break }
+        }
+        return await historyStatus(sourceId: sourceId)
     }
 
     /// Drain the offline buffer without pulling new data. Useful after
@@ -241,8 +312,6 @@ public actor CollectorCore {
 
     // MARK: - Internals
 
-    // Sync state, cursor, buffer, and lifecycle publication must remain one ordered operation.
-    // swiftlint:disable:next function_body_length
     private func syncOne(source: any OmnesisSource) async -> SyncSummary {
         guard acceptingSyncs else {
             return await SyncSummary(
@@ -269,24 +338,40 @@ public actor CollectorCore {
             )
         }
         inFlight.insert(source.id)
-        defer {
-            inFlight.remove(source.id)
-            let rerunRequested = pendingReruns.remove(source.id) != nil
-            let shouldRerun = acceptingSyncs && !Task.isCancelled && rerunRequested
-            if shouldRerun {
-                Task { [weak self] in
-                    _ = await self?.sync(sourceId: source.id)
-                }
-            }
-            resumeQuiescenceWaitersIfReady()
+        var summary = await runPass(source: source)
+        // Wakes that arrived while the pass ran coalesce into one more pass,
+        // run here rather than in a task of its own so it stays inside
+        // whatever is keeping this one alive (a background-task assertion, an
+        // unanswered HealthKit wake). Expiration cancels the caller, and a
+        // wake with too little time left leaves the samples for the next one.
+        while pendingReruns.remove(source.id) != nil,
+              acceptingSyncs,
+              !Task.isCancelled,
+              await budget?.allows(ExecutionMargin.pageAndUpload) ?? true {
+            summary = await runPass(source: source)
         }
+        pendingReruns.remove(source.id)
+        inFlight.remove(source.id)
+        let waiters = followUpWaiters.removeValue(forKey: source.id) ?? []
+        waiters.forEach { $0.resume(returning: summary) }
+        resumeQuiescenceWaitersIfReady()
+        return summary
+    }
 
+    // One pass over a source: pages until it has nothing more, the page cap,
+    // or the time left runs short, then a drain. Sync state, cursor, buffer,
+    // and lifecycle publication must remain one ordered operation.
+    // swiftlint:disable:next function_body_length
+    private func runPass(source: any OmnesisSource) async -> SyncSummary {
         var batchesWritten = 0
-        var batchesDropped = 0
+        var uploadedBeforeEnd = 0
+        var backlogged = false
         var recordsProduced = 0
         var itemsProcessed = 0
         var errorMessage: String?
         var wasCancelled = false
+        var pages = 0
+        var outOfTime = false
         let startedAt = Date()
 
         await emitProgress(Progress(
@@ -307,14 +392,40 @@ public actor CollectorCore {
                 try await prepareSource?(source.id, source.multiDeviceMode)
                 preparedSourceIds.insert(source.id)
             }
-            var cursor = try await cursorStore.load(for: source.id, refresh: true)
-            var pages = 0
+            var cursor = try await source.cursorForNewPass(cursorStore.load(for: source.id, refresh: true))
+            // What earlier wakes left goes first, while there's time for it.
+            if try await buffer.count() > 0 {
+                _ = await drainWithinPass(uploaded: &uploadedBeforeEnd)
+            }
             // Cap to avoid runaway loops while a malformed source keeps
             // claiming hasMore=true.
             let maxPages = 200
-            while pages < maxPages {
+            reading: while pages < maxPages {
+                // The task running the pass was expired (a background task's
+                // time is up): stop before the next page. Every page before
+                // it is buffered and its cursor saved.
+                if Task.isCancelled {
+                    wasCancelled = true
+                    break
+                }
+                // A page is read only with time left to upload it too, so
+                // the drain below always gets its turn. A page cut off by
+                // suspension is redone from the same cursor on the next wake.
+                guard await budget?.allows(ExecutionMargin.pageAndUpload) ?? true else {
+                    outOfTime = true
+                    log.notice(
+                        "Pausing \(source.id, privacy: .private) after \(pages, privacy: .public) pages: too little background time left"
+                    )
+                    break
+                }
+                guard try await deliveryKeepsUp(with: source, uploaded: &uploadedBeforeEnd) else {
+                    backlogged = true
+                    log.notice(
+                        "Pausing \(source.id, privacy: .private) after \(pages, privacy: .public) pages: its batches aren't being delivered"
+                    )
+                    break
+                }
                 let result = try await source.sync(cursor: cursor)
-                pages += 1
 
                 if !result.records.isEmpty || !result.deletedIds.isEmpty || !result.documents.isEmpty {
                     let batch = Batch(
@@ -328,14 +439,16 @@ public actor CollectorCore {
                         documents: result.documents,
                         createdAt: Date()
                     )
-                    let evicted = try await buffer.enqueue(batch)
-                    try await source.didBuffer(result)
-                    if evicted > 0 {
-                        batchesDropped += evicted
-                        log.warning(
-                            "Buffer eviction: dropped \(evicted, privacy: .public) old batches to make room for \(source.id, privacy: .private)"
-                        )
+                    do {
+                        try await buffer.enqueue(batch)
+                    } catch is OfflineBuffer.Full {
+                        // The page is read again from the same cursor once
+                        // the buffer has room; nothing queued is dropped.
+                        backlogged = true
+                        log.notice("Pausing \(source.id, privacy: .private): the buffer is full")
+                        break reading
                     }
+                    try await source.didBuffer(result)
                     batchesWritten += 1
                     recordsProduced += result.records.count
                     // A page may represent the same item as both an analytics
@@ -344,6 +457,7 @@ public actor CollectorCore {
                     // without double-counting mixed pages such as workouts.
                     itemsProcessed += max(result.records.count, result.documents.count)
                 }
+                pages += 1
 
                 cursor = result.cursor
                 try await cursorStore.save(
@@ -369,7 +483,9 @@ public actor CollectorCore {
                     break
                 }
             }
-            lastSyncAt[source.id] = Date()
+            if !wasCancelled {
+                lastSyncAt[source.id] = Date()
+            }
         } catch {
             // NSURLErrorCancelled (-999) means iOS suspended the process
             // mid-request (typical when an HKObserver background wake
@@ -380,10 +496,11 @@ public actor CollectorCore {
             // gateway via primary keys. Treat as transient: don't
             // surface as a sync error (which would flip the source to
             // ERROR in the portal + CLI). Next observer wake or
-            // foreground sync resumes cleanly.
+            // foreground sync resumes cleanly. A `CancellationError` is the
+            // same story told by the task: a background task iOS expired.
             let nsError = error as NSError
-            let isCancelled = nsError.domain == NSURLErrorDomain
-                && nsError.code == NSURLErrorCancelled
+            let isCancelled = error is CancellationError
+                || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
             if isCancelled {
                 wasCancelled = true
                 log
@@ -397,9 +514,11 @@ public actor CollectorCore {
             }
         }
 
-        // Drain regardless — batches from prior cycles might be waiting.
-        let stats: Uploader.Stats? = try? await uploader.drain()
+        // Drain regardless — batches from prior cycles might be waiting —
+        // unless the task was expired, when every request would be cut off.
+        let stats: Uploader.Stats? = Task.isCancelled ? nil : try? await uploader.drain()
         await emitRejections(stats)
+        let uploaded = uploadedBeforeEnd + (stats?.uploaded ?? 0)
         let remaining: Int = if let stats {
             stats.remaining
         } else {
@@ -412,7 +531,8 @@ public actor CollectorCore {
                 displayName: source.displayName,
                 message: errorMessage
             ))
-        } else if wasCancelled {
+        } else if wasCancelled || ((outOfTime || backlogged) && pages == 0) {
+            // Nothing happened this pass that a status should claim.
             await emitLifecycle(.idle(sourceId: source.id, displayName: source.displayName))
         } else {
             await emitLifecycle(.completed(
@@ -420,7 +540,7 @@ public actor CollectorCore {
                 displayName: source.displayName,
                 records: itemsProcessed,
                 completedAt: Date(),
-                coverage: Self.coverageClaim(droppedBatches: batchesDropped)
+                coverage: nil
             ))
         }
 
@@ -428,32 +548,28 @@ public actor CollectorCore {
             sourceId: source.id,
             batches: batchesWritten,
             records: recordsProduced,
-            uploaded: stats?.uploaded ?? 0,
+            uploaded: uploaded,
             remaining: remaining,
             error: errorMessage,
             blocked: stats?.blocked
         )
     }
 
-    /// The claim a cycle makes once the offline buffer had to drop batches to
-    /// stay inside its size limit.
-    ///
-    /// The buffer is where a page waits between capture and upload, and the
-    /// gateway's cursor for the source moves on as soon as a page is written
-    /// there. Dropping the oldest batches therefore drops data the source will
-    /// never offer again, because the cursor is already past it. Capturing into
-    /// a full buffer is still the better trade — a phone that stopped capturing
-    /// would fall behind everything, not just its oldest pages — so the gap is
-    /// reported rather than prevented.
-    private static func coverageClaim(droppedBatches: Int) -> CoverageClaim? {
-        guard droppedBatches > 0 else { return nil }
-        return CoverageClaim(
-            coverage: .partial,
-            detail: """
-            This device ran out of room for data waiting to reach Omnesis and dropped \
-            the oldest of it, so some history is missing. Re-sync this source to fill the gap.
-            """
-        )
+    /// Whether `source` may read another page: few enough of its batches
+    /// are waiting for delivery, after a drain if there were too many.
+    private func deliveryKeepsUp(with source: any OmnesisSource, uploaded: inout Int) async throws -> Bool {
+        if try await buffer.pendingCount(sourceId: source.id) < Self.maxUndeliveredBatches { return true }
+        _ = await drainWithinPass(uploaded: &uploaded)
+        return try await buffer.pendingCount(sourceId: source.id) < Self.maxUndeliveredBatches
+    }
+
+    /// A drain before the pass's last one, when there's time for an upload.
+    private func drainWithinPass(uploaded: inout Int) async -> Uploader.Stats? {
+        guard !Task.isCancelled, await budget?.allows(ExecutionMargin.upload) ?? true,
+              let stats = try? await uploader.drain() else { return nil }
+        await emitRejections(stats)
+        uploaded += stats.uploaded
+        return stats
     }
 
     private func resumeQuiescenceWaitersIfReady() {

@@ -131,6 +131,20 @@ export class GatewayTimeoutError extends HttpError {
 }
 
 /**
+ * 408 — the request body stopped arriving before the length the client
+ * declared. Nothing about the payload is known to be wrong: the client was
+ * suspended, lost its link, or a proxy gave up on a slow upload. Distinct
+ * from a malformed body (400), which a retry would only repeat; clients
+ * already treat 408 as "send it again later".
+ */
+export class RequestBodyIncompleteError extends HttpError {
+  constructor(message: string) {
+    super(408, "REQUEST_BODY_INCOMPLETE", message);
+    this.name = "RequestBodyIncompleteError";
+  }
+}
+
+/**
  * 507 — the DB volume is below the configured free-disk floor, so the
  * gateway refuses to write rather than risk a partial / corrupting write.
  * The collector's sync cursor doesn't advance, so the page is re-sent on its next scheduled sync once

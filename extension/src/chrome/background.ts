@@ -5,6 +5,7 @@ import "./chrome-api.js";
 import {
   judgeCaptureUrl,
   normalizeCaptureDomain,
+  screenshotsEnabled,
   type WebCapturePolicy,
 } from "@omnesis/provider-web/capture-policy";
 import {
@@ -13,6 +14,8 @@ import {
   PushClient,
   buildWebPageDocument,
   buildPageVisit,
+  WEB_PROVIDER_ID,
+  WEB_SOURCE_ID,
   type FetchLike,
   type FetchLikeResponse,
   clearPushHealth,
@@ -51,7 +54,11 @@ import {
   saveGatewayVersion,
   saveProfileLabel,
 } from "./storage.js";
-import { hasCapturePermission, revokeCapturePermission } from "./host-permission.js";
+import {
+  hasCapturePermission,
+  hasScreenshotPermission,
+  revokeCapturePermission,
+} from "./host-permission.js";
 import { composeStatus, badgeFor } from "./status.js";
 import {
   PERIODIC_DRAIN_ALARM,
@@ -69,6 +76,19 @@ import {
 import { CapturePermissionCoordinator } from "./permission-coordinator.js";
 import { hasCaptureAccess, syncCaptureContentScript } from "./content-registration.js";
 import { BadgeRefreshCoordinator } from "./badge-refresh.js";
+import {
+  SCREENSHOT_CONFIRM_TIMEOUT_MS,
+  chromeScreenshotBrowser,
+  offscreenCodec,
+  takePageScreenshot,
+} from "./screenshot.js";
+import {
+  SCREENSHOT_CHECK_TYPE,
+  type ScreenshotCheckMessage,
+  type ScreenshotCheckResult,
+} from "./screenshot-check.js";
+import { messageWithTimeout } from "./message-timeout.js";
+import type { CaptureEmission } from "../capture/lifecycle.js";
 import type {
   CaptureEligibilityResponse,
   CapturePolicySnapshot,
@@ -425,11 +445,91 @@ function drainOnce(): Promise<void> {
   );
 }
 
+/** A page screenshot to take once its capture is queued. */
+interface ScreenshotJob {
+  tabId: number;
+  /** The exact frame address the capture was sent from. */
+  frameUrl: string;
+  emission: CaptureEmission;
+  externalId: string;
+  pairingId: string;
+}
+
+/**
+ * Screenshots are taken one at a time: `captureVisibleTab` is rate-limited and
+ * shoots the window as it is, so two shots must never overlap.
+ */
+let screenshotWork: Promise<void> = Promise.resolve();
+
+/**
+ * Take the screenshot a just-queued capture asked for and queue it behind the
+ * page. Runs off the queue lane, so a slow capture never delays a page's
+ * acknowledgement; the shot is queued only if the policy still wants it and
+ * the pairing that asked for it is still the one in force.
+ */
+function schedulePageScreenshot(job: ScreenshotJob): void {
+  screenshotWork = screenshotWork
+    .then(async () => {
+      // Chrome allows the shot only with the `<all_urls>` grant, asked for in
+      // each browser when screenshots are turned on there.
+      if (!(await hasScreenshotPermission())) return;
+      const client = await buildClient();
+      if (!client || !(await client.previewWanted(job.externalId, job.emission.contentHash))) {
+        return;
+      }
+      const shot = await takePageScreenshot(
+        {
+          tabId: job.tabId,
+          frameUrl: job.frameUrl,
+          confirm: async () => {
+            const answer = await messageWithTimeout(
+              chrome.tabs.sendMessage<ScreenshotCheckResult>(job.tabId, {
+                type: SCREENSHOT_CHECK_TYPE,
+                url: job.frameUrl,
+                contentHash: job.emission.contentHash,
+              } satisfies ScreenshotCheckMessage),
+              SCREENSHOT_CONFIRM_TIMEOUT_MS,
+            );
+            return answer?.ok === true;
+          },
+        },
+        { browser: chromeScreenshotBrowser(), codec: offscreenCodec },
+      );
+      if (typeof shot === "string") return;
+      const queued = await serializeQueueWork(async () => {
+        const config = await loadConfig();
+        if (!config || (await capturePairingId(config)) !== job.pairingId) return false;
+        const policy = await currentPolicy();
+        if (!policy || !screenshotsEnabled(policy)) return false;
+        const verdict = judgeCaptureUrl(policy, job.emission.normalizedUrl, {
+          gatewayHost: gatewayHostOf(config),
+          now: Date.now(),
+          externalId: job.externalId,
+        });
+        if (!verdict.allowed) return false;
+        const current = await buildClient();
+        if (!current) return false;
+        await current.enqueuePreview({
+          providerId: WEB_PROVIDER_ID,
+          sourceId: WEB_SOURCE_ID,
+          externalId: job.externalId,
+          contentHash: job.emission.contentHash,
+          ...shot,
+        });
+        return true;
+      });
+      if (queued) await drainOnce();
+    })
+    .catch(() => undefined);
+}
+
 /** Enqueue a confirmed capture's two planes, then kick a drain. */
 async function handleCapture(
   message: Extract<ContentToSwMessage, { type: "capture" }>,
+  tab?: { id: number; frameUrl: string | null },
 ): Promise<CaptureAck> {
-  return serializeQueueWork(async () => {
+  let screenshot: ScreenshotJob | null = null;
+  const ack = await serializeQueueWork(async () => {
     const finish = async (ack: CaptureAck): Promise<CaptureAck> => {
       if (message.handoffKey) await chrome.storage.local.remove(message.handoffKey);
       return ack;
@@ -473,10 +573,11 @@ async function handleCapture(
     } catch {
       return finish({ ok: true, accepted: false });
     }
+    const externalId = await hashText(emission.normalizedUrl);
     const verdict = judgeCaptureUrl(policy, emission.normalizedUrl, {
       gatewayHost: gatewayHostOf(config),
       now: Date.now(),
-      externalId: await hashText(emission.normalizedUrl),
+      externalId,
     });
     if (!verdict.allowed) return finish({ ok: true, accepted: false });
 
@@ -508,8 +609,21 @@ async function handleCapture(
       );
     }
 
+    // A page screenshot is taken only of the tab that emitted this capture,
+    // never for one recovered from a tab's outbox after the fact.
+    if (tab?.frameUrl && message.pairingId && screenshotsEnabled(policy)) {
+      screenshot = {
+        tabId: tab.id,
+        frameUrl: tab.frameUrl,
+        emission,
+        externalId,
+        pairingId: message.pairingId,
+      };
+    }
     return finish({ ok: true, accepted: true });
   });
+  if (screenshot) schedulePageScreenshot(screenshot);
+  return ack;
 }
 
 /** Recover captures persisted by tabs before their worker handoff was acknowledged. */
@@ -808,6 +922,14 @@ function mutateExclusions(
   });
 }
 
+/** Switch page screenshots for every paired browser and adopt the policy the gateway returns. */
+function setScreenshots(enabled: boolean): Promise<void> {
+  return serializeQueueWork(async () => {
+    const client = policyClient(await requirePairedConfig());
+    await adoptPolicy(await client.setScreenshots(enabled));
+  });
+}
+
 async function dismissDiagnostics(): Promise<void> {
   await serializeQueueWork(() => clearPushDataLoss(chromeLocalStore));
   await chrome.storage.local.set({ [CAPTURE_HANDOFF_OVERFLOW_KEY]: "" });
@@ -894,6 +1016,7 @@ chrome.runtime.onMessage.addListener(
       checkNow: handleCheckNow,
       readPolicy: readPolicySnapshot,
       mutateExclusions,
+      setScreenshots,
       changePairing: handlePairingState,
     }),
 );

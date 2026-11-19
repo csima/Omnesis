@@ -281,4 +281,63 @@ final class MenuRevealTests: XCTestCase {
         XCTAssertEqual(MenuReveal.shadowRadius(isLight: false), 24, accuracy: 0.001)
         XCTAssertEqual(MenuReveal.shadowRadius(isLight: true), 6, accuracy: 0.001)
     }
+
+    // MARK: - Docked sidebar
+
+    /// Phones, a folded foldable and narrow iPad panes keep the drawer; the
+    /// unfolded inner display, iPads and wide windows dock it.
+    func testMenuDocksOnlyOnAWideContainer() {
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 0))
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 393))
+        // A foldable's outer display, folded.
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 466))
+        // The largest phone, upright.
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 440))
+        // Its inner display, upright and on its side.
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 669))
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 951))
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 1366))
+    }
+
+    /// Beside the sidebar the section always keeps at least a phone's width.
+    func testDockedSectionKeepsAPhonesWidth() {
+        let width = MenuReveal.dockMinimumWidth
+        XCTAssertGreaterThanOrEqual(width - MenuReveal.sidebarWidth(forContainerWidth: width), 390)
+    }
+
+    func testSidebarWidthIsClamped() {
+        XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 669), MenuReveal.sidebarMinimumWidth)
+        XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1000), 300, accuracy: 0.001)
+        XCTAssertEqual(MenuReveal.sidebarWidth(forContainerWidth: 1366), 340)
+    }
+
+    /// Docked on the inner display on its side, the measured width came back
+    /// as 867 and 867.0000000000002 in turn, each lay-out moving it to the
+    /// other, until the watchdog killed the app. A sliver like that is not a
+    /// resize; a real one still is.
+    func testWidthIgnoresLayoutRoundingButTakesAResize() {
+        let measured: CGFloat = 867
+        let nudged = measured.nextUp.nextUp
+        XCTAssertEqual(MenuReveal.settledWidth(current: measured, measured: nudged), measured)
+        XCTAssertEqual(MenuReveal.settledWidth(current: nudged, measured: measured), nudged)
+        XCTAssertEqual(MenuReveal.settledWidth(current: 0, measured: measured), measured)
+        XCTAssertEqual(MenuReveal.settledWidth(current: measured, measured: 466), 466)
+        XCTAssertEqual(MenuReveal.settledWidth(current: measured, measured: 867.5), 867.5)
+    }
+
+    /// At an accessibility text size the sidebar needs more room: the upright
+    /// inner display keeps the drawer, so the section keeps its full width,
+    /// and on its side the sidebar is wider.
+    func testLargeTextDocksOnlyWhereAWiderSidebarFits() {
+        XCTAssertFalse(MenuReveal.docksMenu(containerWidth: 669, largeText: true))
+        XCTAssertTrue(MenuReveal.docksMenu(containerWidth: 951, largeText: true))
+        let width: CGFloat = 951
+        let sidebar = MenuReveal.sidebarWidth(forContainerWidth: width, largeText: true)
+        XCTAssertGreaterThan(sidebar, MenuReveal.sidebarWidth(forContainerWidth: width))
+        XCTAssertGreaterThanOrEqual(width - sidebar, 390)
+        XCTAssertEqual(
+            MenuReveal.sidebarWidth(forContainerWidth: 2000, largeText: true),
+            MenuReveal.largeTextSidebarMaximumWidth
+        )
+    }
 }

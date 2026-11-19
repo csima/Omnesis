@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { SourceId, ProviderId } from "@omnesis/types";
 import { SlackSource } from "./source.js";
-import { CHANNEL, CREDENTIAL, FakeSlack, MemoryAnalytics } from "./fake-slack.js";
+import { CHANNEL, CREDENTIAL, FakeSlack, IDENTITY, MemoryAnalytics } from "./fake-slack.js";
 import { DAY, slackTs } from "./types.js";
 import type { SlackCursor } from "./state.js";
 import type { StructuredSyncResult } from "@omnesis/source-sdk";
@@ -239,6 +239,60 @@ describe("Slack sync", () => {
     for (const page of active.pages)
       expect(Date.parse(page.cursor.channels.CEXAMPLE.through!)).toBeGreaterThanOrEqual(through);
   });
+  it("reads whole days instead of trusting a reconciliation window at the query row limit", async () => {
+    const h = harness();
+    h.server.messages = [msg(NOW - DAY)];
+    const first = await cycle(h);
+    const stored = h.db.tables.get("slack_messages") ?? [];
+    for (let i = 0; i < 10_000; i++) {
+      const ms = midnight(NOW - 10 * DAY) + (i % 10) * DAY + 1000 + i;
+      stored.push({
+        source_account_id: "TEXAMPLE-USELF00",
+        conversation_id: "CEXAMPLE",
+        day: new Date(ms).toISOString().slice(0, 10),
+        ts: slackTs(ms),
+        raw: JSON.stringify(msg(ms)),
+      });
+    }
+    h.db.tables.set("slack_messages", stored);
+    h.advance(15 * 60_000);
+    const before = h.server.calls.length;
+    await cycle(h, first.cursor);
+    expect(
+      h.server.calls.slice(before).filter((c) => c.method === "conversations.history").length,
+    ).toBeGreaterThan(1);
+  });
+  it("fails a day holding the query row limit transiently instead of reading it truncated", async () => {
+    const h = harness();
+    const day = midnight(NOW - DAY);
+    h.server.messages = [msg(day + 1000)];
+    h.db.tables.set(
+      "slack_messages",
+      Array.from({ length: 10_000 }, (_, i) => ({
+        source_account_id: "TEXAMPLE-USELF00",
+        conversation_id: "CEXAMPLE",
+        day: new Date(day).toISOString().slice(0, 10),
+        ts: slackTs(day + 2000 + i),
+        raw: JSON.stringify(msg(day + 2000 + i)),
+      })),
+    );
+    const first = await h.source.syncStructured(null);
+    h.db.commit(first.analytics);
+    const next = {
+      ...first.cursor,
+      pending: { ...first.cursor.pending!, day: new Date(day).toISOString() },
+    };
+    await expect(h.source.syncStructured(next)).rejects.toMatchObject({
+      kind: "transient",
+      message: expect.stringContaining("row limit"),
+    });
+  });
+  it("names itself after the workspace once a cycle signs in", async () => {
+    const h = harness(true);
+    expect(h.source.workspaceName).toBeUndefined();
+    await cycle(h);
+    expect(h.source.workspaceName).toBe(IDENTITY.team);
+  });
   it("keeps a stored day's hash stable when a later cycle reads it back", async () => {
     const h = harness();
     const root = {
@@ -364,6 +418,14 @@ describe("Slack sync", () => {
     await expect(cycle(h, start.cursor)).rejects.toMatchObject({ kind: "transient" });
     expect(JSON.stringify(first.cursor)).toBe(before);
     expect(h.db.tables.get("slack_messages")).toHaveLength(1);
+  });
+  it("syncs a guest account that may not list user groups, with no memberships", async () => {
+    const h = harness(true);
+    h.server.restrictedUser = true;
+    h.server.messages = [msg(NOW - DAY)];
+    const r = await cycle(h);
+    expect(r.docs).toHaveLength(1);
+    expect(h.db.tables.get("slack_session_usergroups") ?? []).toEqual([]);
   });
   it("auth.test failure only fails this account and keeps its existing rows", async () => {
     const h = harness(true);

@@ -157,6 +157,7 @@ const EXPECTED_INVENTORY = [
   "/gateway/backfill/links/interval [duration]",
   "/gateway/backfill/mergeCandidates/idleDelay [duration]",
   "/gateway/backfill/mergeCandidates/interval [duration]",
+  "/gateway/backfill/mergeCandidates/judge [enum]",
   "/gateway/backfill/mergePass/interval [duration]",
   "/gateway/backfill/mergeRulesEval/idleDelay [duration]",
   "/gateway/backfill/mergeRulesEval/interval [duration]",
@@ -164,6 +165,7 @@ const EXPECTED_INVENTORY = [
   "/gateway/backfill/people/idleDelay [duration]",
   "/gateway/backfill/people/interval [duration]",
   "/gateway/backfill/peopleCounts/interval [duration]",
+  "/gateway/backfill/plannerStatistics/interval [string]",
   "/gateway/backfill/sourceStats/interval [duration]",
   "/gateway/backgroundWorkerNice [number]",
   "/gateway/cors/allowCredentials [boolean]",
@@ -274,6 +276,9 @@ const EXPECTED_INVENTORY = [
   "/gateway/watchV2/wake/dailyCap [number]",
   "/gateway/watchV2/wake/perWatchDailyCap [number]",
   "/indexer/betweenPageSleep [duration]",
+  "/indexer/catchUp/enabled [boolean]",
+  "/indexer/catchUp/maxPageSize [number]",
+  "/indexer/catchUp/minBetweenPageSleep [duration]",
   "/indexer/chunker/chunkSize [number]",
   "/indexer/chunker/overlap [number]",
   "/indexer/cycleBacklogInterval [duration]",
@@ -367,6 +372,7 @@ const EXPECTED_INVENTORY = [
   "/sources/*/maxAge [duration]",
   "/sources/*/params [object owned:Sources]",
   "/sources/*/syncInterval [duration]",
+  "/webCapture/ownSites [stringArray]",
 ];
 
 function inventoryLine(entry: { path: string; kind: string; ownedBy?: string }): string {

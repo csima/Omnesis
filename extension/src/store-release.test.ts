@@ -21,14 +21,14 @@ const contract = JSON.parse(
 const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 describe("Chrome Web Store release contract", () => {
-  it("pre-grants HTTPS only in the isolated headless test manifest and keeps required tab/icon access", async () => {
+  it("pre-grants the optional host access only in the isolated headless test manifest and keeps required tab/icon access", async () => {
     const { applyTestManifest } = await import(
       pathToFileURL(join(extensionRoot, "scripts", "test-manifest.mjs")).href
     );
     const testManifest = applyTestManifest(manifest);
     expect(testManifest.permissions).toEqual(expect.arrayContaining(["tabs", "favicon"]));
     expect(testManifest).not.toHaveProperty("optional_permissions");
-    expect(testManifest.host_permissions).toEqual(["https://*/*"]);
+    expect(testManifest.host_permissions).toEqual(["https://*/*", "<all_urls>"]);
     expect(testManifest.key).toBeTruthy();
     expect(manifest.permissions).toEqual(expect.arrayContaining(["tabs", "favicon"]));
     expect(manifest).not.toHaveProperty("optional_permissions");
@@ -62,8 +62,10 @@ describe("Chrome Web Store release contract", () => {
       },
       { method: "PUT", path: "/web-capture-policy/pause", authenticated: true },
       { method: "DELETE", path: "/web-capture-policy/pause", authenticated: true },
+      { method: "PUT", path: "/web-capture-policy/screenshots", authenticated: true },
       { method: "POST", path: "/documents", authenticated: true },
       { method: "POST", path: "/analytics/ingest", authenticated: true },
+      { method: "PUT", path: "/documents/preview", authenticated: true },
       { method: "POST", path: "/browser/notes/authorization", authenticated: true },
       { method: "GET", path: "/browser/notes/authorization/:id", authenticated: true },
       { method: "GET", path: "/browser/notes", authenticated: true },
@@ -90,7 +92,7 @@ describe("Chrome Web Store release contract", () => {
   it("uses Manifest V3 with optional HTTPS access and no remotely hosted code surface", () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.minimum_chrome_version).toBe("130");
-    expect(manifest.optional_host_permissions).toEqual(["https://*/*"]);
+    expect(manifest.optional_host_permissions).toEqual(["https://*/*", "<all_urls>"]);
     expect(manifest).not.toHaveProperty("optional_permissions");
     expect(manifest.permissions).toEqual([
       "storage",
@@ -183,7 +185,7 @@ describe("Chrome Web Store release contract", () => {
       ) as Record<string, unknown>;
       expect(packagedManifest).not.toHaveProperty("key");
       expect(packagedManifest).not.toHaveProperty("host_permissions");
-      expect(packagedManifest.optional_host_permissions).toEqual(["https://*/*"]);
+      expect(packagedManifest.optional_host_permissions).toEqual(["https://*/*", "<all_urls>"]);
       expect(packagedManifest).not.toHaveProperty("optional_permissions");
       expect(packagedManifest.permissions).toEqual(expect.arrayContaining(["tabs", "favicon"]));
       expect(packagedManifest.side_panel).toEqual({ default_path: "notes.html" });

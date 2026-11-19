@@ -509,6 +509,16 @@
           confirm in the portal.
         </p>
         <p>
+          With a decision model assigned, the decision model can judge the suggestions instead. Set
+          <code>gateway.backfill.mergeCandidates.judge</code> to <code>enforce</code> and it reads
+          each suggestion's evidence (both people's names and addresses, their recent documents and
+          shared conversations), then merges the ones it judges the same person, dismisses the ones
+          it judges different people or not a person at all (a meeting room, a mailing list, a
+          newsletter sender), and leaves the rest for you. Its merges are reversible and name the
+          model in their reason, and suggestions involving you always stay with you.
+          <code>shadow</code> logs its verdicts without acting on them.
+        </p>
+        <p>
           It also records references between documents (links, shared attachments, threads) in a
           reference graph. Search results show how often each document is referenced, and a
           document's <em>trail</em> follows those references to reconstruct the story around it.
@@ -705,6 +715,14 @@
                   while the gateway runs and is removed when it stops.
                 </td>
                 <td>Yes, while the gateway is stopped.</td>
+              </tr>
+              <tr>
+                <td><code>previews.db</code></td>
+                <td>
+                  SQLite: one preview image per document, such as a browser page screenshot; each is
+                  deleted with its document.
+                </td>
+                <td>Yes.</td>
               </tr>
               <tr>
                 <td><code>analytics.db</code></td>

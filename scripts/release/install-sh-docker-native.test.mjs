@@ -129,6 +129,7 @@ shift 2>/dev/null || true
 # test can drop --name to stand in for a release from before it.
 if [ "$1" = pair ] && [ "$2" = --help ]; then
   [ -n "$OMNESIS_TEST_PAIR_NO_NAME" ] || echo "  --name  Name this device"
+  [ -n "$OMNESIS_TEST_PAIR_NO_NAME" ] || echo "  --code-file  Read the code from a file"
   exit 0
 fi
 printf '%s\\n' "$*" >> "$OMNESIS_TEST_CALLS"
@@ -279,7 +280,7 @@ describe("a native collector after a Docker install on the same machine", () => 
 
     // Pairing and the service point at this collector alone.
     expect(callStartingWith(native.calls, "pair ")).toBe(
-      `pair ${TYPED_CODE} --gateway-url ${LOCAL_GATEWAY} ` +
+      `pair --code-file <file> --gateway-url ${LOCAL_GATEWAY} ` +
         `--trust-fingerprint ${callStartingWith(native.calls, "pair ").match(/sha256:[0-9a-f]{64}/u)[0]} ` +
         `--save ${join(native.nativeDir, "collector-token")} --name ${PAIR_NAME}`,
     );
@@ -334,7 +335,7 @@ describe("a native collector after a Docker install on the same machine", () => 
       const native = runOnTty("mint", ["--collector", "--no-keyring"], []);
       expect(native.status, native.output).toBe(0);
       expect(native.calls).toContain("[docker] devices pair --kind collector --json");
-      expect(callStartingWith(native.calls, "pair ")).toContain(`pair ${MINTED_CODE} `);
+      expect(callStartingWith(native.calls, "pair ")).toContain(`pair --code-file <file> `);
       expect(native.output).not.toContain("Mint a pairing code on the gateway host");
     },
   );
@@ -358,7 +359,7 @@ describe("a native collector after a Docker install on the same machine", () => 
     );
     expect(native.status, native.output).toBe(0);
     expect(callStartingWith(native.calls, "pair ")).toBe(
-      `pair ${TYPED_CODE} --gateway-url ${url} --save ${join(native.nativeDir, "collector-token")} --name ${PAIR_NAME}`,
+      `pair --code-file <file> --gateway-url ${url} --save ${join(native.nativeDir, "collector-token")} --name ${PAIR_NAME}`,
     );
   });
 
