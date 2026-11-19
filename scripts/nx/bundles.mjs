@@ -61,6 +61,7 @@ export const bundles = {
       "operator-instructions.e2e.test.ts",
       "task-conversation.e2e.test.ts",
       "replay-scenarios.e2e.test.ts",
+      "retrieval-critic.e2e.test.ts",
       "mcp-*.e2e.test.ts",
       "watch-*.e2e.test.ts",
       "japan-trip-deep-research.e2e.test.ts",
