@@ -53,6 +53,7 @@ public final class HealthKitClient: Sendable {
     public func runAnchoredQuery(
         type: HKSampleType,
         anchor: HKQueryAnchor?,
+        predicate: NSPredicate? = nil,
         limit: Int = 1000
     ) async throws
         -> (samples: [HKSample], deletions: [HKDeletedObject], newAnchor: HKQueryAnchor?) {
@@ -60,7 +61,7 @@ public final class HealthKitClient: Sendable {
             (cont: CheckedContinuation<(samples: [HKSample], deletions: [HKDeletedObject], newAnchor: HKQueryAnchor?), Error>) in
             let query = HKAnchoredObjectQuery(
                 type: type,
-                predicate: nil,
+                predicate: predicate,
                 anchor: anchor,
                 limit: limit
             ) { _, samples, deletions, newAnchor, error in

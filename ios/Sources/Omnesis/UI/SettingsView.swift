@@ -582,6 +582,7 @@ struct SettingsView: View {
             ForEach(HealthCategory.allCases, id: \.self) { category in
                 Toggle(category.displayName, isOn: categoryBinding(for: category))
             }
+            BackgroundUploadToggle()
             PhoneSetupWhatsSent(copy: AppleHealthSetupStep.copy)
 
             VStack(alignment: .leading, spacing: 8) {

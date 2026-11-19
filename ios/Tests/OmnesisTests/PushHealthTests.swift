@@ -87,7 +87,7 @@ final class PushHealthTests: XCTestCase {
     /// distinguishable from a button that isn't wired up.
     func testEveryOutcomeHasAMessage() {
         let outcomes: [DrainOutcome] = [
-            .delivered, .refused, .paused, .blocked, .unreachable, .stalled, .busy, .idle, .failed,
+            .delivered, .refused, .paused, .blocked, .unreachable, .stalled, .sending, .busy, .idle, .failed,
         ]
         for outcome in outcomes {
             XCTAssertFalse(
@@ -115,7 +115,7 @@ final class PushHealthTests: XCTestCase {
         for outcome in [DrainOutcome.refused, .paused, .blocked, .unreachable, .stalled, .failed] {
             XCTAssertTrue(PushHealth.retryIsTrouble(outcome), "\(outcome) is bad news")
         }
-        for outcome in [DrainOutcome.delivered, .busy, .idle] {
+        for outcome in [DrainOutcome.delivered, .sending, .busy, .idle] {
             XCTAssertFalse(PushHealth.retryIsTrouble(outcome), "\(outcome) is not a failure")
         }
     }
@@ -123,7 +123,7 @@ final class PushHealthTests: XCTestCase {
     func testOutcomeMessagesAreDistinct() {
         let messages = [
             DrainOutcome.delivered, .refused, .paused, .blocked, .unreachable,
-            .stalled, .busy, .idle, .failed,
+            .stalled, .sending, .busy, .idle, .failed,
         ]
         .map(PushHealth.retryMessage(for:))
         XCTAssertEqual(Set(messages).count, messages.count, "Each outcome needs its own copy")

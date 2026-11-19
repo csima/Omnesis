@@ -48,6 +48,7 @@ import {
   openReadOnlyDatabase,
 } from "./db.js";
 import { createServer } from "./server.js";
+import { attachClientErrorResponses } from "./http/client-error.js";
 import { GATEWAY_VERSION } from "./version.js";
 import { ReleaseCheckService } from "./release-check/service.js";
 import { createReleaseCheckTask } from "./release-check/task.js";
@@ -3231,6 +3232,7 @@ function startServer() {
 
   injectWebSocket(server);
   httpShutdown.attach(server);
+  attachClientErrorResponses(server);
   return server;
 }
 

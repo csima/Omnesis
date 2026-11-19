@@ -251,14 +251,34 @@ public protocol OmnesisSource: Sendable {
     /// as soon as they have no more data for the current cycle.
     func sync(cursor: SyncCursor?) async throws -> SyncResult
 
+    /// The cursor a pass starts from, given the one last saved. Called once
+    /// per pass before the first `sync`; the result is saved with the
+    /// first page. Sources that plan each pass (Apple Health sweeps every
+    /// type for recent samples before resuming its backfill) reset that
+    /// plan here; the default keeps the cursor as it is.
+    func cursorForNewPass(_ cursor: SyncCursor?) -> SyncCursor?
+
     /// Called only after a page's upload payload is durably buffered, before
     /// its cursor advances. Source-local delivery marks must not advance in
     /// `sync` itself: a buffer failure must leave that page replayable.
     func didBuffer(_ result: SyncResult) async throws
+
+    /// Whether history older than what a pass reads first is still unread
+    /// after `cursor`: work for a long background task rather than a short
+    /// wake. Sources that read everything every pass have none.
+    func hasHistoryPending(cursor: SyncCursor?) -> Bool
 }
 
 extension OmnesisSource {
     public func didBuffer(_: SyncResult) async throws {}
+
+    public func hasHistoryPending(cursor _: SyncCursor?) -> Bool {
+        false
+    }
+
+    public func cursorForNewPass(_ cursor: SyncCursor?) -> SyncCursor? {
+        cursor
+    }
 
     public var multiDeviceMode: SourceMultiDeviceMode {
         .exclusive
@@ -327,23 +347,62 @@ public struct Batch: Codable, Equatable, Sendable {
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 
-    /// Derive an id like `20260418T145023123-a1b2c3d4` that sorts
-    /// lexicographically in the order batches were produced.
-    public static func makeId(now: Date = Date()) -> String {
+    /// Derive an id like `20260418T145023123-a1b2c3d4` that carries the
+    /// time the batch was made: each id is at least a millisecond after
+    /// the one before it in this process. That holds within one process
+    /// only, so the queue's order comes from `OfflineBuffer`'s sequence,
+    /// never from these ids.
+    public static func makeId() -> String {
+        makeId(millis: IdClock.shared.next())
+    }
+
+    /// An id stamped with `now` exactly, for batches made to look older.
+    public static func makeId(now: Date) -> String {
+        makeId(millis: Int64((now.timeIntervalSince1970 * 1000).rounded(.down)))
+    }
+
+    private static func makeId(millis: Int64) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
+        let seconds = millis.quotientAndRemainder(dividingBy: 1000)
         let components = calendar.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second, .nanosecond],
-            from: now
+            [.year, .month, .day, .hour, .minute, .second],
+            from: Date(timeIntervalSince1970: TimeInterval(seconds.quotient))
         )
-        let millis = (components.nanosecond ?? 0) / 1_000_000
         let stamp = String(
             format: "%04d%02d%02dT%02d%02d%02d%03d",
             components.year ?? 0, components.month ?? 0, components.day ?? 0,
             components.hour ?? 0, components.minute ?? 0, components.second ?? 0,
-            millis
+            Int(seconds.remainder)
         )
         let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).lowercased()
         return "\(stamp)-\(suffix)"
+    }
+
+    /// How long ago the batch with this id was made, read from the stamp
+    /// `makeId` puts first; `nil` for an id it didn't make.
+    static func age(ofId id: String, now: Date = Date()) -> TimeInterval? {
+        guard id.count >= 18 else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS"
+        guard let made = formatter.date(from: String(id.prefix(18))) else { return nil }
+        return now.timeIntervalSince(made)
+    }
+
+    /// Milliseconds for batch ids, never repeating or going back.
+    private final class IdClock: @unchecked Sendable {
+        static let shared = IdClock()
+        private let lock = NSLock()
+        private var last: Int64 = 0
+
+        func next() -> Int64 {
+            let now = Int64((Date().timeIntervalSince1970 * 1000).rounded(.down))
+            return lock.withLock {
+                last = max(now, last + 1)
+                return last
+            }
+        }
     }
 }
