@@ -23,6 +23,7 @@ import { SourceId, ProviderId, isTransientSyncError } from "@omnesis/types";
 import { unavailableStorePage } from "./store-unavailable.js";
 import { parseAttributedBody } from "./imessage-attributed-body.js";
 import { IMessageTranscriptCache } from "./imessage-transcript-cache.js";
+import { ContactNameDirectory, HandleNameIndex } from "./contact-names.js";
 import {
   imessageDateToDate,
   isoToImessageNs,
@@ -69,6 +70,20 @@ const PAGE_SIZE = 500;
  * once; the rest follow on later runs so one run never renders them all.
  */
 const MAX_DUE_TRANSCRIPTION_DAYS_PER_RUN = 25;
+/**
+ * Day-chats re-rendered per run because only the contact names of their
+ * handles changed. Granting Contacts access, or the first sync after names
+ * were introduced, renames every named conversation at once; the newest days
+ * go first and the rest follow on later runs, so one run never renders them
+ * all. Days whose messages changed are not counted against this.
+ */
+const MAX_RENAMED_DAYS_PER_RUN = 200;
+/**
+ * Separates a day signature's message part from its contact-names part. A day
+ * with no named handle has no names part, so its signature is what it was
+ * before names existed.
+ */
+const DAY_SIGNATURE_NAMES_SEPARATOR = "+";
 
 // Messages' "Keep Messages" setting (30 Days / 1 Year / Forever, under
 // Settings > Messages) prunes chat.db locally and silently once it is set to
@@ -103,6 +118,13 @@ interface IMessageDaySnapshot {
   signature: string;
 }
 
+interface IMessageSnapshotReconciliation {
+  documents: DocumentInput[];
+  presentExternalIds?: string[];
+  snapshotSignature?: string;
+  daySignatures?: Record<string, string>;
+}
+
 interface IMessageAttachmentEntry {
   raw: RawIMessageAttachment;
   filename: string;
@@ -129,6 +151,11 @@ export interface AppleIMessageSourceOptions {
    * falls back to an in-memory cache (de-dupes within a run only).
    */
   configDir?: string;
+  /**
+   * The collector's phone region, the last hint for normalizing a contact's
+   * national-format number when matching handles to contact names.
+   */
+  phoneRegion?: string;
 }
 
 /**
@@ -196,6 +223,10 @@ export class AppleIMessageSource {
   private transcriptCache?: IMessageTranscriptCache;
   private schemaColumns?: IMessageSchemaColumns;
   private schemaColumnsDb?: Db;
+  /** The Mac's Contacts as handle → name, rebuilt only when they change. */
+  private readonly contactNames: ContactNameDirectory;
+  /** This sync pass's contact names, read once at its start. */
+  private names: HandleNameIndex = HandleNameIndex.empty;
 
   constructor(
     private provider: AppleProvider,
@@ -211,6 +242,10 @@ export class AppleIMessageSource {
     this.transcribeAudio = opts.transcribeAudio;
     this.isTranscriptionVocabularyEnabled = opts.isTranscriptionVocabularyEnabled;
     this.configDir = opts.configDir;
+    this.contactNames = new ContactNameDirectory(
+      () => provider.getContactsStores(),
+      opts.phoneRegion,
+    );
   }
 
   async sync(cursor: SyncCursor | null): Promise<SyncResult> {
@@ -219,6 +254,7 @@ export class AppleIMessageSource {
       throwOnOpenFailure(this.provider.getIMessageOpenFailure());
       return unavailableStorePage(cursor ?? { lastRowId: 0 });
     }
+    this.names = this.contactNames.current();
 
     let state: AppleIMessageSyncCursor | null = validateAppleIMessageSyncCursor(cursor);
     const maxMessageRowId = getMaxMessageRowId(db);
@@ -271,35 +307,8 @@ export class AppleIMessageSource {
     const pageRows = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
 
     if (pageRows.length === 0) {
-      const documents: DocumentInput[] = [];
-      const emittedDayKeys = new Set<string>();
-      const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
-      let presentExternalIds: string[] | undefined;
-      let snapshotSignature = state?.lastSnapshotSignature;
-      let daySignatures = state?.lastDaySignatures;
-      if (newSnapshot.signature !== state?.lastSnapshotSignature) {
-        presentExternalIds = newSnapshot.externalIds;
-        snapshotSignature = newSnapshot.signature;
-        documents.push(
-          ...(await this.rebuildChangedDays(
-            db,
-            cutoffNs,
-            state?.lastDaySignatures,
-            newSnapshot.daySignatures,
-            emittedDayKeys,
-            state !== null && state.lastDaySignatures === undefined,
-          )),
-        );
-        daySignatures = newSnapshot.daySignatures;
-      }
-      documents.push(
-        ...(await this.rebuildDueTranscriptionDays(
-          db,
-          cutoffNs,
-          newSnapshot.daySignatures,
-          emittedDayKeys,
-        )),
-      );
+      const { documents, presentExternalIds, snapshotSignature, daySignatures } =
+        await this.reconcileSnapshot(db, cutoffNs, state, new Set<string>());
       return {
         documents,
         deletedExternalIds: [],
@@ -385,6 +394,7 @@ export class AppleIMessageSource {
         replyToGuid: row.replyToGuid ?? undefined,
         threadOriginatorGuid: row.threadOriginatorGuid ?? undefined,
         contactId: row.contactId ?? undefined,
+        senderName: row.isFromMe ? undefined : this.names.nameFor(row.contactId),
       });
     }
 
@@ -451,35 +461,15 @@ export class AppleIMessageSource {
     // enumerate the complete current source ID set (parent day docs AND
     // attachment child docs). The same scan computes per-day content
     // signatures; if a day changed without a new ROWID (edit, unsend,
-    // tapback removal, local attachment file arrival), re-emit just that day.
+    // tapback removal, local attachment file arrival, a contact renamed in
+    // the Mac's Contacts), re-emit just that day.
     let presentExternalIds: string[] | undefined;
     let snapshotSignature = state?.lastSnapshotSignature;
     let daySignatures = state?.lastDaySignatures;
     if (!hasMore) {
-      const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
-      if (newSnapshot.signature !== state?.lastSnapshotSignature) {
-        presentExternalIds = newSnapshot.externalIds;
-        snapshotSignature = newSnapshot.signature;
-        documents.push(
-          ...(await this.rebuildChangedDays(
-            db,
-            cutoffNs,
-            state?.lastDaySignatures,
-            newSnapshot.daySignatures,
-            emittedDayKeys,
-            state !== null && state.lastDaySignatures === undefined,
-          )),
-        );
-        daySignatures = newSnapshot.daySignatures;
-      }
-      documents.push(
-        ...(await this.rebuildDueTranscriptionDays(
-          db,
-          cutoffNs,
-          newSnapshot.daySignatures,
-          emittedDayKeys,
-        )),
-      );
+      const reconciled = await this.reconcileSnapshot(db, cutoffNs, state, emittedDayKeys);
+      documents.push(...reconciled.documents);
+      ({ presentExternalIds, snapshotSignature, daySignatures } = reconciled);
     }
 
     log.info(
@@ -676,15 +666,42 @@ export class AppleIMessageSource {
     // Derive isGroup from `COUNT(DISTINCT handle_id)` rather than chat.style —
     // Apple's style constants flipped meaning across macOS versions.
     const isGroup = row.chatHandleCount > 1;
+    const participantHandles = isGroup
+      ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
+      : undefined;
     return {
       chatIdentifier: row.chatIdentifier,
       displayName: row.chatDisplayName,
       isGroup,
       service: row.service ?? "iMessage",
-      participantHandles: isGroup
-        ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
-        : undefined,
+      participantHandles,
+      handleNames: this.handleNames(participantHandles ?? [row.chatIdentifier]),
     };
+  }
+
+  /** The contact names of these handles, for the ones a single card names. */
+  private handleNames(handles: readonly string[]): Record<string, string> | undefined {
+    let names: Record<string, string> | undefined;
+    for (const handle of handles) {
+      const name = this.names.nameFor(handle);
+      if (name) (names ??= {})[handle] = name;
+    }
+    return names;
+  }
+
+  /**
+   * The contact-names part of a day signature: every handle the day renders
+   * or mentions that a contact names, with that name. `undefined` when none
+   * is named, so a Mac without Contacts keeps the signatures it had.
+   */
+  private namesSignature(handles: ReadonlySet<string> | undefined): string | undefined {
+    if (!handles) return undefined;
+    const named: string[] = [];
+    for (const handle of handles) {
+      const name = this.names.nameFor(handle);
+      if (name) named.push(`${handle}\u0000${name}`);
+    }
+    return named.length > 0 ? computeContentHash(named.sort().join("\n")) : undefined;
   }
 
   private async buildDayDocuments(
@@ -821,6 +838,7 @@ export class AppleIMessageSource {
       replyToGuid: row.replyToGuid ?? undefined,
       threadOriginatorGuid: row.threadOriginatorGuid ?? undefined,
       contactId: row.contactId ?? undefined,
+      senderName: row.isFromMe ? undefined : this.names.nameFor(row.contactId),
     };
   }
 
@@ -836,17 +854,29 @@ export class AppleIMessageSource {
     const rowsByGuid = new Map(renderableRows.map((row) => [row.guid, row]));
     const dayParts = new Map<string, string[]>();
     const dayRows = new Map<string, RawIMessage[]>();
+    /** Every handle a day's document names: its chat's, and its senders'. */
+    const dayHandles = new Map<string, Set<string>>();
     const rosterCache = new Map<string, string[]>();
 
     for (const row of renderableRows) {
       const key = dayKeyForRow(row);
       const parts = dayParts.get(key) ?? [];
       parts.push(messageSignaturePart(row));
-      const info = this.chatInfoFromRow(db, row, rosterCache);
-      if (info.participantHandles) {
-        parts.push(`roster:${info.participantHandles.join("\u0000")}`);
+      const roster =
+        row.chatHandleCount > 1
+          ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
+          : undefined;
+      if (roster) {
+        parts.push(`roster:${roster.join("\u0000")}`);
       }
       dayParts.set(key, parts);
+
+      let handles = dayHandles.get(key);
+      if (!handles) {
+        handles = new Set(roster ?? [row.chatIdentifier]);
+        dayHandles.set(key, handles);
+      }
+      if (!row.isFromMe && row.contactId) handles.add(row.contactId);
 
       const groupedRows = dayRows.get(key) ?? [];
       groupedRows.push(row);
@@ -865,6 +895,7 @@ export class AppleIMessageSource {
       const parts = dayParts.get(key) ?? [];
       parts.push(tapbackSignaturePart(row));
       dayParts.set(key, parts);
+      if (!row.isFromMe && row.contactId) dayHandles.get(key)?.add(row.contactId);
     }
 
     const attMap = this.fetchAttachmentsForMessages(
@@ -886,7 +917,11 @@ export class AppleIMessageSource {
     for (const [key, parts] of Array.from(dayParts.entries()).sort(([a], [b]) =>
       a.localeCompare(b),
     )) {
-      daySignatures[key] = computeContentHash(parts.sort().join("\n"));
+      const contentSignature = computeContentHash(parts.sort().join("\n"));
+      const names = this.namesSignature(dayHandles.get(key));
+      daySignatures[key] = names
+        ? `${contentSignature}${DAY_SIGNATURE_NAMES_SEPARATOR}${names}`
+        : contentSignature;
       externalIds.push(key);
       if (this.attachmentConfig.enabled && this.extractAttachment) {
         externalIds.push(
@@ -905,6 +940,69 @@ export class AppleIMessageSource {
     return { externalIds, daySignatures, signature };
   }
 
+  /**
+   * Snapshot reconciliation, run once the cursor has caught up to the tail:
+   * enumerate the complete current source ID set (parent day docs AND
+   * attachment child docs), re-emit the days whose signature changed without
+   * a new ROWID, and retry the voice clips that are due.
+   *
+   * Days renamed beyond this run's share keep their previous signature, and
+   * the snapshot signature is left unset, so the next run compares again and
+   * takes the next share.
+   */
+  private async reconcileSnapshot(
+    db: Db,
+    cutoffNs: number | null,
+    state: AppleIMessageSyncCursor | null,
+    emittedDayKeys: Set<string>,
+  ): Promise<IMessageSnapshotReconciliation> {
+    const documents: DocumentInput[] = [];
+    const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
+    let presentExternalIds: string[] | undefined;
+    let snapshotSignature = state?.lastSnapshotSignature;
+    let daySignatures = state?.lastDaySignatures;
+    if (newSnapshot.signature !== state?.lastSnapshotSignature) {
+      presentExternalIds = newSnapshot.externalIds;
+      const rebuilt = await this.rebuildChangedDays(
+        db,
+        cutoffNs,
+        state?.lastDaySignatures,
+        newSnapshot.daySignatures,
+        emittedDayKeys,
+        state !== null && state.lastDaySignatures === undefined,
+      );
+      documents.push(...rebuilt.documents);
+      daySignatures = newSnapshot.daySignatures;
+      snapshotSignature = newSnapshot.signature;
+      if (rebuilt.deferred.length > 0) {
+        daySignatures = { ...newSnapshot.daySignatures };
+        for (const key of rebuilt.deferred) {
+          const previous = state?.lastDaySignatures?.[key];
+          if (previous !== undefined) daySignatures[key] = previous;
+        }
+        snapshotSignature = undefined;
+        log.info(
+          `Contact names changed on ${rebuilt.deferred.length} more day-chats than one run re-renders; they follow on the next syncs`,
+        );
+      }
+    }
+    documents.push(
+      ...(await this.rebuildDueTranscriptionDays(
+        db,
+        cutoffNs,
+        newSnapshot.daySignatures,
+        emittedDayKeys,
+      )),
+    );
+    return { documents, presentExternalIds, snapshotSignature, daySignatures };
+  }
+
+  /**
+   * Re-emit the days whose signature changed. A day whose messages are
+   * unchanged and only its contact names differ is renamed: at most
+   * `MAX_RENAMED_DAYS_PER_RUN` of those are rebuilt, newest first, and the
+   * rest come back as `deferred`.
+   */
   private async rebuildChangedDays(
     db: Db,
     cutoffNs: number | null,
@@ -912,12 +1010,25 @@ export class AppleIMessageSource {
     current: Record<string, string>,
     alreadyEmitted: Set<string>,
     rebuildAllWhenPreviousMissing = false,
-  ): Promise<DocumentInput[]> {
-    if (!previous && !rebuildAllWhenPreviousMissing) return [];
-    const documents: DocumentInput[] = [];
+  ): Promise<{ documents: DocumentInput[]; deferred: string[] }> {
+    if (!previous && !rebuildAllWhenPreviousMissing) return { documents: [], deferred: [] };
+    const changed: string[] = [];
+    const renamed: string[] = [];
     for (const [key, signature] of Object.entries(current)) {
       if (alreadyEmitted.has(key)) continue;
-      if (previous?.[key] === signature) continue;
+      const before = previous?.[key];
+      if (before === signature) continue;
+      if (before !== undefined && daySignatureContent(before) === daySignatureContent(signature)) {
+        renamed.push(key);
+      } else {
+        changed.push(key);
+      }
+    }
+    renamed.sort((a, b) => b.slice(-10).localeCompare(a.slice(-10)) || a.localeCompare(b));
+    const deferred = renamed.slice(MAX_RENAMED_DAYS_PER_RUN);
+
+    const documents: DocumentInput[] = [];
+    for (const key of [...changed, ...renamed.slice(0, MAX_RENAMED_DAYS_PER_RUN)]) {
       const parsed = parseDayExternalId(key);
       if (!parsed) continue;
       documents.push(
@@ -925,7 +1036,7 @@ export class AppleIMessageSource {
       );
       alreadyEmitted.add(key);
     }
-    return documents;
+    return { documents, deferred };
   }
 
   /**
@@ -1447,6 +1558,12 @@ function attachmentSignaturePart(att: RawIMessageAttachment): string {
     att.totalBytes,
     attachmentFileSignature(att.filename),
   ].join("\u0000");
+}
+
+/** The message part of a day signature, without its contact-names part. */
+function daySignatureContent(signature: string): string {
+  const separator = signature.indexOf(DAY_SIGNATURE_NAMES_SEPARATOR);
+  return separator === -1 ? signature : signature.slice(0, separator);
 }
 
 function parseDayExternalId(externalId: string): { chatIdentifier: string; date: string } | null {

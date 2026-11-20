@@ -27,7 +27,9 @@ export interface AppleIMessageSyncCursor extends Record<string, unknown> {
   /**
    * Per parent day-doc signature keyed by externalId (`chatIdentifier:YYYY-MM-DD`).
    * Lets the source re-emit just the days whose rendered content changed when
-   * there are no new ROWIDs to pull.
+   * there are no new ROWIDs to pull. A day whose handles the Mac's Contacts
+   * name carries `<messages>+<names>`, so a day whose only change is a contact
+   * name can be told apart from one whose messages changed.
    */
   lastDaySignatures?: Record<string, string>;
 }
@@ -123,6 +125,11 @@ export interface ParsedIMessage {
   replyToGuid?: string;
   threadOriginatorGuid?: string;
   contactId?: string;
+  /**
+   * The name the Mac's Contacts give `contactId`, when exactly one card
+   * matches it. Rendered beside the handle, never in place of it.
+   */
+  senderName?: string;
 }
 
 /**
@@ -169,4 +176,10 @@ export interface IMessageChatInfo {
    * undefined/empty when the roster is unknown.
    */
   participantHandles?: string[];
+  /**
+   * Contact names for the chat's own handles — the other party of a 1:1 chat
+   * (keyed by `chatIdentifier`) or a group's roster — keyed by raw handle.
+   * Only handles exactly one contact card names are present.
+   */
+  handleNames?: Readonly<Record<string, string>>;
 }

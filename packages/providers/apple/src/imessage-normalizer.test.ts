@@ -874,3 +874,115 @@ describe("self-authored vocabulary evidence", () => {
     ]);
   });
 });
+
+describe("contact names from the Mac's Contacts", () => {
+  const handle = "+14155550123";
+  const namedChat: IMessageChatInfo = {
+    chatIdentifier: handle,
+    displayName: null,
+    isGroup: false,
+    service: "iMessage",
+    handleNames: { [handle]: "Maya Reeves" },
+  };
+
+  function render(messages: ParsedIMessage[], chat: IMessageChatInfo) {
+    return normalizeDayChat(
+      "2026-11-20",
+      messages,
+      chat,
+      ProviderId("apple:test"),
+      SourceId("apple-imessage:test"),
+    );
+  }
+
+  const day = (named: boolean): ParsedIMessage[] => [
+    makeMsg({
+      guid: "m1",
+      text: "Running late",
+      date: new Date("2026-11-20T00:42:00Z"),
+      sender: handle,
+      contactId: handle,
+      senderName: named ? "Maya Reeves" : undefined,
+    }),
+    makeMsg({
+      guid: "m2",
+      text: "No problem",
+      date: new Date("2026-11-20T00:43:00Z"),
+      sender: "You",
+      isFromMe: true,
+    }),
+    makeMsg({
+      guid: "m3",
+      text: "",
+      date: new Date("2026-11-20T00:44:00Z"),
+      sender: handle,
+      contactId: handle,
+      senderName: named ? "Maya Reeves" : undefined,
+      tapback: { type: "Loved", targetGuid: "m2", action: "add" },
+    }),
+  ];
+
+  test("a 1:1 title shows the contact name beside the handle", () => {
+    expect(buildChatTitle(namedChat)).toBe("+14155550123 (Maya Reeves)");
+    const doc = render(day(true), namedChat);
+    expect(doc.title).toBe("+14155550123 (Maya Reeves) — 2026-11-20");
+    expect(doc.content.split("\n")[0]).toBe("# +14155550123 (Maya Reeves) — 2026-11-20");
+  });
+
+  test("transcript and tapback lines show the name; the owner's lines are unchanged", () => {
+    const doc = render(day(true), namedChat);
+    expect(doc.content).toContain("**00:42** +14155550123 (Maya Reeves): Running late");
+    expect(doc.content).toContain("**00:43** You: No problem");
+    expect(doc.content).toContain("  → +14155550123 (Maya Reeves) Loved");
+  });
+
+  test("without a contact name nothing changes", () => {
+    const doc = render(day(false), { ...namedChat, handleNames: undefined });
+    expect(doc.title).toBe("+14155550123 — 2026-11-20");
+    expect(doc.content).toContain("**00:42** +14155550123: Running late");
+    expect(doc.content).toContain("  → +14155550123 Loved");
+    expect(doc.content).not.toContain("(");
+  });
+
+  test("the participant carries the contact name and the phone, never the combined label", () => {
+    const doc = render(day(true), namedChat);
+    const other = doc.metadata.people?.find((p) => !p.isSelf);
+    expect(other).toEqual({ role: "participant", name: "Maya Reeves", phones: [handle] });
+    expect(doc.metadata.people?.filter((p) => !p.isSelf)).toHaveLength(1);
+    expect(doc.metadata.extra?.participants).toEqual(expect.arrayContaining([handle, "You"]));
+  });
+
+  test("a group keeps its title while senders and roster members get their names", () => {
+    const group: IMessageChatInfo = {
+      chatIdentifier: "chat-group-7",
+      displayName: "Book club",
+      isGroup: true,
+      service: "iMessage",
+      participantHandles: [handle, "jamie@example.com", "+14155550188"],
+      handleNames: { [handle]: "Maya Reeves", "jamie@example.com": "Jamie Lopez" },
+    };
+    const doc = render(
+      [
+        makeMsg({
+          guid: "g1",
+          text: "Chapter four tonight",
+          date: new Date("2026-11-20T18:05:00Z"),
+          sender: "jamie@example.com",
+          contactId: "jamie@example.com",
+          senderName: "Jamie Lopez",
+        }),
+      ],
+      group,
+    );
+    expect(doc.title).toBe("Book club — 2026-11-20");
+    expect(doc.content).toContain(
+      "**18:05** jamie@example.com (Jamie Lopez): Chapter four tonight",
+    );
+    const people = doc.metadata.people?.filter((p) => !p.isSelf) ?? [];
+    expect(people).toEqual([
+      { role: "participant", name: "Maya Reeves", phones: [handle] },
+      { role: "participant", name: "Jamie Lopez", emails: ["jamie@example.com"] },
+      { role: "participant", name: undefined, phones: ["+14155550188"] },
+    ]);
+  });
+});
