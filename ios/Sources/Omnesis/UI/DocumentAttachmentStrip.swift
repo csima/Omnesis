@@ -19,12 +19,15 @@ import SwiftUI
 struct DocumentAttachmentStrip: View {
     let attachments: [DocumentAttachment]
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var pushedAttachment: DocumentAttachment?
 
     var body: some View {
         FlatSection("Attachments") {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                // The gap grows with the tiles, so at large text sizes the
+                // neighbouring captions keep a clear gutter between them.
+                HStack(alignment: .top, spacing: Theme.Spacing.md * DocumentAttachmentTile.scale(at: dynamicTypeSize)) {
                     ForEach(attachments) { attachment in
                         DocumentAttachmentTile(
                             attachment: attachment,
@@ -67,12 +70,21 @@ struct DocumentAttachmentTile: View {
         docOpenURLs(appUrl: attachment.appUrl, sourceUrl: attachment.sourceUrl)
     }
 
-    private var tileSize: CGSize {
-        let scale = min(
+    /// How much larger than `baseSize` a tile draws at `dynamicTypeSize`:
+    /// the body text's growth, never below 1 or above `maximumScale`.
+    static func scale(at dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        min(
             max(ScaledType.bodySize(at: dynamicTypeSize) / ScaledType.defaultBodySize, 1),
-            Self.maximumScale
+            maximumScale
         )
-        return CGSize(width: Self.baseSize.width * scale, height: Self.baseSize.height * scale)
+    }
+
+    private var scale: CGFloat {
+        Self.scale(at: dynamicTypeSize)
+    }
+
+    private var tileSize: CGSize {
+        CGSize(width: Self.baseSize.width * scale, height: Self.baseSize.height * scale)
     }
 
     var body: some View {
@@ -115,55 +127,12 @@ struct DocumentAttachmentTile: View {
     // MARK: Thumbnail
 
     private var thumbnail: some View {
-        ZStack {
-            Theme.bgTertiary
-            if let preview = attachment.preview {
-                DocumentPreviewPicture(preview: preview, maxPixelSize: DocumentPreviewPixelSize.thumbnail) { phase in
-                    switch phase {
-                    case .loaded(let image):
-                        Color.clear.overlay(alignment: kind == .image || kind == .video ? .center : .top) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                        }
-                    case .loading:
-                        Color.clear
-                    case .failed:
-                        placeholder
-                    }
-                }
-            } else {
-                placeholder
-            }
-            if kind == .video, attachment.preview != nil {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .background(.black.opacity(0.45), in: Circle())
-            }
-        }
-        .frame(width: tileSize.width, height: tileSize.height)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.large)
-                .stroke(Theme.border, lineWidth: 0.5)
+        AttachmentThumbnail(
+            attachment: attachment,
+            size: tileSize,
+            scale: scale,
+            cornerRadius: Theme.Radius.large
         )
-    }
-
-    /// The file type's glyph and short label, in its colour, for a child
-    /// with no preview image or one that could not load.
-    private var placeholder: some View {
-        VStack(spacing: 4) {
-            Image(systemName: kind.systemImage)
-                .font(.system(size: 24))
-                .foregroundStyle(kind.color)
-            Text(FileTypeIcons.label(mimeType: attachment.mimeType, filename: attachment.displayName))
-                .font(.system(size: 9, weight: .semibold))
-                .tracking(0.4)
-                .foregroundStyle(Theme.textMuted)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Caption
@@ -198,6 +167,120 @@ struct DocumentAttachmentTile: View {
         var parts = [attachment.displayName, kind.label]
         if attachment.preview == nil { parts.append("no preview") }
         return parts.joined(separator: ", ")
+    }
+}
+
+/// An attachment's picture: its preview image when the source captured one,
+/// and the file type's glyph and short label otherwise, or when the image
+/// cannot load. A video's preview carries a play badge. Shared by the
+/// document page's strip and the inspector's graph rows, so both surfaces
+/// show a child the same way. `scale` grows the glyph, label and badge
+/// with the reader's text size.
+@available(iOS 17.0, *)
+struct AttachmentThumbnail: View {
+    /// The placeholder and badge sizes for a tile of `referenceSize` at
+    /// scale 1; a smaller tile draws them proportionally smaller.
+    static let referenceSize = DocumentAttachmentTile.baseSize
+
+    let attachment: DocumentAttachment
+    let size: CGSize
+    var scale: CGFloat = 1
+    var cornerRadius: CGFloat = Theme.Radius.large
+
+    private var kind: FileTypeKind {
+        FileTypeIcons.kind(mimeType: attachment.mimeType, filename: attachment.displayName) ?? .file
+    }
+
+    /// The tile's size relative to the strip's tile at the same text size.
+    private var proportion: CGFloat {
+        min(size.width / (Self.referenceSize.width * scale), 1)
+    }
+
+    /// Glyph and label sizes: the strip's sizes, grown with the text and
+    /// shrunk with a smaller tile. A compact tile drops the label when it
+    /// would be too small to read.
+    private var glyphSize: CGFloat {
+        24 * scale * proportion
+    }
+
+    private var labelSize: CGFloat {
+        9 * scale * proportion
+    }
+
+    private var showsLabel: Bool {
+        labelSize >= 7
+    }
+
+    private var badgeSize: CGFloat {
+        max(28 * scale * proportion, 18)
+    }
+
+    var body: some View {
+        ZStack {
+            Theme.bgTertiary
+            if let preview = attachment.preview {
+                DocumentPreviewPicture(preview: preview, maxPixelSize: DocumentPreviewPixelSize.thumbnail) { phase in
+                    switch phase {
+                    case .loaded(let image):
+                        Color.clear.overlay(alignment: kind == .image || kind == .video ? .center : .top) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        }
+                    case .loading:
+                        Color.clear
+                    case .failed:
+                        placeholder
+                    }
+                }
+            } else {
+                placeholder
+            }
+            if kind == .video, attachment.preview != nil {
+                Image(systemName: "play.fill")
+                    .font(.system(size: badgeSize * 0.43, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: badgeSize, height: badgeSize)
+                    .background(.black.opacity(0.45), in: Circle())
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+        .accessibilityHidden(true)
+    }
+
+    /// The file type's glyph and short label, in its colour.
+    private var placeholder: some View {
+        VStack(spacing: 4 * scale * proportion) {
+            Image(systemName: kind.systemImage)
+                .font(.system(size: glyphSize))
+                .foregroundStyle(kind.color)
+            if showsLabel {
+                Text(FileTypeIcons.label(mimeType: attachment.mimeType, filename: attachment.displayName))
+                    .font(.system(size: labelSize, weight: .semibold))
+                    .tracking(0.4 * scale)
+                    .foregroundStyle(Theme.textMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+extension AttachmentThumbnail {
+    /// The inspector graph tab's compact thumbnail, the size of a search
+    /// row's preview.
+    init(graphRow attachment: DocumentAttachment) {
+        self.init(
+            attachment: attachment,
+            size: DocumentPreviewThumbnail.size,
+            cornerRadius: Theme.Radius.medium
+        )
     }
 }
 

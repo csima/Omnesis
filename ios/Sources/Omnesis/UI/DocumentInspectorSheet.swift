@@ -706,15 +706,15 @@ private struct AttachmentGraphRow: View {
     }
 
     /// The thumbnail sits on the trailing side, as on search rows, so
-    /// every row's icon and filename line up whether or not it has one.
+    /// every row's icon and filename line up. With no preview, or one that
+    /// cannot load, it shows the document strip's file-type placeholder,
+    /// never an empty box.
     var body: some View {
         wrap {
             HStack(alignment: .center, spacing: 10) {
                 details
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if let preview = att.preview {
-                    DocumentPreviewThumbnail(preview: preview)
-                }
+                AttachmentThumbnail(graphRow: att)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Theme.textMuted)

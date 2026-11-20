@@ -2963,9 +2963,11 @@ final class PreviewSnapshotTests: XCTestCase {
         snapshot(view, name: "31d-inspector-graph-tab-same-entity")
     }
 
-    /// Graph tab rows for attachments: a thumbnail beside each child that
-    /// has a preview, the type icon alone otherwise, and the muted glyph for
-    /// a preview the gateway no longer serves once it settles.
+    /// Graph tab rows for attachments: the preview beside each child that
+    /// has one (a video's with its play badge), and the strip's file-type
+    /// placeholder for a child without one or whose preview the gateway no
+    /// longer serves. Rendered in a window so that missing preview settles
+    /// into its placeholder before the capture.
     func testInspectorGraphTabAttachmentPreviews() {
         PreviewMocks.primeDocumentPreviewImages()
         let view = DocumentInspectorSheet(
@@ -2977,7 +2979,7 @@ final class PreviewSnapshotTests: XCTestCase {
         )
         .environment(AppStore.preview())
         .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
-        snapshot(view, name: "31f-inspector-graph-tab-attachment-previews")
+        renderInWindow(view, name: "31f-inspector-graph-tab-attachment-previews")
     }
 
     // MARK: - Attachment strip
