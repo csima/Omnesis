@@ -885,6 +885,7 @@ export {
   fileKindName,
   resolveEffectiveMimeType,
   buildAttachmentDocument,
+  buildMediaAttachmentDocument,
   deriveAttachmentStableId,
   assignAttachmentSeqs,
   formatAttachmentMarkers,
@@ -897,6 +898,7 @@ export {
 
 export type {
   AttachmentInfo,
+  AttachmentChildMeta,
   AttachmentExtractionConfig,
   ExtractionResult,
   AttachmentExtractFn,

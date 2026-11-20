@@ -113,19 +113,23 @@ interface DocMetaParsed {
   docType: string;
   threadId: string | null;
   senderAddress: string | null;
+  lowSignal: boolean;
 }
 
 function parseDocMeta(metadataJson: string): DocMetaParsed {
   let docType = "document";
   let threadId: string | null = null;
   let senderAddress: string | null = null;
+  let lowSignal = false;
   try {
     const m = JSON.parse(metadataJson) as {
       documentType?: string;
+      lowSignal?: unknown;
       extra?: { threadId?: string };
       people?: Array<{ role?: string } & PersonIdentifierSource>;
     };
     if (typeof m.documentType === "string") docType = m.documentType;
+    lowSignal = m.lowSignal === true;
     if (typeof m.extra?.threadId === "string") threadId = m.extra.threadId;
     if (Array.isArray(m.people)) {
       for (const p of m.people) {
@@ -143,7 +147,7 @@ function parseDocMeta(metadataJson: string): DocMetaParsed {
   } catch {
     // ignore malformed metadata
   }
-  return { docType, threadId, senderAddress };
+  return { docType, threadId, senderAddress, lowSignal };
 }
 
 // ── Phase 2a: Sign a batch of docs (CPU pool) ────────────────────────
@@ -164,7 +168,7 @@ export function signDocBatch(
   const results: SignedDoc[] = [];
   for (const doc of docs) {
     const parsed = parseDocMeta(doc.metadata);
-    if (!isEligibleForNearDup(parsed.docType, eligible)) {
+    if (!isEligibleForNearDup(parsed.docType, eligible, parsed.lowSignal)) {
       results.push({
         docId: doc.docId,
         inboxId: doc.inboxId,
@@ -256,7 +260,7 @@ export function prepareCandidateBatch(
   const prepared: PreparedCandidate[] = [];
   for (const candidate of candidates) {
     const parsed = parseDocMeta(candidate.metadata);
-    if (!isEligibleForNearDup(parsed.docType, eligible)) continue;
+    if (!isEligibleForNearDup(parsed.docType, eligible, parsed.lowSignal)) continue;
     const sh = shingles(
       normalizeText(candidate.content, { stripQuotes: algoConfig.stripQuotes }),
       algoConfig.shingleSize,

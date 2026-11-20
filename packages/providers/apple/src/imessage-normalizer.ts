@@ -127,6 +127,42 @@ export function buildIMessageSourceUrl(messageGuid: string | undefined): string 
 }
 
 /**
+ * What a photo, video or PDF is called in its attachment document's
+ * description; `undefined` for the files that do not become one without text.
+ */
+export function mediaAttachmentNoun(mimeType: string): string | undefined {
+  const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (base.startsWith("image/")) return "Photo";
+  if (base.startsWith("video/")) return "Video";
+  if (base === "application/pdf") return "PDF";
+  return undefined;
+}
+
+/**
+ * The content of an attachment document with no extracted text: one line
+ * saying what the file is, who sent it, where and when — "Photo sent by
+ * +14155550123 (Maya Reeves) on 2026-03-04 at 08:12". A file the user sent
+ * names the conversation it went to, and a file sent to a group names the
+ * group, so the line still places the file once it is found on its own.
+ *
+ * The link to the message is the document's `sourceUrl`, never part of this
+ * text: a URL in content becomes a link edge of its own.
+ */
+export function describeMediaAttachment(
+  msg: ParsedIMessage,
+  mimeType: string,
+  chat: IMessageChatInfo,
+): string {
+  const noun = mediaAttachmentNoun(mimeType) ?? "Attachment";
+  const when = `on ${formatDateKey(msg.date)} at ${formatTime(msg.date)}`;
+  if (msg.isFromMe) return `${noun} sent by you to ${buildChatTitle(chat)} ${when}`;
+  const sender = formatHandle(msg.sender, msg.senderName);
+  return chat.isGroup
+    ? `${noun} sent by ${sender} in ${buildChatTitle(chat)} ${when}`
+    : `${noun} sent by ${sender} ${when}`;
+}
+
+/**
  * Normalize a set of messages for one chat on one day into a DocumentInput.
  */
 export function normalizeDayChat(

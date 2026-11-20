@@ -4,7 +4,7 @@
 import { describe, expect, test } from "vitest";
 import { IDF_EXCL_CONFIG } from "@omnesis/near-dupes";
 import { DEFAULT_NEAR_DUP_CONFIG } from "./config.js";
-import { signDocBatch, verifyPairBatch } from "./cpu-signing.js";
+import { prepareCandidateBatch, signDocBatch, verifyPairBatch } from "./cpu-signing.js";
 import { buildDfSab } from "./df-sab.js";
 import type {
   NearDupDocForSigning,
@@ -108,6 +108,33 @@ describe("signDocBatch", () => {
     expect(results).toHaveLength(1);
     expect(results[0].shouldDelete).toBe(true);
     expect(results[0].docType).toBe("contact");
+  });
+
+  test("a low-signal document is never signed or offered as a candidate", () => {
+    // Two photo descriptions a minute apart share all but their last shingle,
+    // which would read as a near-duplicate pair of unrelated photos.
+    const describe = (minute: string) => `Photo sent by +15550100142 on 2026-03-04 at 08:${minute}`;
+    const metadata = JSON.stringify({ documentType: "attachment", lowSignal: true });
+    const docs = [
+      makeDoc({ docId: "photo-1", content: describe("12"), metadata }),
+      makeDoc({ docId: "photo-2", content: describe("13"), metadata }),
+    ];
+    const results = signDocBatch(docs, ALGO_CONFIG, SMALL_DF, ELIGIBLE_DOC_TYPES);
+    expect(results.map((r) => r.shouldDelete)).toEqual([true, true]);
+    expect(results.every((r) => r.signatureBytes === null)).toBe(true);
+
+    const candidates = prepareCandidateBatch(
+      docs.map((d) => ({
+        candidateId: d.docId,
+        content: d.content,
+        contentHash: d.contentHash,
+        extractedContentHash: d.extractedContentHash,
+        metadata: d.metadata,
+      })),
+      ALGO_CONFIG,
+      ELIGIBLE_DOC_TYPES,
+    );
+    expect(candidates).toEqual([]);
   });
 
   test("content that normalizes to empty produces shouldDelete=true", () => {

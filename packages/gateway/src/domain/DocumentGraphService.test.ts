@@ -746,6 +746,36 @@ describe("expandOneHop", () => {
     expect(ids).not.toContain("msg-01"); // the oldest is the one dropped
   });
 
+  test("low-signal neighbours come after the rest, under the cap and in the ranking", () => {
+    // A day of chat whose forty photos are described, not read: newer than
+    // the one scan with text, and attached by the most structural edge, yet
+    // neither may crowd the scan or the thread out of the fanout.
+    seedDoc("day", "chat:self", "chat day", "2025-06-01T00:00:00Z");
+    seedDoc("scan", "chat:self", "scan.png", "2025-06-01T08:00:00Z");
+    seedLink("scan", "contains", "day");
+    seedDoc("thread", "chat:self", "earlier day", "2025-05-31T00:00:00Z");
+    seedLink("day", "part-of-thread", "thread");
+    const markLowSignal = db.prepare(
+      "UPDATE documents SET metadata = json_set(metadata, '$.lowSignal', json('true')) WHERE id = ?",
+    );
+    for (let i = 10; i < 50; i++) {
+      seedDoc(`photo-${i}`, "chat:self", `IMG_00${i}.HEIC`, `2025-06-01T12:${i}:00Z`);
+      markLowSignal.run(`photo-${i}`);
+      seedLink(`photo-${i}`, "contains", "day");
+    }
+
+    const { neighbors, truncated } = expandOneHop(db, "day", { fanout: 4 });
+    expect(truncated).toBe(true);
+    const ids = neighbors.map((n) => n.documentId);
+    expect(ids.slice(0, 2)).toEqual(["scan", "thread"]);
+    expect(ids.slice(2).every((id) => id.startsWith("photo-"))).toBe(true);
+
+    const graph = buildDocumentGraph(db, ["day"], { depth: 1, fanoutCap: 3 });
+    const photo = graph.vertices.find((v) => v.documentId?.startsWith("photo-"));
+    expect(photo?.lowSignal).toBe(true);
+    expect(graph.vertices.find((v) => v.documentId === "scan")?.lowSignal).toBeUndefined();
+  });
+
   test("truncated is false when every neighbour fits", () => {
     seedDoc("seed");
     seedDoc("att");

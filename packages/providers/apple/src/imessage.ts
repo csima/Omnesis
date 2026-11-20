@@ -11,6 +11,7 @@ import {
   resolveAttachmentConfig,
   shouldExtractAttachment,
   buildAttachmentDocument,
+  buildMediaAttachmentDocument,
   formatAttachmentMarkers,
   deriveAttachmentStableId,
   assignAttachmentSeqs,
@@ -33,6 +34,9 @@ import {
   isTapbackRemoval,
   normalizeDayChat,
   imessagePersonIdentifiers,
+  buildIMessageSourceUrl,
+  describeMediaAttachment,
+  mediaAttachmentNoun,
 } from "./imessage-normalizer.js";
 import { validateAppleIMessageSyncCursor } from "./imessage-types.js";
 import {
@@ -46,6 +50,7 @@ import type {
   AttachmentExtractionConfig,
   AttachmentExtractFn,
   AudioTranscribeFn,
+  ExtractionResult,
 } from "@omnesis/core";
 import type { SyncCursor, SyncProgress, SyncResult } from "@omnesis/source-sdk";
 import type { DocumentInput, SyncIssue } from "@omnesis/types";
@@ -739,7 +744,7 @@ export class AppleIMessageSource {
       this.id,
       this.isTranscriptionVocabularyEnabled?.() === true,
     );
-    const attachmentDocs = await this.extractAttachments(doc, dayParsed, attMap);
+    const attachmentDocs = await this.extractAttachments(doc, dayParsed, attMap, info);
     return [doc, ...attachmentDocs];
   }
 
@@ -1125,15 +1130,31 @@ export class AppleIMessageSource {
       const parsed = this.parseMessageRow(row, attMap);
       if (!parsed || parsed.tapback) continue;
       for (const raw of attMap.get(row.rowId) ?? []) {
-        const filename = imessageAttachmentFilename(raw);
-        const mimeType = raw.mimeType;
-        if (!mimeType) continue;
-        const check = shouldExtractAttachment(mimeType, raw.totalBytes, this.attachmentConfig);
-        if (!check.extract) continue;
-        entries.push({ raw, filename, mimeType });
+        const entry = this.attachmentChildEntry(raw);
+        if (entry) entries.push(entry);
       }
     }
     return entries;
+  }
+
+  /**
+   * The attachment as a child document, or null when it does not become one:
+   * a file whose text can be extracted, and every photo, video and PDF
+   * whether or not it has text (see `extractAttachments`). The one test both
+   * the documents and the snapshot's id list use, so `seq` — numbered within
+   * this set — agrees between them, and a media child is never pruned for
+   * being missing from the snapshot.
+   *
+   * Widening the set to media keeps every earlier child's `seq`: a tie group
+   * shares its filename, size and MIME type, and so its eligibility.
+   */
+  private attachmentChildEntry(raw: RawIMessageAttachment): IMessageAttachmentEntry | null {
+    const mimeType = raw.mimeType;
+    if (!mimeType) return null;
+    const media = mediaAttachmentNoun(mimeType) !== undefined;
+    if (!media && !shouldExtractAttachment(mimeType, raw.totalBytes, this.attachmentConfig).extract)
+      return null;
+    return { raw, filename: imessageAttachmentFilename(raw), mimeType };
   }
 
   /**
@@ -1309,14 +1330,23 @@ export class AppleIMessageSource {
   }
 
   /**
-   * Extract text from supported attachments in a day-chat's messages.
-   * Mutates the parent doc to add attachment markers and metadata.
-   * Returns an array of attachment DocumentInputs.
+   * Turn a day-chat's attachments into child documents, and add their
+   * markers and metadata to the parent. Returns the children.
+   *
+   * A file with extracted text becomes a child holding that text. Every
+   * photo, video and PDF becomes a child even without text — not yet on disk
+   * (offloaded to iCloud), no OCR backend, nothing to read — holding a line
+   * that says what it is (`describeMediaAttachment`). Both share an
+   * externalId, so a file that later yields text replaces its description in
+   * place. Each child links to the message that carried it, which opens
+   * Messages at that message; the parent's markers stay plain text, because a
+   * link in content would become a link edge of its own.
    */
   private async extractAttachments(
     parentDoc: DocumentInput,
     dayParsed: ParsedIMessage[],
     dayAttMap: Map<number, RawIMessageAttachment[]>,
+    chat: IMessageChatInfo,
   ): Promise<DocumentInput[]> {
     if (!this.attachmentConfig.enabled || !this.extractAttachment) {
       return [];
@@ -1328,12 +1358,8 @@ export class AppleIMessageSource {
     for (const msg of dayParsed) {
       if (msg.tapback) continue;
       for (const raw of dayAttMap.get(msg.rowId) ?? []) {
-        const filename = imessageAttachmentFilename(raw);
-        const mimeType = raw.mimeType;
-        if (!mimeType) continue;
-        const check = shouldExtractAttachment(mimeType, raw.totalBytes, this.attachmentConfig);
-        if (!check.extract) continue;
-        eligibleEntries.push({ raw, filename, mimeType });
+        const entry = this.attachmentChildEntry(raw);
+        if (entry) eligibleEntries.push(entry);
       }
     }
     const seqByAttachmentRowId = new Map<number, number>();
@@ -1369,7 +1395,8 @@ export class AppleIMessageSource {
         }
 
         const check = shouldExtractAttachment(mimeType, att.totalBytes, this.attachmentConfig);
-        if (!check.extract) {
+        const media = mediaAttachmentNoun(mimeType) !== undefined;
+        if (!check.extract && !media) {
           attachmentInfos.push({
             filename,
             mimeType,
@@ -1380,95 +1407,53 @@ export class AppleIMessageSource {
           continue;
         }
 
-        // Resolve file path
-        if (!att.filename) {
-          attachmentInfos.push({
-            filename,
-            mimeType,
-            size: att.totalBytes,
-            extracted: false,
-            reason: "download-failed",
-          });
-          continue;
-        }
+        const seq = seqByAttachmentRowId.get(att.attachmentRowId) ?? 0;
+        const attachmentId = deriveAttachmentStableId(filename, att.totalBytes, mimeType, seq);
+        const childMeta = {
+          mimeType,
+          sizeBytes: att.totalBytes,
+          seq,
+          // The parent is a whole day of chat, so its timestamps bound the
+          // day rather than dating this file, and its link opens the day's
+          // first message. Stamp and link the message that carried it, or
+          // every attachment sent that day sorts and opens as if it arrived
+          // with the first message.
+          occurredAt: msg.date.toISOString(),
+          sourceUrl: buildIMessageSourceUrl(msg.guid),
+        };
 
-        const filePath = resolveAttachmentPath(att.filename);
-        if (!filePath) {
-          attachmentInfos.push({
-            filename,
-            mimeType,
-            size: att.totalBytes,
-            extracted: false,
-            reason: "download-failed",
-          });
-          continue;
-        }
-        if (!existsSync(filePath)) {
-          log.debug(`Attachment file not found: ${filePath}`);
-          attachmentInfos.push({
-            filename,
-            mimeType,
-            size: att.totalBytes,
-            extracted: false,
-            reason: "download-failed",
-          });
-          continue;
-        }
-
-        try {
-          const data = new Uint8Array(await readFile(filePath));
-          const result = await this.extractAttachment(data, mimeType, {
-            maxTextLength: this.attachmentConfig.maxTextLength,
-          });
-          if (!result) {
-            attachmentInfos.push({
-              filename,
-              mimeType,
-              size: att.totalBytes,
-              extracted: false,
-              reason: "extraction-failed",
-            });
-            continue;
-          }
-          if (result.noText) {
-            attachmentInfos.push({
-              filename,
-              mimeType,
-              size: att.totalBytes,
-              extracted: false,
-              reason: "no-text",
-            });
-            continue;
-          }
-
-          const seq = seqByAttachmentRowId.get(att.attachmentRowId) ?? 0;
-          const attDoc = buildAttachmentDocument(parentDoc, filename, result, {
-            mimeType,
-            sizeBytes: att.totalBytes,
-            seq,
-            // The parent is a whole day of chat, so its timestamps bound the
-            // day rather than dating this file. Stamp the message that carried
-            // it, or every attachment sent that day sorts as if it arrived
-            // with the first message.
-            occurredAt: msg.date.toISOString(),
-          });
-          attachmentDocs.push(attDoc);
-          attachmentInfos.push({ filename, mimeType, size: att.totalBytes, extracted: true });
-        } catch (err) {
-          // Transient extraction-backend blip → fail the page so it retries,
-          // rather than recording a permanent extraction failure and advancing
-          // the cursor past a file that would extract cleanly later.
-          if (isTransientSyncError(err)) throw err;
-          log.debug(
-            `Failed to extract attachment ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+        const outcome = check.extract
+          ? await this.extractAttachmentText(att, filename, mimeType, this.extractAttachment)
+          : { reason: check.reason };
+        if ("result" in outcome) {
+          attachmentDocs.push(
+            buildAttachmentDocument(parentDoc, filename, outcome.result, childMeta),
           );
           attachmentInfos.push({
             filename,
             mimeType,
             size: att.totalBytes,
-            extracted: false,
-            reason: "extraction-failed",
+            extracted: true,
+            attachmentId,
           });
+          continue;
+        }
+
+        attachmentInfos.push({
+          filename,
+          mimeType,
+          size: att.totalBytes,
+          extracted: false,
+          reason: outcome.reason,
+          ...(media ? { attachmentId } : {}),
+        });
+        if (media) {
+          attachmentDocs.push(
+            buildMediaAttachmentDocument(parentDoc, filename, {
+              ...childMeta,
+              description: describeMediaAttachment(msg, mimeType, chat),
+            }),
+          );
         }
       }
     }
@@ -1479,6 +1464,44 @@ export class AppleIMessageSource {
     }
 
     return attachmentDocs;
+  }
+
+  /**
+   * Read one attachment from disk and extract its text: the result, or why
+   * there is none. A file not on disk is `download-failed`, which the day
+   * signature turns into a re-render once the file arrives.
+   */
+  private async extractAttachmentText(
+    att: RawIMessageAttachment,
+    filename: string,
+    mimeType: string,
+    extract: AttachmentExtractFn,
+  ): Promise<{ result: ExtractionResult } | { reason: AttachmentInfo["reason"] }> {
+    const filePath = att.filename ? resolveAttachmentPath(att.filename) : null;
+    if (!filePath) return { reason: "download-failed" };
+    if (!existsSync(filePath)) {
+      log.debug(`Attachment file not found: ${filePath}`);
+      return { reason: "download-failed" };
+    }
+
+    try {
+      const data = new Uint8Array(await readFile(filePath));
+      const result = await extract(data, mimeType, {
+        maxTextLength: this.attachmentConfig.maxTextLength,
+      });
+      if (!result) return { reason: "extraction-failed" };
+      if (result.noText) return { reason: "no-text" };
+      return { result };
+    } catch (err) {
+      // Transient extraction-backend blip → fail the page so it retries,
+      // rather than recording a permanent extraction failure and advancing
+      // the cursor past a file that would extract cleanly later.
+      if (isTransientSyncError(err)) throw err;
+      log.debug(
+        `Failed to extract attachment ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { reason: "extraction-failed" };
+    }
   }
 }
 
