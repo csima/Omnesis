@@ -9,7 +9,12 @@ import {
   loadActiveUniverse,
   loadSourceFixtureJson,
 } from "@omnesis/providers-synth-common";
-import { buildMediaAttachmentDocument } from "@omnesis/core";
+import {
+  buildMediaAttachmentDocument,
+  deriveAttachmentStableId,
+  formatAttachmentMarkers,
+  type AttachmentInfo,
+} from "@omnesis/core";
 import { parseSourceId } from "@omnesis/types";
 import type { DocumentInput, PersonMention, ProviderId, SourceId } from "@omnesis/types";
 
@@ -104,17 +109,38 @@ export function mapReminder(
 
 // ── iMessage ────────────────────────────────────────────────────────
 
+interface ChatAttachment {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  /**
+   * A universe-relative JPEG standing in for the thumbnail the real source
+   * makes of this file; offered as the child document's preview.
+   */
+  previewAssetPath?: string;
+}
 interface ChatMessage {
   from: string;
+  /** The message's guid; when present, the attachment links to it. */
+  guid?: string;
   at: string;
   text: string;
-  attachments?: Array<{
-    filename: string;
-    mimeType: string;
-    sizeBytes: number;
-  }>;
+  attachments?: ChatAttachment[];
 }
-interface DailyChatEntry {
+
+/** A child document's preview, as a fixture declares it. */
+export interface ChatPreviewAsset {
+  externalId: string;
+  filename: string;
+  assetPath: string;
+  capturedAt: string;
+}
+
+/** The deep link the real source gives a message (see its normalizer). */
+function messageUrl(guid: string | undefined): string | undefined {
+  return guid ? `messages://open?message-guid=${encodeURIComponent(guid)}` : undefined;
+}
+export interface DailyChatEntry {
   externalId: string;
   chatId: string;
   chatTitle: string;
@@ -176,7 +202,9 @@ export function mapChat(
     sourceUpdatedAt: lastAt,
   };
   // As the real source does for a file it has no text for: a child of its
-  // own whose content says what it is, who sent it and when.
+  // own whose content says what it is, who sent it and when, linked to the
+  // message that carried it, and a marker on the day naming the child.
+  const infos: AttachmentInfo[] = [];
   const attachmentDocuments = e.messages.flatMap((message) =>
     (message.attachments ?? []).map((attachment): DocumentInput => {
       const sender = message.from === "self" ? "you" : getPerson(message.from).name;
@@ -188,15 +216,60 @@ export function mapChat(
             : attachment.mimeType.startsWith("image/")
               ? "Photo"
               : "Attachment";
+      infos.push({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        size: attachment.sizeBytes,
+        extracted: false,
+        // The real source reads no text from a photo or video; it is not on
+        // the extraction allow-list.
+        reason: "type-excluded",
+        attachmentId: deriveAttachmentStableId(
+          attachment.filename,
+          attachment.sizeBytes,
+          attachment.mimeType,
+          0,
+        ),
+      });
+      const sourceUrl = messageUrl(message.guid);
       return buildMediaAttachmentDocument(dayDocument, attachment.filename, {
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
         occurredAt: message.at,
+        ...(sourceUrl ? { sourceUrl } : {}),
         description: `${noun} sent by ${sender} on ${message.at.slice(0, 10)} at ${message.at.slice(11, 16)}`,
       });
     }),
   );
+  if (infos.length > 0) {
+    dayDocument.content += formatAttachmentMarkers(infos);
+    dayDocument.contentHash = sha256Hex(`${e.externalId}:${dayDocument.content}`);
+    dayDocument.metadata.extra = { ...dayDocument.metadata.extra, attachments: infos };
+  }
   return [dayDocument, ...attachmentDocuments];
+}
+
+/** The preview each attachment of a chat day declares, keyed by its child's externalId. */
+export function chatPreviewAssets(e: DailyChatEntry): ChatPreviewAsset[] {
+  return e.messages.flatMap((message) =>
+    (message.attachments ?? []).flatMap((attachment) =>
+      attachment.previewAssetPath
+        ? [
+            {
+              externalId: `${e.externalId}/att/${deriveAttachmentStableId(
+                attachment.filename,
+                attachment.sizeBytes,
+                attachment.mimeType,
+                0,
+              )}`,
+              filename: attachment.filename,
+              assetPath: attachment.previewAssetPath,
+              capturedAt: message.at,
+            },
+          ]
+        : [],
+    ),
+  );
 }
 
 // ── Contacts ────────────────────────────────────────────────────────

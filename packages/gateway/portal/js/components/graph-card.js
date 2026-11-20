@@ -13,6 +13,7 @@ import {
   sourceIcon,
 } from "../lib/format.js";
 import { FileTypeIcon } from "../lib/file-type-icons.js";
+import { PreviewThumbnail } from "./document-preview.js";
 import { renderResolvedPersonMini, groupPeopleByPerson } from "../lib/person-card.js";
 import { cursorPageBoundaryState, LoadMore } from "./load-more.js";
 
@@ -345,22 +346,35 @@ function GraphSection({ label, count, partial = false, hint, children }) {
 // ─── Attachment rows ─────────────────────────────────────────────────
 
 /**
- * Build one entry per attachment. We match infos to their extracted
- * child documents by filename — unique within a single email in
- * practice; on collision we just pick the first match (harmless).
+ * Build one entry per attachment, pairing each marker with its child
+ * document. A marker that names its `attachmentId` is matched on it — the
+ * child's id says which file it is even when two files share a name. A
+ * marker without one falls back to the filename, unique within one message
+ * in practice; on a collision the first unclaimed child wins.
  */
-function buildAttachmentRows({ attachmentInfos, attachmentChildren }) {
+export function buildAttachmentRows({ attachmentInfos, attachmentChildren }) {
   if (!attachmentInfos || attachmentInfos.length === 0) return [];
-  const childByFilename = new Map();
-  for (const child of attachmentChildren ?? []) {
-    if (child.title && !childByFilename.has(child.title)) {
-      childByFilename.set(child.title, child);
+  const children = attachmentChildren ?? [];
+  const childByAttachmentId = new Map();
+  for (const child of children) {
+    if (child.attachmentId && !childByAttachmentId.has(child.attachmentId)) {
+      childByAttachmentId.set(child.attachmentId, child);
     }
   }
-  return attachmentInfos.map((info) => ({
-    info,
-    child: childByFilename.get(info.filename) ?? null,
-  }));
+  const claimed = new Set();
+  const byId = attachmentInfos.map((info) => {
+    const child = info.attachmentId ? childByAttachmentId.get(info.attachmentId) : undefined;
+    if (child) claimed.add(child);
+    return child ?? null;
+  });
+  return attachmentInfos.map((info, index) => {
+    let child = byId[index];
+    if (!child) {
+      child = children.find((c) => !claimed.has(c) && c.title && c.title === info.filename) ?? null;
+      if (child) claimed.add(child);
+    }
+    return { info, child };
+  });
 }
 
 function AttachmentRow({ info, child }) {
@@ -393,11 +407,15 @@ function AttachmentRow({ info, child }) {
     <div class="graph-row graph-row-stacked">
       <div class="graph-row-main">
         <span class="graph-row-icon">
-          <${FileTypeIcon} mimeType=${info.mimeType} filename=${info.filename} size=${16} />
+          <${PreviewThumbnail}
+            preview=${child?.preview}
+            className="graph-row-thumb"
+            fallback=${html`<${FileTypeIcon} mimeType=${info.mimeType} filename=${info.filename} size=${16} />`}
+          />
         </span>
         ${titleNode}
       </div>
-      <div class="graph-row-sub">
+      <div class=${child?.preview ? "graph-row-sub graph-row-sub-thumb" : "graph-row-sub"}>
         <span>${formatSize(info.size)}</span>
         <${AttachmentStatusPill} info=${info} hasChild=${!!child} />
       </div>

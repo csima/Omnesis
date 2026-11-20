@@ -17,6 +17,7 @@ import { NOTES_SOURCE_ID, manageNotesHref, notesDayForDocument } from "../lib/no
 import { sourceIcon, sourceLabel, timeAgo, docTypeLabel } from "../lib/format.js";
 import { DataTable } from "../components/data-table.js";
 import { PeopleBubbles } from "../components/people-bubbles.js";
+import { PreviewThumbnail, previewSrc } from "../components/document-preview.js";
 import { ConfirmModal } from "../components/confirm-modal.js";
 import { LoadMore } from "../components/load-more.js";
 import { useCursorPage } from "../lib/use-cursor-page.js";
@@ -210,6 +211,11 @@ export function DocumentList({ documents, peopleByDoc, onRequestDelete, manageDa
   if (!documents || documents.length === 0) {
     return html`<div class="empty-state"><p class="muted">No recent documents.</p></div>`;
   }
+  // When some rows have a thumbnail, the others keep an empty slot of its
+  // size, so every title starts at the same edge.
+  const thumbSlot = documents.some((doc) => previewSrc(doc.preview) !== null)
+    ? html`<span class="source-recent-item-thumb source-recent-item-thumb-empty" aria-hidden="true"></span>`
+    : null;
   return html`
     <ul class="source-recent-list">
       ${documents.map((doc) => {
@@ -226,6 +232,7 @@ export function DocumentList({ documents, peopleByDoc, onRequestDelete, manageDa
             class="source-recent-item"
             onClick=${() => navigate("/portal/doc/" + encodeURIComponent(doc.id))}
           >
+            <${PreviewThumbnail} preview=${doc.preview} className="source-recent-item-thumb" fallback=${thumbSlot} />
             <div class="source-recent-item-main">
               <span class="source-recent-item-title">${doc.title || "(untitled)"}</span>
               ${doc.contentPreview && html`<span class="source-recent-item-preview">${doc.contentPreview}</span>`}

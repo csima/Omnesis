@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Adrien Conrath
 
-import { describe, expect, test } from "vitest";
+import { h, render } from "preact";
+import { parseHTML } from "linkedom";
+import { describe, expect, test, vi } from "vitest";
 
 // @ts-expect-error — portal modules are plain JS.
 import { completePeopleEnrichment, DocumentList } from "./source-recent.js";
@@ -128,5 +130,63 @@ describe("DocumentList read-only Notes rows", () => {
     expect(findByClass(vnode, "source-recent-item-delete")).toHaveLength(1);
     expect(findByClass(vnode, "source-recent-item-manage")).toHaveLength(0);
     expect(collectText(vnode)).not.toContain("Manage notes");
+  });
+});
+
+describe("DocumentList previews", () => {
+  test("a list with no previews reserves no thumbnail slot", () => {
+    const dom = parseHTML("<html><body><main></main></body></html>");
+    vi.stubGlobal("document", dom.document);
+    vi.stubGlobal("window", dom.window);
+    const host = dom.document.querySelector("main") as any;
+    try {
+      render(
+        h(DocumentList, {
+          documents: [{ id: "doc-plain", title: "Plain", sourceCreatedAt: "2026-08-01T00:00:00.000Z" }],
+          peopleByDoc: {},
+          onRequestDelete: () => {},
+        }),
+        host,
+      );
+      expect(host.querySelector(".source-recent-item-thumb")).toBeNull();
+    } finally {
+      render(null, host);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("a document with a preview shows its thumbnail; one without shows none", () => {
+    const dom = parseHTML("<html><body><main></main></body></html>");
+    vi.stubGlobal("document", dom.document);
+    vi.stubGlobal("window", dom.window);
+    const host = dom.document.querySelector("main") as any;
+    try {
+      render(
+        h(DocumentList, {
+          documents: [
+            {
+              id: "doc-shot",
+              title: "Fictional page",
+              sourceCreatedAt: "2026-08-01T00:00:00.000Z",
+              preview: { url: "/documents/doc-shot/preview", contentType: "image/webp" },
+            },
+            { id: "doc-plain", title: "Plain page", sourceCreatedAt: "2026-08-01T00:00:00.000Z" },
+          ],
+          peopleByDoc: {},
+          onRequestDelete: () => {},
+        }),
+        host,
+      );
+      const items = host.querySelectorAll(".source-recent-item");
+      expect(items[0].querySelector("img.source-recent-item-thumb").getAttribute("src")).toBe(
+        "/documents/doc-shot/preview",
+      );
+      expect(items[1].querySelector("img")).toBeNull();
+      // The row without one keeps an empty slot, so titles line up.
+      expect(items[1].querySelector(".source-recent-item-thumb-empty")).not.toBeNull();
+    } finally {
+      render(null, host);
+      vi.unstubAllGlobals();
+    }
   });
 });
