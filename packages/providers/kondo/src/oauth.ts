@@ -18,7 +18,7 @@ import { z } from "zod";
 import { KONDO_RESOURCE } from "./client.js";
 
 /** `offline_access` is what makes the grant renewable; `openid` names the user. */
-export const KONDO_SCOPES = "openid offline_access";
+const KONDO_SCOPES = "openid offline_access";
 
 const resourceMetadataSchema = z.object({
   resource: z.string().optional(),

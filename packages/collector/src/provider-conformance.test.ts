@@ -237,6 +237,19 @@ const current: Record<string, unknown> = {
     lastSnapshotAt: timestamp,
     snapshot: { ids: { documents: ["3", "7", "9"] } },
   },
+  kondo: {
+    v: 1,
+    watermark: 700,
+    pass: {
+      floor: 700,
+      target: 900,
+      inbox: "archive",
+      before: 800,
+      boundary: ["thread-2"],
+      pending: [{ profileUrn: "100", threadKey: "thread-1", activityAt: 850, archived: false }],
+      labels: { "label-1": "Label" },
+    },
+  },
   plaid: { phase: "transactions", transactionsCursor: "page-2", lastSnapshotDate: "2026-01-02" },
   slack: slackCursor,
   "slack-session": slackCursor,
@@ -263,6 +276,15 @@ const historical: Record<string, unknown> = {
 // Other cursors an install could hold besides the current fixture. Each must
 // resume as itself, whether stored bare or in the envelope the host writes.
 const installed: Record<string, Record<string, Record<string, unknown>>> = {
+  kondo: {
+    // Between cycles: only the watermark.
+    settled: { v: 1, watermark: 700 },
+    // A first cycle partway through its listing, before any watermark exists.
+    bootstrap: {
+      v: 1,
+      pass: { floor: 600, target: 650, inbox: "all", before: 640, pending: [] },
+    },
+  },
   immich: {
     // Between sweeps: no page in progress, no ledger.
     settled: { phase: "incremental", syncedUpTo: timestamp, lastSnapshotAt: timestamp },

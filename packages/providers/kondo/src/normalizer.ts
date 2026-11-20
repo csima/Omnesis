@@ -28,7 +28,7 @@ export interface NormalizeContext {
 }
 
 /** Longest day document rendered; a day past it ends with a count of what was left out. */
-export const MAX_CONTENT_CHARS = 200_000;
+const MAX_CONTENT_CHARS = 200_000;
 
 /** The platform half of the LinkedIn member lid, which `selfIdentity` names too. */
 export const LINKEDIN_LID_PLATFORM = "linkedin";
@@ -117,7 +117,7 @@ function roster(chat: KondoChat, messages: KondoMessage[], ownerUrn: string | un
   );
   const isSelf = (p: KondoParticipant): boolean =>
     (ownerUrn !== undefined && p.profileUrn === ownerUrn) ||
-    (ownerUrn === undefined && !!p.fullName && selfSenders.has(p.fullName.trim()));
+    (!!p.fullName && selfSenders.has(p.fullName.trim()));
 
   const people: PersonMention[] = [];
   const others: string[] = [];

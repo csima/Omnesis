@@ -75,7 +75,7 @@ function fromFields(fields: Record<string, string> | null): StoredGrant | null {
   return fields as unknown as StoredGrant;
 }
 
-export function hasGrant(accountId: string, configDir?: string): boolean {
+function hasGrant(accountId: string, configDir?: string): boolean {
   return hasProviderAccountCredentials(KONDO_FILE_KEY, accountId, configDir);
 }
 
@@ -112,7 +112,7 @@ export async function grantState(accountId: string, configDir?: string): Promise
   return { status: "connected" };
 }
 
-export const REAUTH_REMEDIATION: SyncRemediation = {
+const REAUTH_REMEDIATION: SyncRemediation = {
   summary: "Sign in to Kondo again",
   steps: [
     "Run `omnesis sources reauth kondo:<account>` on the collector, or choose Reconnect on the Sources page.",

@@ -27,7 +27,7 @@ import {
 import type { KondoChat, KondoInboxRow, KondoStatus, WalkedInbox } from "./types.js";
 import type { SyncRemediation } from "@omnesis/types";
 
-export const KONDO_MCP_URL = "https://relay.trykondo.com/mcp";
+const KONDO_MCP_URL = "https://relay.trykondo.com/mcp";
 export const KONDO_RESOURCE = "https://relay.trykondo.com";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -80,10 +80,6 @@ export function tabDisconnectedError(lastSeenAt?: string | null): SyncError {
     `Kondo is not connected to a browser tab${seen}. Open Kondo in one Chrome tab.`,
     { remediation: TAB_REMEDIATION },
   );
-}
-
-export function isTabDisconnected(err: unknown): boolean {
-  return err instanceof SyncError && err.remediation === TAB_REMEDIATION;
 }
 
 export interface ToolResult {
@@ -481,7 +477,7 @@ async function httpFailure(res: Response): Promise<SyncError> {
   return new SyncError("unknown", `Kondo request failed (HTTP ${res.status})${detail}`);
 }
 
-export function parseRetryAfterMs(header: string | null): number | undefined {
+function parseRetryAfterMs(header: string | null): number | undefined {
   if (!header) return undefined;
   const seconds = Number(header);
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
