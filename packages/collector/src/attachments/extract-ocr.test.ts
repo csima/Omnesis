@@ -109,6 +109,42 @@ describe("createAttachmentExtractor — OCR", () => {
   });
 });
 
+describe("createAttachmentExtractor — reportUnconfigured", () => {
+  const ask = { reportUnconfigured: true };
+  const noExtractor = { text: "", truncated: false, noExtractor: true };
+
+  test("an image with no OCR wired or enabled is reported as having no extractor", async () => {
+    expect(await createAttachmentExtractor()(enc("img"), "image/png", ask)).toEqual(noExtractor);
+    const ocr: OcrFn = vi.fn(async () => ({ text: "not called" }));
+    const disabled = createAttachmentExtractor({ ocr, ocrEnabled: () => false });
+    expect(await disabled(enc("img"), "image/heic", ask)).toEqual(noExtractor);
+    expect(ocr).not.toHaveBeenCalled();
+  });
+
+  test("a PDF nothing can read without OCR is reported as having no extractor", async () => {
+    const extract = createAttachmentExtractor();
+    expect(await extract(new Uint8Array([1, 2, 3]), "application/pdf", ask)).toEqual(noExtractor);
+  });
+
+  test("a configured OCR backend that fails is still a failed read", async () => {
+    const failing = createAttachmentExtractor({
+      ocr: async () => {
+        throw new SyncError("transient", "OCR backend unreachable");
+      },
+    });
+    expect(await failing(enc("png"), "image/png", ask)).toBeNull();
+    expect(await failing(new Uint8Array([1, 2, 3]), "application/pdf", ask)).toBeNull();
+    const unavailable = createAttachmentExtractor({ ocr: async () => null });
+    expect(await unavailable(enc("png"), "image/png", ask)).toBeNull();
+  });
+
+  test("without the option an unconfigured read stays null, and other types never change", async () => {
+    const extract = createAttachmentExtractor();
+    expect(await extract(enc("img"), "image/png")).toBeNull();
+    expect(await extract(new Uint8Array([1, 2, 3]), "application/msword", ask)).toBeNull();
+  });
+});
+
 describe("createAttachmentExtractor — text charset", () => {
   test("a Latin-1 text attachment is read in the charset its type declares", async () => {
     const extract = createAttachmentExtractor();

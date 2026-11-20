@@ -39,10 +39,10 @@ export interface AttachmentInfo {
     | "reference-only";
   url?: string;
   /**
-   * The stable id of the child document this attachment became, when it
-   * became one: the child's externalId is `<parent externalId>/att/<attachmentId>`.
+   * The stable id of the child document this attachment is, or becomes once
+   * it is read: the child's externalId is `<parent externalId>/att/<attachmentId>`.
    * Lets a client match a marker in the parent to the child without
-   * recomputing the id.
+   * recomputing the id. Absent when the source makes no child of it.
    */
   attachmentId?: string;
 }
@@ -71,6 +71,14 @@ export interface ExtractionResult {
   truncated: boolean;
   /** Extraction completed successfully, but the attachment contained no text. */
   noText?: true;
+  /**
+   * Nothing read the attachment because the backend its type needs is not
+   * configured — no OCR model assigned for an image or a scanned PDF. Unlike
+   * `null`, which says reading was attempted and failed, this is a settled
+   * answer until the configuration changes. Returned only to a caller that
+   * asks with `reportUnconfigured`; any other caller gets `null`, as before.
+   */
+  noExtractor?: true;
   extra?: Record<string, unknown> & {
     /** Native PDF text was preserved, but one or more sparse pages still need OCR. */
     ocrIncomplete?: true;
@@ -302,11 +310,15 @@ export function fileKindName(mimeType: string, overrides?: Record<string, string
 /**
  * Attachment extraction function signature.
  * Implemented in collector (wraps unpdf), injected into sources.
+ *
+ * `null` means no text could be read. A caller that must tell a failed read
+ * (retry later, keep what it has) from one no configured backend could make
+ * passes `reportUnconfigured` and gets `{ noExtractor: true }` for the latter.
  */
 export type AttachmentExtractFn = (
   data: Uint8Array,
   mimeType: string,
-  opts?: { maxTextLength?: number },
+  opts?: { maxTextLength?: number; reportUnconfigured?: boolean },
 ) => Promise<ExtractionResult | null>;
 
 /** An inline image at or below this size, shown by the HTML body, is decoration. */

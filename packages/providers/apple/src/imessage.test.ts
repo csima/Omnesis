@@ -1644,16 +1644,14 @@ describe("AppleIMessageSource", () => {
       }));
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const first = await attSource.sync(null);
-      expect(first.documents).toHaveLength(2);
+      // Not on disk yet: a failed read emits no child, but its id is listed.
+      expect(first.documents).toHaveLength(1);
       expect(mockExtract).not.toHaveBeenCalled();
-      const parent = first.documents.find((d) => d.metadata.documentType === "conversation")!;
-      expect(parent.metadata.extra?.attachments).toEqual([
-        expect.objectContaining({ filename: "late.pdf", reason: "download-failed" }),
-      ]);
-      // Not on disk yet, so a description stands in for its text.
-      const placeholder = first.documents.find((d) => d.metadata.documentType === "attachment")!;
-      expect(placeholder.metadata.lowSignal).toBe(true);
-      expect(placeholder.extractedContentHash).toBeUndefined();
+      const parent = first.documents[0];
+      const [info] = parent.metadata.extra?.attachments as Array<{ attachmentId: string }>;
+      expect(info).toMatchObject({ filename: "late.pdf", reason: "download-failed" });
+      const childId = `${parent.externalId}/att/${info.attachmentId}`;
+      expect(first.presentExternalIds).toContain(childId);
 
       writeFileSync(pdfPath, "now local");
 
@@ -1662,9 +1660,7 @@ describe("AppleIMessageSource", () => {
       expect(mockExtract).toHaveBeenCalledOnce();
       const attachmentDoc = second.documents.find((d) => d.metadata.documentType === "attachment");
       expect(attachmentDoc?.content).toBe("Late extracted text");
-      // The extracted text replaces the description in place.
-      expect(attachmentDoc?.externalId).toBe(placeholder.externalId);
-      expect(attachmentDoc?.metadata.lowSignal).toBeUndefined();
+      expect(attachmentDoc?.externalId).toBe(childId);
     });
 
     test("skips extraction when disabled (default config)", async () => {
@@ -1705,19 +1701,15 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
-      expect(result.documents).toHaveLength(2);
-      const doc = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      // The PDF is offloaded, not gone: nothing is written for it, and its id
+      // stays listed, so a child an earlier read left is kept.
+      expect(result.documents).toHaveLength(1);
+      const doc = result.documents[0];
+      expect(doc.metadata.documentType).toBe("conversation");
       const atts = doc.metadata.extra?.attachments as any[];
-      expect(atts).toBeDefined();
       expect(atts[0].reason).toBe("download-failed");
       expect(mockExtract).not.toHaveBeenCalled();
-      // The PDF is offloaded, not gone: it is still its own document.
-      const child = result.documents.find((d) => d.metadata.documentType === "attachment")!;
-      expect(child.title).toBe("report.pdf");
-      expect(child.content).toBe("PDF sent by +14085550123 on 2024-03-08 at 10:00");
-      expect(child.metadata.sourceUrl).toBe("messages://open?message-guid=msg-1");
-      expect(child.externalId).toBe(`${doc.externalId}/att/${atts[0].attachmentId}`);
-      expect(result.presentExternalIds).toContain(child.externalId);
+      expect(result.presentExternalIds).toContain(`${doc.externalId}/att/${atts[0].attachmentId}`);
     });
 
     test("a video becomes a described child without being read", async () => {
@@ -1950,7 +1942,7 @@ describe("AppleIMessageSource", () => {
       expect(convDoc.content).toContain("1KB");
     });
 
-    test("extraction failure falls back to a described child", async () => {
+    test("a failed extraction emits nothing and keeps the child's id", async () => {
       const pdfPath = join(attTmpDir, "bad.pdf");
       writeFileSync(pdfPath, "corrupt");
 
@@ -1971,13 +1963,138 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
-      expect(result.documents).toHaveLength(2);
-      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      expect(result.documents).toHaveLength(1);
+      const parent = result.documents[0];
       const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("extraction-failed");
       expect(atts[0].extracted).toBe(false);
-      const child = result.documents.find((d) => d.metadata.documentType === "attachment")!;
-      expect(child.metadata.lowSignal).toBe(true);
+      expect(result.presentExternalIds).toContain(
+        `${parent.externalId}/att/${atts[0].attachmentId}`,
+      );
+    });
+
+    test("an extracted child is kept, not overwritten, when its file goes missing", async () => {
+      const scanPath = join(attTmpDir, "receipt.png");
+      writeFileSync(scanPath, "scan bytes");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: scanPath,
+        mimeType: "image/png",
+        transferName: "receipt.png",
+        totalBytes: 10,
+      });
+
+      mockExtract = vi.fn(async () => ({ text: "Invoice 4417 total 120.00", truncated: false }));
+      const attSource = createAttSource(mockExtract as AttachmentExtractFn);
+      const first = await attSource.sync(null);
+      const textChild = first.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(textChild.content).toBe("Invoice 4417 total 120.00");
+
+      // Offloaded to iCloud: the day is rendered again because the file changed.
+      rmSync(scanPath);
+      const second = await attSource.sync(first.cursor);
+      expect(second.documents.map((d) => d.metadata.documentType)).toEqual(["conversation"]);
+      expect(second.presentExternalIds).toContain(textChild.externalId);
+      const [info] = second.documents[0].metadata.extra?.attachments as any[];
+      expect(info).toMatchObject({ reason: "download-failed", extracted: false });
+    });
+
+    test("an OCR failure emits nothing and keeps the child's id", async () => {
+      const photoPath = join(attTmpDir, "IMG_0001.HEIC");
+      const otherPath = join(attTmpDir, "IMG_0002.HEIC");
+      writeFileSync(photoPath, "photo one");
+      writeFileSync(otherPath, "photo two");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0001.HEIC",
+        totalBytes: 9,
+      });
+      insertAttachment(testDb, 2, 1, {
+        filename: otherPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0002.HEIC",
+        totalBytes: 9,
+      });
+
+      // The OCR backend is configured but unavailable: one read returns
+      // nothing, the other throws.
+      mockExtract = vi.fn(async (data: Uint8Array) => {
+        if (Buffer.from(data).toString() === "photo two") throw new Error("OCR backend error");
+        return null;
+      });
+      const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
+
+      expect(mockExtract).toHaveBeenCalledTimes(2);
+      expect(mockExtract.mock.calls[0][2]).toMatchObject({ reportUnconfigured: true });
+      expect(result.documents).toHaveLength(1);
+      const parent = result.documents[0];
+      const infos = parent.metadata.extra?.attachments as any[];
+      expect(infos.map((i) => i.reason)).toEqual(["extraction-failed", "extraction-failed"]);
+      for (const info of infos) {
+        expect(result.presentExternalIds).toContain(
+          `${parent.externalId}/att/${info.attachmentId}`,
+        );
+      }
+    });
+
+    test("a photo no configured OCR can read becomes a described child", async () => {
+      const photoPath = join(attTmpDir, "IMG_0003.HEIC");
+      writeFileSync(photoPath, "photo bytes");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0003.HEIC",
+        totalBytes: 11,
+      });
+
+      mockExtract = vi.fn(async () => ({
+        text: "",
+        truncated: false,
+        noExtractor: true as const,
+      }));
+      const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
+
+      expect(result.documents).toHaveLength(2);
+      const photo = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(photo.content).toBe("Photo sent by +14085550123 on 2024-03-08 at 10:00");
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      expect((parent.metadata.extra?.attachments as any[])[0].reason).toBe("extraction-failed");
+    });
+
+    test("with no extractor wired, a photo becomes a described child", async () => {
+      const photoPath = join(attTmpDir, "IMG_0004.HEIC");
+      writeFileSync(photoPath, "photo bytes");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0004.HEIC",
+        totalBytes: 11,
+      });
+
+      const result = await createAttSource(undefined).sync(null);
+      const photo = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(photo.metadata.lowSignal).toBe(true);
+      expect(result.presentExternalIds).toContain(photo.externalId);
     });
 
     test("a photo whose OCR finds no text becomes a described child", async () => {
