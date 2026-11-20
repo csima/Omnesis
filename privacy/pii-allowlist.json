@@ -12705,6 +12705,52 @@
         "evals/universes/e2e-minimal/sources/slack/messages.json"
       ],
       "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
+    },
+    {
+      "value": "Open Kondo",
+      "paths": [
+        "packages/providers/kondo/src/client.test.ts",
+        "packages/providers/kondo/src/provider.test.ts"
+      ],
+      "reason": "Instruction text naming the Kondo product (\"Open Kondo in one Chrome tab\"), not a person."
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": ["packages/providers/kondo/src/normalizer.test.ts"],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
+    },
+    {
+      "value": "Sarah Mendez",
+      "paths": [
+        "packages/providers/kondo/src/normalizer.test.ts",
+        "packages/providers/kondo/src/provider.test.ts"
+      ],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
+    },
+    {
+      "value": "Adding David",
+      "paths": ["packages/providers/kondo/src/normalizer.test.ts"],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
+    },
+    {
+      "value": "David Lin",
+      "paths": ["packages/providers/kondo/src/normalizer.test.ts"],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
+    },
+    {
+      "value": "Jamie Lopez",
+      "paths": ["packages/providers/kondo/src/normalizer.test.ts"],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
+    },
+    {
+      "value": "Hi Sarah",
+      "paths": ["packages/providers/kondo/src/source.test.ts"],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
+    },
+    {
+      "value": "Studio Northstar",
+      "paths": ["packages/providers/kondo/src/source.test.ts"],
+      "reason": "Invented Kondo provider fixture identity or prose from the AGENTS.md fictional-name list; never personal corpus data."
     }
   ],
   "secretFixtures": [

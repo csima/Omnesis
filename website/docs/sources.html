@@ -362,6 +362,18 @@
                   <code>OMNESIS_EXPERIMENTAL=1</code> — see <a href="#discord">Discord</a>.
                 </td>
               </tr>
+              <tr>
+                <td>
+                  Kondo (LinkedIn messages)<br /><span class="pill">any collector</span>
+                  <span class="pill">OAuth</span> <span class="pill">Experimental</span>
+                </td>
+                <td>
+                  Your LinkedIn direct messages as Kondo holds them, each chat's day as one
+                  conversation document, archived chats included; the people you message feed the
+                  people graph. Offered only when the Gateway runs with
+                  <code>OMNESIS_EXPERIMENTAL=1</code> — see <a href="#kondo">Kondo</a>.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -506,6 +518,61 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
             blanks every message body instead — so a sync that sees a long run of empty messages
             stops and names the intent rather than indexing nothing. The source honors Discord's
             rate limits and pauses for as long as Discord asks.
+          </li>
+        </ul>
+
+        <h3 id="kondo">Kondo (LinkedIn messages)</h3>
+        <p>
+          Kondo is <strong>experimental</strong>: it appears in the source picker only when the
+          Gateway runs with <code>OMNESIS_EXPERIMENTAL=1</code>, and its behavior may change between
+          releases.
+        </p>
+        <p>
+          <a href="https://www.trykondo.com">Kondo</a> is a LinkedIn inbox manager. LinkedIn offers
+          no API for direct messages, so Omnesis reads them from Kondo, through the MCP server Kondo
+          provides for this purpose, with read-only tools only: it never changes a label, an archive
+          or a reminder, never sends anything, and never asks Kondo to fetch from LinkedIn on its
+          behalf. You need a Kondo account with your LinkedIn inbox in it.
+        </p>
+        <div class="term">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+          <div class="term-body">
+            <p>
+              <span class="t-prompt">❯</span>
+              <span class="t-cmd">omnesis sources add kondo</span>
+            </p>
+          </div>
+        </div>
+        <p>
+          Adding the source opens Kondo's sign-in in your browser; sign in with the account that
+          holds your inbox and allow Omnesis to read it. The redirect returns to the collector on a
+          loopback port (or to the Gateway when it has a public address); when the browser runs on
+          another machine, paste the address it lands on into the prompt. Omnesis keeps the grant
+          with the collector's other credentials and renews it in the background.
+        </p>
+        <ul>
+          <li>
+            <strong>Keep Kondo open.</strong> Kondo answers only while its extension has a tab open
+            in Chrome. Sign-in waits for one, and a sync that finds none stops with
+            <em>Open Kondo in one Chrome tab</em> and continues where it stopped once a tab is open
+            again. Nothing is lost while the tab is closed.
+          </li>
+          <li>
+            <strong>History and freshness.</strong> The first sync reads the conversations active in
+            the last year (the <code>historyDays</code> setting) across the inbox and the archive.
+            Later syncs read only the chats with new activity and re-render their days from the last
+            sync on. Kondo's history is a cache and can be incomplete; a resync reads every chat in
+            the window again.
+          </li>
+          <li>
+            <strong>People.</strong> Each person you message is identified by their LinkedIn member
+            id and public-profile address, and your own messages resolve to you. Kondo labels become
+            the documents' tags.
+          </li>
+          <li>
+            <strong>What is not indexed.</strong> Attachments, and messages deleted on LinkedIn:
+            Kondo reports neither, so a deleted message stays in its document. Each source reads one
+            LinkedIn inbox.
           </li>
         </ul>
 
