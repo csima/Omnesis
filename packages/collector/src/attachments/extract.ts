@@ -98,20 +98,13 @@ export function createAttachmentExtractor(deps: AttachmentExtractorDeps = {}) {
       }
     : undefined;
 
-  /**
-   * Extract text from an attachment by MIME type.
-   * Returns null if the type is unsupported or extraction fails.
-   *
-   * Identical bytes arriving again (the same file attached to a second
-   * message) are extracted from scratch — see #62 for a raw-bytes-hash
-   * cache and why it is deferred.
-   */
-  return async function extractAttachmentText(
+  /** Route the bytes to the extractor for their type. */
+  async function extractByType(
     data: Uint8Array,
     mimeType: string,
+    base: string,
     opts?: { maxTextLength?: number },
   ): Promise<ExtractionResult | null> {
-    const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? mimeType;
     switch (base) {
       case "application/pdf":
         // Native text first; the extractor falls back to OCR per page for
@@ -194,6 +187,38 @@ export function createAttachmentExtractor(deps: AttachmentExtractorDeps = {}) {
         }
         return null;
     }
+  }
+
+  /** Whether an OCR backend is wired and an OCR assignment is configured. */
+  const ocrConfigured = (): boolean =>
+    deps.ocr !== undefined && (deps.ocrEnabled === undefined || deps.ocrEnabled());
+
+  /**
+   * Extract text from an attachment by MIME type.
+   * Returns null if the type is unsupported or extraction fails.
+   *
+   * With `reportUnconfigured`, an image or a PDF that yielded nothing while no
+   * OCR is configured returns `{ noExtractor: true }` instead of null: nothing
+   * that could read it was there, which is not a failed read. A configured
+   * OCR backend that fails still returns null.
+   *
+   * Identical bytes arriving again (the same file attached to a second
+   * message) are extracted from scratch — see #62 for a raw-bytes-hash
+   * cache and why it is deferred.
+   */
+  return async function extractAttachmentText(
+    data: Uint8Array,
+    mimeType: string,
+    opts?: { maxTextLength?: number; reportUnconfigured?: boolean },
+  ): Promise<ExtractionResult | null> {
+    const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? mimeType;
+    const unconfigured =
+      opts?.reportUnconfigured === true &&
+      (isImageMime(base) || base === "application/pdf") &&
+      !ocrConfigured();
+    const result = await extractByType(data, mimeType, base, opts);
+    if (result === null && unconfigured) return { text: "", truncated: false, noExtractor: true };
+    return result;
   };
 }
 

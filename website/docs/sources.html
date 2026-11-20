@@ -321,19 +321,21 @@
                   <a href="operating#models">when a transcriber model is assigned</a>. Every photo,
                   video and PDF becomes an attachment document of its own, as does any other file
                   whose text can be extracted. It holds the file's extracted text, or, when there is
-                  none (a video, a photo without text, a file still in iCloud), a line saying what
+                  none (a video, a photo without text, no OCR model assigned), a line saying what
                   the file is, who sent it and when; a file that yields text later replaces that
-                  line. Each attachment document links to the message that carried it and opens
-                  Messages there. The files themselves stay on the Mac. Participants feed the people
-                  graph. When the Mac's Contacts can be read, a handle that exactly one contact card
-                  matches shows that contact's name beside it in the title and on each message line,
-                  and a renamed contact updates the conversations it appears in on the next sync. A
-                  clip without a transcript says why in its placeholder and is retried on a
-                  schedule; the source's notice on the Sources page counts the clips still waiting.
-                  Transcription failures are retried without reporting a missing model; an
-                  unavailable transcriber notice can also mean the assigned backend is unreachable.
-                  A clip whose audio cannot be decoded is counted apart and not retried until its
-                  file changes or the source is resynced.
+                  line. A file that cannot be read for now, such as one still in iCloud or one the
+                  OCR model fails on, keeps the document an earlier read made and is read again when
+                  the file changes or the source is resynced. Each attachment document links to the
+                  message that carried it and opens Messages there. The files themselves stay on the
+                  Mac. Participants feed the people graph. When the Mac's Contacts can be read, a
+                  handle that exactly one contact card matches shows that contact's name beside it
+                  in the title and on each message line, and a renamed contact updates the
+                  conversations it appears in on the next sync. A clip without a transcript says why
+                  in its placeholder and is retried on a schedule; the source's notice on the
+                  Sources page counts the clips still waiting. Transcription failures are retried
+                  without reporting a missing model; an unavailable transcriber notice can also mean
+                  the assigned backend is unreachable. A clip whose audio cannot be decoded is
+                  counted apart and not retried until its file changes or the source is resynced.
                 </td>
               </tr>
               <tr>

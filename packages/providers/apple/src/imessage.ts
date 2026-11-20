@@ -130,6 +130,16 @@ interface IMessageSnapshotReconciliation {
   daySignatures?: Record<string, string>;
 }
 
+/**
+ * What reading one attachment came to: its text; a settled answer that there
+ * is none to read, which a photo, video or PDF is described in place of; or a
+ * failed read, which emits nothing so an earlier child survives.
+ */
+type AttachmentReadOutcome =
+  | { kind: "text"; result: ExtractionResult }
+  | { kind: "nothing-to-read"; reason: AttachmentInfo["reason"] }
+  | { kind: "read-failed"; reason: AttachmentInfo["reason"] };
+
 interface IMessageAttachmentEntry {
   raw: RawIMessageAttachment;
   filename: string;
@@ -928,7 +938,7 @@ export class AppleIMessageSource {
         ? `${contentSignature}${DAY_SIGNATURE_NAMES_SEPARATOR}${names}`
         : contentSignature;
       externalIds.push(key);
-      if (this.attachmentConfig.enabled && this.extractAttachment) {
+      if (this.attachmentConfig.enabled) {
         externalIds.push(
           ...this.enumerateAttachmentExternalIdsForDay(key, dayRows.get(key) ?? [], attMap),
         );
@@ -1333,14 +1343,22 @@ export class AppleIMessageSource {
    * Turn a day-chat's attachments into child documents, and add their
    * markers and metadata to the parent. Returns the children.
    *
-   * A file with extracted text becomes a child holding that text. Every
-   * photo, video and PDF becomes a child even without text — not yet on disk
-   * (offloaded to iCloud), no OCR backend, nothing to read — holding a line
-   * that says what it is (`describeMediaAttachment`). Both share an
+   * A file with extracted text becomes a child holding that text. A photo,
+   * video or PDF with no text to read — read and found empty, a type nothing
+   * reads, too large to read, no OCR configured — becomes a child holding a
+   * line that says what it is (`describeMediaAttachment`). Both share an
    * externalId, so a file that later yields text replaces its description in
-   * place. Each child links to the message that carried it, which opens
-   * Messages at that message; the parent's markers stay plain text, because a
-   * link in content would become a link edge of its own.
+   * place.
+   *
+   * A read that failed — the file not on disk (offloaded to iCloud), the
+   * extractor or OCR backend erroring — emits no child at all. Its id stays
+   * in the snapshot (`attachmentChildEntry`), so whatever child an earlier
+   * read left, text or description, is kept rather than overwritten or
+   * pruned, and the day is rendered again once the file changes.
+   *
+   * Each child links to the message that carried it, which opens Messages at
+   * that message; the parent's markers stay plain text, because a link in
+   * content would become a link edge of its own.
    */
   private async extractAttachments(
     parentDoc: DocumentInput,
@@ -1348,7 +1366,7 @@ export class AppleIMessageSource {
     dayAttMap: Map<number, RawIMessageAttachment[]>,
     chat: IMessageChatInfo,
   ): Promise<DocumentInput[]> {
-    if (!this.attachmentConfig.enabled || !this.extractAttachment) {
+    if (!this.attachmentConfig.enabled) {
       return [];
     }
 
@@ -1422,10 +1440,12 @@ export class AppleIMessageSource {
           sourceUrl: buildIMessageSourceUrl(msg.guid),
         };
 
-        const outcome = check.extract
-          ? await this.extractAttachmentText(att, filename, mimeType, this.extractAttachment)
-          : { reason: check.reason };
-        if ("result" in outcome) {
+        const outcome: AttachmentReadOutcome = !check.extract
+          ? { kind: "nothing-to-read", reason: check.reason }
+          : this.extractAttachment
+            ? await this.readAttachment(att, filename, mimeType, this.extractAttachment)
+            : { kind: "nothing-to-read", reason: "extraction-failed" };
+        if (outcome.kind === "text") {
           attachmentDocs.push(
             buildAttachmentDocument(parentDoc, filename, outcome.result, childMeta),
           );
@@ -1445,9 +1465,9 @@ export class AppleIMessageSource {
           size: att.totalBytes,
           extracted: false,
           reason: outcome.reason,
-          ...(media ? { attachmentId } : {}),
+          attachmentId,
         });
-        if (media) {
+        if (media && outcome.kind === "nothing-to-read") {
           attachmentDocs.push(
             buildMediaAttachmentDocument(parentDoc, filename, {
               ...childMeta,
@@ -1467,31 +1487,37 @@ export class AppleIMessageSource {
   }
 
   /**
-   * Read one attachment from disk and extract its text: the result, or why
-   * there is none. A file not on disk is `download-failed`, which the day
-   * signature turns into a re-render once the file arrives.
+   * Read one attachment from disk and extract its text. A file not on disk is
+   * `download-failed`, which the day signature turns into a re-render once
+   * the file arrives; an extractor that returns nothing or throws is a failed
+   * read too. Only a read that ran and found no text, or that no configured
+   * backend could make (`noExtractor`), settles that there is nothing to read.
+   * The recorded reason for the latter stays `extraction-failed`, as it was
+   * before the extractor could tell the two apart.
    */
-  private async extractAttachmentText(
+  private async readAttachment(
     att: RawIMessageAttachment,
     filename: string,
     mimeType: string,
     extract: AttachmentExtractFn,
-  ): Promise<{ result: ExtractionResult } | { reason: AttachmentInfo["reason"] }> {
+  ): Promise<AttachmentReadOutcome> {
     const filePath = att.filename ? resolveAttachmentPath(att.filename) : null;
-    if (!filePath) return { reason: "download-failed" };
+    if (!filePath) return { kind: "read-failed", reason: "download-failed" };
     if (!existsSync(filePath)) {
       log.debug(`Attachment file not found: ${filePath}`);
-      return { reason: "download-failed" };
+      return { kind: "read-failed", reason: "download-failed" };
     }
 
     try {
       const data = new Uint8Array(await readFile(filePath));
       const result = await extract(data, mimeType, {
         maxTextLength: this.attachmentConfig.maxTextLength,
+        reportUnconfigured: true,
       });
-      if (!result) return { reason: "extraction-failed" };
-      if (result.noText) return { reason: "no-text" };
-      return { result };
+      if (!result) return { kind: "read-failed", reason: "extraction-failed" };
+      if (result.noExtractor) return { kind: "nothing-to-read", reason: "extraction-failed" };
+      if (result.noText) return { kind: "nothing-to-read", reason: "no-text" };
+      return { kind: "text", result };
     } catch (err) {
       // Transient extraction-backend blip → fail the page so it retries,
       // rather than recording a permanent extraction failure and advancing
@@ -1500,7 +1526,7 @@ export class AppleIMessageSource {
       log.debug(
         `Failed to extract attachment ${filename}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return { reason: "extraction-failed" };
+      return { kind: "read-failed", reason: "extraction-failed" };
     }
   }
 }
