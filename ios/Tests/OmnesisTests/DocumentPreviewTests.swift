@@ -86,6 +86,64 @@ final class DocumentPreviewDecodeTests: XCTestCase {
         XCTAssertEqual(docs[1].documentType, "page")
     }
 
+    private func attachmentsJSON(preview: String?) -> Data {
+        var child = """
+        "id":"child-1","externalId":"parent-1/att/a1","title":"harbor-sunrise.heic","attachmentId":"a1",
+        "mimeType":"image/heic","sizeBytes":2048000,"sourceUrl":"messages://open?message-guid=EXAMPLE-0001"
+        """
+        if let preview { child += ",\"preview\":\(preview)" }
+        let bare = """
+        {"id":"child-2","externalId":"parent-1/att/a2","title":"menu.pdf","attachmentId":"a2"}
+        """
+        return Data("{\"attachments\":[{\(child)},\(bare)]}".utf8)
+    }
+
+    private struct AttachmentsWrap: Decodable { let attachments: [DocumentAttachment] }
+
+    func testAttachmentDecodesPreview() throws {
+        let decoded = try JSONDecoder().decode(AttachmentsWrap.self, from: attachmentsJSON(preview: previewJSON))
+        XCTAssertEqual(decoded.attachments.count, 2)
+        let child = decoded.attachments[0]
+        XCTAssertEqual(child.preview, DocumentPreview(
+            url: "/documents/doc-1/preview",
+            contentType: "image/webp",
+            width: 1440,
+            height: 900,
+            capturedAt: "2026-11-14T08:00:00Z"
+        ))
+        XCTAssertEqual(child.sourceUrl, "messages://open?message-guid=EXAMPLE-0001")
+        XCTAssertEqual(child.mimeType, "image/heic")
+        XCTAssertEqual(child.sizeBytes, 2_048_000)
+        XCTAssertNil(decoded.attachments[1].preview)
+        XCTAssertNil(decoded.attachments[1].mimeType)
+        XCTAssertEqual(decoded.attachments[1].title, "menu.pdf")
+    }
+
+    func testAttachmentWithoutPreviewDecodesAsBefore() throws {
+        let decoded = try JSONDecoder().decode(AttachmentsWrap.self, from: attachmentsJSON(preview: nil))
+        XCTAssertNil(decoded.attachments[0].preview)
+        XCTAssertEqual(decoded.attachments[0].title, "harbor-sunrise.heic")
+    }
+
+    func testUnreadableAttachmentPreviewDegradesToNil() throws {
+        for bad in [
+            #"{"url":"/documents/doc-1/preview","contentType":"image/webp","width":"wide","height":900,"capturedAt":"x"}"#,
+            #"{"url":"","contentType":"image/jpeg","width":10,"height":10,"capturedAt":"x"}"#,
+            #""not an object""#,
+            "null",
+        ] {
+            let decoded = try JSONDecoder().decode(AttachmentsWrap.self, from: attachmentsJSON(preview: bad))
+            XCTAssertEqual(decoded.attachments.count, 2, bad)
+            XCTAssertNil(decoded.attachments[0].preview, bad)
+            XCTAssertEqual(decoded.attachments[0].id, "child-1", bad)
+        }
+    }
+
+    func testAttachmentStillRequiresItsIdentity() {
+        let json = Data(#"{"attachments":[{"externalId":"e","title":"t","attachmentId":"a"}]}"#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(AttachmentsWrap.self, from: json))
+    }
+
     func testZeroSizeHasNoAspectRatio() {
         let preview = DocumentPreview(url: "/p", contentType: "image/jpeg", width: 0, height: 900, capturedAt: "x")
         XCTAssertNil(preview.aspectRatio)

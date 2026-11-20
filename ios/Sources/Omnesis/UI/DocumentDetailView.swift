@@ -66,6 +66,9 @@ struct DocumentDetailView: View {
                     }
                     header(doc: doc)
                     quickFacts(doc: doc)
+                    if !attachments.isEmpty {
+                        DocumentAttachmentStrip(attachments: attachments)
+                    }
                     if !doc.content.isEmpty {
                         bodySection(doc: doc)
                     }
@@ -147,7 +150,7 @@ struct DocumentDetailView: View {
         if !openURLs.isEmpty {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    openFirst(openURLs[...])
+                    openURL.openFirst(openURLs[...])
                 } label: {
                     Image(systemName: "arrow.up.right.square")
                 }
@@ -184,16 +187,6 @@ struct DocumentDetailView: View {
                 .tint(Theme.accent)
                 .disabled(doc == nil || deleting)
             }
-        }
-    }
-
-    /// Open the first of `urls` the system accepts. `openURL` reports
-    /// `false` when no installed app handles a scheme, so an app link for
-    /// an app this phone lacks falls through to the web link.
-    private func openFirst(_ urls: ArraySlice<URL>) {
-        guard let url = urls.first else { return }
-        openURL(url) { accepted in
-            if !accepted { openFirst(urls.dropFirst()) }
         }
     }
 
@@ -556,6 +549,34 @@ struct DocumentDetailView: View {
 }
 
 @available(iOS 17.0, *)
+#Preview("Document detail — attachments") {
+    NavigationStack {
+        DocumentDetailPreviewWrapper(
+            doc: PreviewMocks.documentDetailWithAttachments,
+            meta: "Chat · Conversation · 2h ago",
+            annotations: [],
+            attachments: PreviewMocks.attachmentsMixed
+        )
+        .environment(AppStore.preview())
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+    }
+}
+
+@available(iOS 17.0, *)
+#Preview("Document detail — attachments, Duo", traits: .fixedLayout(width: 669, height: 951)) {
+    NavigationStack {
+        DocumentDetailPreviewWrapper(
+            doc: PreviewMocks.documentDetailWithAttachments,
+            meta: "Chat · Conversation · 2h ago",
+            annotations: [],
+            attachments: PreviewMocks.attachmentsMixed
+        )
+        .environment(AppStore.preview())
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+    }
+}
+
+@available(iOS 17.0, *)
 #Preview("Document detail — load error") {
     NavigationStack {
         GatewayErrorView(
@@ -580,6 +601,7 @@ struct DocumentDetailPreviewWrapper: View {
     var doc: DocumentDetail = PreviewMocks.documentDetail
     var meta = "Gmail · Email · 3d ago"
     var annotations = PreviewMocks.documentAnnotations
+    var attachments: [DocumentAttachment] = []
 
     var body: some View {
         ScrollView {
@@ -607,10 +629,17 @@ struct DocumentDetailPreviewWrapper: View {
                 }
                 HStack(spacing: 8) {
                     PreviewQuickFact(icon: "person.2", count: PreviewMocks.documentPeople.count, label: "people")
-                    PreviewQuickFact(icon: "paperclip", count: PreviewMocks.documentAttachments.count, label: "attachment")
+                    PreviewQuickFact(
+                        icon: "paperclip",
+                        count: attachments.isEmpty ? PreviewMocks.documentAttachments.count : attachments.count,
+                        label: attachments.count > 1 ? "attachments" : "attachment"
+                    )
                     PreviewQuickFact(icon: "arrow.up.right", count: PreviewMocks.documentRefs.outbound.count, label: "out")
                     PreviewQuickFact(icon: "arrow.down.left", count: PreviewMocks.documentRefs.inbound.count, label: "in")
                     Spacer()
+                }
+                if !attachments.isEmpty {
+                    DocumentAttachmentStrip(attachments: attachments)
                 }
                 FlatSection("Content") {
                     MarkdownView(text: doc.content)

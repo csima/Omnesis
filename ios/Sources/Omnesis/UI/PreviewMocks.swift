@@ -7721,10 +7721,62 @@ extension PreviewMocks {
         capturedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-86400 * 6))
     )
 
+    // Attachment previews: small generated images, drawn in code, of
+    // invented subjects.
+
+    /// A landscape photo's thumbnail.
+    static let harbourPhotoPreview = DocumentPreview(
+        url: "/documents/att-harbour/preview",
+        contentType: "image/jpeg",
+        width: 320,
+        height: 240,
+        capturedAt: "2026-11-18T09:12:00Z"
+    )
+
+    /// A portrait photo's thumbnail.
+    static let ferrisPhotoPreview = DocumentPreview(
+        url: "/documents/att-ferris/preview",
+        contentType: "image/jpeg",
+        width: 240,
+        height: 320,
+        capturedAt: "2026-11-18T09:14:00Z"
+    )
+
+    /// A video's poster frame.
+    static let kiteVideoPreview = DocumentPreview(
+        url: "/documents/att-kite/preview",
+        contentType: "image/jpeg",
+        width: 320,
+        height: 180,
+        capturedAt: "2026-11-18T09:20:00Z"
+    )
+
+    /// A PDF's first page.
+    static let menuPDFPreview = DocumentPreview(
+        url: "/documents/att-menu/preview",
+        contentType: "image/jpeg",
+        width: 204,
+        height: 264,
+        capturedAt: "2026-11-18T09:25:00Z"
+    )
+
+    /// An attachment preview the gateway describes but no longer serves.
+    static let missingAttachmentPreview = DocumentPreview(
+        url: "/documents/att-gone/preview",
+        contentType: "image/jpeg",
+        width: 320,
+        height: 240,
+        capturedAt: "2026-11-18T09:30:00Z"
+    )
+
     /// Encoded placeholder images for the fixtures above, drawn in code.
     static let documentPreviewImageData: [String: Data] = [
         webPagePreview.url: PreviewPageArt.landscape.jpeg(width: webPagePreview.width, height: webPagePreview.height),
         tallPagePreview.url: PreviewPageArt.tall.jpeg(width: tallPagePreview.width, height: tallPagePreview.height),
+        harbourPhotoPreview.url: PreviewAttachmentArt.harbour.jpeg(size: harbourPhotoPreview),
+        ferrisPhotoPreview.url: PreviewAttachmentArt.ferrisWheel.jpeg(size: ferrisPhotoPreview),
+        kiteVideoPreview.url: PreviewAttachmentArt.kite.jpeg(size: kiteVideoPreview),
+        menuPDFPreview.url: PreviewAttachmentArt.menuPage.jpeg(size: menuPDFPreview),
     ]
 
     /// Serves `documentPreviewImageData` and answers 404 for anything else.
@@ -7734,7 +7786,10 @@ extension PreviewMocks {
     /// surface's size, so a synchronous snapshot render shows them on its
     /// first frame.
     static func primeDocumentPreviewImages() {
-        for preview in [webPagePreview, tallPagePreview] {
+        for preview in [
+            webPagePreview, tallPagePreview,
+            harbourPhotoPreview, ferrisPhotoPreview, kiteVideoPreview, menuPDFPreview,
+        ] {
             guard let data = documentPreviewImageData[preview.url] else { continue }
             for size in [
                 DocumentPreviewPixelSize.thumbnail,
@@ -7837,6 +7892,96 @@ extension PreviewMocks {
         ),
     ]
 
+    /// Attachments whose sources captured a preview for each: two photos,
+    /// a video and a PDF.
+    static let attachmentsWithPreviews: [DocumentAttachment] = [
+        attachment("att-harbour", "harbour-morning.jpg", mime: "image/jpeg", bytes: 2_400_000, preview: harbourPhotoPreview),
+        attachment("att-ferris", "pier-wheel.heic", mime: "image/heic", bytes: 1_850_000, preview: ferrisPhotoPreview),
+        attachment("att-kite", "kite-launch.mov", mime: "video/quicktime", bytes: 18_200_000, preview: kiteVideoPreview),
+        attachment("att-menu", "harvest-supper-menu.pdf", mime: "application/pdf", pages: 2, preview: menuPDFPreview),
+    ]
+
+    /// A photo and a video with previews, a PDF and an audio note without,
+    /// and a photo whose preview the gateway no longer serves.
+    static let attachmentsMixed: [DocumentAttachment] = [
+        attachment("att-harbour", "harbour-morning.jpg", mime: "image/jpeg", bytes: 2_400_000, preview: harbourPhotoPreview),
+        attachment("att-tickets", "ferry-tickets.pdf", mime: "application/pdf", pages: 1),
+        attachment("att-kite", "kite-launch.mov", mime: "video/quicktime", bytes: 18_200_000, preview: kiteVideoPreview),
+        attachment("att-gone", "IMG_0412.jpg", mime: "image/jpeg", bytes: 3_100_000, preview: missingAttachmentPreview),
+        attachment("att-voice", "voice-note.m4a", mime: "audio/mp4", bytes: 412_000),
+    ]
+
+    /// Attachments with no previews, so every tile is its type's placeholder.
+    static let attachmentsWithoutPreviews: [DocumentAttachment] = [
+        attachment("att-p1", "IMG_0398.heic", mime: "image/heic", bytes: 2_050_000),
+        attachment("att-p2", "boat-ride.mp4", mime: "video/mp4", bytes: 9_600_000),
+        attachment("att-p3", "rental-agreement.pdf", mime: "application/pdf", pages: 6),
+        attachment("att-p4", "packing-list.docx", mime: nil, bytes: 24000),
+    ]
+
+    /// Filenames far wider than a tile, with and without a preview.
+    static let attachmentsLongFilename: [DocumentAttachment] = [
+        attachment(
+            "att-long-1",
+            "community-garden-planting-day-group-photo-final-edit-v3.jpg",
+            mime: "image/jpeg",
+            bytes: 4_700_000,
+            preview: harbourPhotoPreview
+        ),
+        attachment(
+            "att-long-2",
+            "neighbourhood-association-autumn-meeting-minutes-and-budget.pdf",
+            mime: "application/pdf",
+            pages: 12
+        ),
+        attachment("att-short", "map.png", mime: "image/png", bytes: 88000),
+    ]
+
+    private static func attachment(
+        _ id: String,
+        _ title: String,
+        mime: String?,
+        bytes: Int64? = nil,
+        pages: Int? = nil,
+        preview: DocumentPreview? = nil
+    )
+        -> DocumentAttachment {
+        DocumentAttachment(
+            id: id,
+            externalId: "chat-thread-0042/att/\(id)",
+            title: title,
+            attachmentId: id,
+            mimeType: mime,
+            sizeBytes: bytes,
+            pages: pages,
+            truncated: false,
+            sourceUrl: "https://files.example.com/open/\(id)",
+            appUrl: nil,
+            preview: preview
+        )
+    }
+
+    /// A conversation with attachments, decoded from the wire shape.
+    static let documentDetailWithAttachments: DocumentDetail = {
+        let json = """
+        {
+          "id": "chat-thread-0042",
+          "provider_id": "chat",
+          "source_id": "\(sourceWhatsApp.id)",
+          "external_id": "chat-thread-0042",
+          "title": "Maya Reeves",
+          "content": "**Maya Reeves:** Made it to the harbour — photos attached!\\n\\n**Me:** The kite video is great. Is that the menu for Saturday?\\n\\n**Maya Reeves:** Yes, and the ferry tickets too.",
+          "content_hash": "sha256:preview-chat",
+          "metadata": "{\\"documentType\\":\\"conversation\\"}",
+          "source_created_at": "2026-11-18T09:30:00Z",
+          "source_updated_at": "2026-11-18T09:30:00Z",
+          "ingested_at": "2026-11-18T09:30:05Z",
+          "updated_at": "2026-11-18T09:30:05Z"
+        }
+        """
+        return try! JSONDecoder().decode(DocumentDetail.self, from: Data(json.utf8))
+    }()
+
     /// A captured web page decoded from the wire shape, `preview` block included.
     static let documentDetailWithPreview: DocumentDetail = {
         let json = """
@@ -7873,6 +8018,119 @@ private struct PreviewDocumentPreviewSource: DocumentPreviewImageSource {
             throw GatewayClient.Error.notFound
         }
         return data
+    }
+}
+
+/// Placeholder attachment art for preview fixtures: simple invented
+/// scenes and a page, drawn with plain shapes at thumbnail size.
+enum PreviewAttachmentArt {
+    case harbour
+    case ferrisWheel
+    case kite
+    case menuPage
+
+    func jpeg(size preview: DocumentPreview) -> Data {
+        let size = CGSize(width: preview.width, height: preview.height)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            draw(in: context.cgContext, size: size)
+        }
+        return image.jpegData(compressionQuality: 0.85) ?? Data()
+    }
+
+    private func draw(in cg: CGContext, size: CGSize) {
+        let w = size.width
+        let h = size.height
+        switch self {
+        case .harbour:
+            sky(
+                cg,
+                size: size,
+                top: UIColor(red: 0.98, green: 0.72, blue: 0.5, alpha: 1),
+                bottom: UIColor(red: 0.99, green: 0.88, blue: 0.7, alpha: 1)
+            )
+            UIColor(red: 1, green: 0.95, blue: 0.75, alpha: 1).setFill()
+            cg.fillEllipse(in: CGRect(x: w * 0.62, y: h * 0.22, width: w * 0.16, height: w * 0.16))
+            UIColor(red: 0.2, green: 0.38, blue: 0.55, alpha: 1).setFill()
+            cg.fill(CGRect(x: 0, y: h * 0.6, width: w, height: h * 0.4))
+            UIColor(red: 0.15, green: 0.18, blue: 0.24, alpha: 1).setFill()
+            cg.fill(CGRect(x: w * 0.18, y: h * 0.55, width: w * 0.22, height: h * 0.07))
+            cg.fill(CGRect(x: w * 0.28, y: h * 0.3, width: w * 0.012, height: h * 0.25))
+            UIColor.white.setFill()
+            cg.move(to: CGPoint(x: w * 0.295, y: h * 0.32))
+            cg.addLine(to: CGPoint(x: w * 0.4, y: h * 0.52))
+            cg.addLine(to: CGPoint(x: w * 0.295, y: h * 0.52))
+            cg.fillPath()
+        case .ferrisWheel:
+            sky(
+                cg,
+                size: size,
+                top: UIColor(red: 0.36, green: 0.55, blue: 0.85, alpha: 1),
+                bottom: UIColor(red: 0.75, green: 0.86, blue: 0.97, alpha: 1)
+            )
+            let center = CGPoint(x: w * 0.5, y: h * 0.42)
+            let radius = w * 0.32
+            cg.setStrokeColor(UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1).cgColor)
+            cg.setLineWidth(w * 0.02)
+            cg.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+            for spoke in 0 ..< 8 {
+                let angle = CGFloat(spoke) * .pi / 4
+                let end = CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+                cg.move(to: center)
+                cg.addLine(to: end)
+                cg.strokePath()
+                UIColor(red: 0.93, green: 0.36, blue: 0.36, alpha: 1).setFill()
+                cg.fillEllipse(in: CGRect(x: end.x - w * 0.035, y: end.y - w * 0.035, width: w * 0.07, height: w * 0.07))
+            }
+            UIColor(red: 0.42, green: 0.3, blue: 0.22, alpha: 1).setFill()
+            cg.fill(CGRect(x: 0, y: h * 0.82, width: w, height: h * 0.18))
+        case .kite:
+            sky(
+                cg,
+                size: size,
+                top: UIColor(red: 0.3, green: 0.62, blue: 0.86, alpha: 1),
+                bottom: UIColor(red: 0.68, green: 0.85, blue: 0.95, alpha: 1)
+            )
+            UIColor(red: 0.45, green: 0.7, blue: 0.35, alpha: 1).setFill()
+            cg.fill(CGRect(x: 0, y: h * 0.75, width: w, height: h * 0.25))
+            UIColor(red: 0.98, green: 0.78, blue: 0.2, alpha: 1).setFill()
+            cg.move(to: CGPoint(x: w * 0.62, y: h * 0.12))
+            cg.addLine(to: CGPoint(x: w * 0.7, y: h * 0.3))
+            cg.addLine(to: CGPoint(x: w * 0.62, y: h * 0.52))
+            cg.addLine(to: CGPoint(x: w * 0.54, y: h * 0.3))
+            cg.fillPath()
+            cg.setStrokeColor(UIColor(white: 1, alpha: 0.9).cgColor)
+            cg.setLineWidth(1.5)
+            cg.move(to: CGPoint(x: w * 0.62, y: h * 0.52))
+            cg.addQuadCurve(to: CGPoint(x: w * 0.3, y: h * 0.8), control: CGPoint(x: w * 0.5, y: h * 0.75))
+            cg.strokePath()
+        case .menuPage:
+            UIColor(red: 0.99, green: 0.98, blue: 0.95, alpha: 1).setFill()
+            cg.fill(CGRect(origin: .zero, size: size))
+            let ink = UIColor(red: 0.25, green: 0.2, blue: 0.18, alpha: 1)
+            let rule = UIColor(red: 0.8, green: 0.76, blue: 0.7, alpha: 1)
+            ink.setFill()
+            cg.fill(CGRect(x: w * 0.22, y: h * 0.08, width: w * 0.56, height: h * 0.05))
+            UIColor(red: 0.7, green: 0.42, blue: 0.22, alpha: 1).setFill()
+            cg.fill(CGRect(x: w * 0.4, y: h * 0.16, width: w * 0.2, height: h * 0.008))
+            for row in 0 ..< 6 {
+                let y = h * (0.24 + CGFloat(row) * 0.11)
+                ink.withAlphaComponent(0.8).setFill()
+                cg.fill(CGRect(x: w * 0.12, y: y, width: w * 0.45, height: h * 0.022))
+                rule.setFill()
+                cg.fill(CGRect(x: w * 0.12, y: y + h * 0.04, width: w * 0.7, height: h * 0.014))
+                ink.withAlphaComponent(0.6).setFill()
+                cg.fill(CGRect(x: w * 0.78, y: y, width: w * 0.1, height: h * 0.022))
+            }
+        }
+    }
+
+    private func sky(_ cg: CGContext, size: CGSize, top: UIColor, bottom: UIColor) {
+        let colors = [top.cgColor, bottom.cgColor] as CFArray
+        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) else { return }
+        cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
     }
 }
 
