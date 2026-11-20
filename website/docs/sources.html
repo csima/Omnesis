@@ -327,7 +327,11 @@
                   OCR model fails on, keeps the document an earlier read made and is read again when
                   the file changes or the source is resynced. Each attachment document links to the
                   message that carried it and opens Messages there. The files themselves stay on the
-                  Mac. Participants feed the people graph. When the Mac's Contacts can be read, a
+                  Mac; the collector makes a small JPEG thumbnail of each photo, video and PDF on
+                  the Mac, with <code>sips</code> and Quick Look, and the gateway keeps it as that
+                  document's preview. A file still in iCloud gets its thumbnail once it is
+                  downloaded, and a long history's thumbnails arrive a hundred per sync, newest
+                  first. Participants feed the people graph. When the Mac's Contacts can be read, a
                   handle that exactly one contact card matches shows that contact's name beside it
                   in the title and on each message line, and a renamed contact updates the
                   conversations it appears in on the next sync. A clip without a transcript says why

@@ -179,6 +179,12 @@
           offers encryption on a fresh install; this section covers turning it on later, headless
           machines, and recovery.
         </p>
+        <p>
+          Document previews — the page screenshots a browser sends and the thumbnails a Mac
+          collector makes of iMessage photos, videos and PDFs — live in the gateway's preview store
+          (<code>previews.db</code>), which is encrypted under its own key like the other databases.
+          A thumbnail is served only while its document is readable, and is deleted with it.
+        </p>
 
         <h3 id="encryption-setup">Turn it on</h3>
         <p>
@@ -366,7 +372,11 @@
           leave them until a later operation cleans up. Transcription decodes an MP4-family
           recording (such as an <code>.m4a</code> voice memo) from a copy in an owner-only temporary
           folder, removed when decoding ends; a gateway killed mid-decode can leave it in the system
-          temporary directory. Deleting a file is not secure erasure.
+          temporary directory. A Mac collector writes each iMessage thumbnail it makes to an
+          owner-only temporary folder that is removed once the image is read back. Its thumbnail
+          record (<code>imessage-previews.db</code>, in the source's state folder, owner-only) is
+          not encrypted: it holds no images, but it names each attachment and the conversation and
+          day it belongs to. Deleting a file is not secure erasure.
         </p>
         <p>
           The source originals Omnesis reads, logs, filesystem snapshots and swap are outside

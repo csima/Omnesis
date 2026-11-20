@@ -45,6 +45,8 @@ import {
   type IMessageAttachmentRow,
 } from "./imessage-attachment-type.js";
 import { throwOnOpenFailure } from "./db-helpers/internal.js";
+import { IMessagePreviewLedger, type PreviewLedgerEntry } from "./imessage-preview-ledger.js";
+import { renderIMessageThumbnail } from "./imessage-thumbnails.js";
 import type {
   AttachmentInfo,
   AttachmentExtractionConfig,
@@ -52,7 +54,13 @@ import type {
   AudioTranscribeFn,
   ExtractionResult,
 } from "@omnesis/core";
-import type { SyncCursor, SyncProgress, SyncResult } from "@omnesis/source-sdk";
+import type {
+  RenderedDocumentPreview,
+  SourcePreviewSink,
+  SyncCursor,
+  SyncProgress,
+  SyncResult,
+} from "@omnesis/source-sdk";
 import type { DocumentInput, SyncIssue } from "@omnesis/types";
 import type { AppleProvider } from "./provider.js";
 import type {
@@ -83,6 +91,12 @@ const MAX_DUE_TRANSCRIPTION_DAYS_PER_RUN = 25;
  * all. Days whose messages changed are not counted against this.
  */
 const MAX_RENAMED_DAYS_PER_RUN = 200;
+/**
+ * Thumbnails offered per sync pass, newest first. A first sync of a long
+ * history finds thousands; the rest wait in the preview ledger, due at once,
+ * and later passes take the next share.
+ */
+const MAX_PREVIEW_OFFERS_PER_PASS = 100;
 /**
  * Separates a day signature's message part from its contact-names part. A day
  * with no named handle has no names part, so its signature is what it was
@@ -146,6 +160,17 @@ interface IMessageAttachmentEntry {
   mimeType: string;
 }
 
+/** A photo, video or PDF document this pass wrote, whose thumbnail may be offered. */
+interface PreviewCandidate {
+  key: string;
+  externalId: string;
+  dayKey: string;
+  /** The attachment's path as chat.db stores it. */
+  storedPath: string | null;
+  mimeType: string;
+  sentAtMs: number;
+}
+
 export interface AppleIMessageSourceOptions {
   isTranscriptionVocabularyEnabled?: () => boolean;
   sourceId: string;
@@ -171,6 +196,18 @@ export interface AppleIMessageSourceOptions {
    * national-format number when matching handles to contact names.
    */
   phoneRegion?: string;
+  /**
+   * Where thumbnails of photos, videos and PDFs are offered (`host.previews`).
+   * Without it no thumbnail is made.
+   */
+  previews?: SourcePreviewSink;
+  /**
+   * The preview ledger's file (`<stateDir>/imessage-previews.db`); in memory
+   * when undefined.
+   */
+  previewLedgerPath?: string;
+  /** Makes one thumbnail; `renderIMessageThumbnail` unless a test supplies one. */
+  renderPreview?: (filePath: string, mimeType: string) => Promise<RenderedDocumentPreview | null>;
 }
 
 /**
@@ -242,6 +279,17 @@ export class AppleIMessageSource {
   private readonly contactNames: ContactNameDirectory;
   /** This sync pass's contact names, read once at its start. */
   private names: HandleNameIndex = HandleNameIndex.empty;
+  private readonly previews?: SourcePreviewSink;
+  private readonly previewLedgerPath?: string;
+  private readonly renderPreview: (
+    filePath: string,
+    mimeType: string,
+  ) => Promise<RenderedDocumentPreview | null>;
+  /** Opened on the first offer, so a source without previews opens nothing. */
+  private previewLedger?: IMessagePreviewLedger;
+  private previewLedgerFailed = false;
+  /** The media documents this sync pass wrote, collected as its days are built. */
+  private previewCandidates: PreviewCandidate[] = [];
 
   constructor(
     private provider: AppleProvider,
@@ -261,6 +309,10 @@ export class AppleIMessageSource {
       () => provider.getContactsStores(),
       opts.phoneRegion,
     );
+    this.previews = opts.previews;
+    this.previewLedgerPath = opts.previewLedgerPath;
+    this.renderPreview =
+      opts.renderPreview ?? ((filePath, mimeType) => renderIMessageThumbnail(filePath, mimeType));
   }
 
   async sync(cursor: SyncCursor | null): Promise<SyncResult> {
@@ -286,6 +338,9 @@ export class AppleIMessageSource {
     if (state === null && this.transcribeAudio && this.hasTranscriptSidecar()) {
       this.getTranscriptCache().forgetUnreadable();
     }
+    // A resync may follow a wiped source, so every thumbnail is offered again.
+    this.previewCandidates = [];
+    if (state === null && this.previews) this.getPreviewLedger()?.clear();
 
     // Convert dataCutoff to iMessage nanosecond timestamp for filtering
     const cutoffNs = this.dataCutoff ? isoToImessageNs(this.dataCutoff) : null;
@@ -324,6 +379,7 @@ export class AppleIMessageSource {
     if (pageRows.length === 0) {
       const { documents, presentExternalIds, snapshotSignature, daySignatures } =
         await this.reconcileSnapshot(db, cutoffNs, state, new Set<string>());
+      this.offerPreviews(db, true);
       return {
         documents,
         deletedExternalIds: [],
@@ -490,6 +546,7 @@ export class AppleIMessageSource {
     log.info(
       `Sync produced ${documents.length} docs from ${pageRows.length} messages (${isBootstrap ? "bootstrap" : "incremental"}, hasMore: ${hasMore}, snapshot: ${presentExternalIds?.length ?? "unchanged"})`,
     );
+    this.offerPreviews(db, !hasMore);
 
     return {
       documents,
@@ -1337,6 +1394,141 @@ export class AppleIMessageSource {
   dispose(): void {
     this.transcriptCache?.close();
     this.transcriptCache = undefined;
+    this.previewLedger?.close();
+    this.previewLedger = undefined;
+  }
+
+  /** Remember a media document this pass wrote, for `offerPreviews`. */
+  private notePreviewCandidate(
+    externalId: string,
+    parentDoc: DocumentInput,
+    att: RawIMessageAttachment,
+    mimeType: string,
+    msg: ParsedIMessage,
+  ): void {
+    if (!this.previews) return;
+    this.previewCandidates.push({
+      key: previewKey(att),
+      externalId,
+      dayKey: parentDoc.externalId,
+      storedPath: att.filename,
+      mimeType,
+      sentAtMs: msg.date.getTime(),
+    });
+  }
+
+  /**
+   * Offer the thumbnails of the media documents this pass wrote, newest
+   * first, skipping a file the ledger has already settled and one that is not
+   * on disk (offloaded to iCloud): its arrival changes the day's signature,
+   * which writes the day again and offers it then. At most
+   * `MAX_PREVIEW_OFFERS_PER_PASS` are offered; the rest are left in the
+   * ledger, due at once. Once the walk has reached the tail, the deferred
+   * thumbnails that are due take what is left of the share.
+   *
+   * The offers are made, not awaited: each waits for this pass's page to be
+   * written, so its answer arrives after the pass returns and is written to
+   * the ledger then.
+   */
+  private offerPreviews(db: Db, includeDue: boolean): void {
+    const candidates = this.previewCandidates;
+    this.previewCandidates = [];
+    const sink = this.previews;
+    if (!sink) return;
+    const ledger = this.getPreviewLedger();
+    if (!ledger) return;
+    const nowMs = Date.now();
+    candidates.sort((a, b) => b.sentAtMs - a.sentAtMs);
+    const seen = new Set<string>();
+    let offered = 0;
+    for (const candidate of candidates) {
+      if (seen.has(candidate.key)) continue;
+      seen.add(candidate.key);
+      const filePath = resolveAttachmentPath(candidate.storedPath);
+      const fileSignature = attachmentFileSignature(candidate.storedPath);
+      if (!filePath || !fileSignature.startsWith("file:")) continue;
+      if (!ledger.shouldOffer(candidate.key, fileSignature, nowMs)) continue;
+      const entry: PreviewLedgerEntry = {
+        key: candidate.key,
+        externalId: candidate.externalId,
+        dayKey: candidate.dayKey,
+        fileSignature,
+      };
+      if (offered >= MAX_PREVIEW_OFFERS_PER_PASS) {
+        ledger.markWaiting(entry, nowMs);
+        continue;
+      }
+      this.offerPreview(sink, ledger, entry, filePath, candidate.mimeType, nowMs);
+      offered++;
+    }
+    if (includeDue) {
+      this.offerDuePreviews(db, sink, ledger, MAX_PREVIEW_OFFERS_PER_PASS - offered, nowMs);
+    }
+  }
+
+  /**
+   * Offer again the deferred thumbnails whose next attempt is due, reading
+   * each attachment's file afresh from chat.db. One whose attachment is gone,
+   * or whose file is not on disk, is forgotten: a file that arrives later
+   * rewrites its day, which offers it then.
+   */
+  private offerDuePreviews(
+    db: Db,
+    sink: SourcePreviewSink,
+    ledger: IMessagePreviewLedger,
+    limit: number,
+    nowMs: number,
+  ): void {
+    for (const entry of ledger.due(nowMs, limit)) {
+      const att = lookupAttachment(db, entry.key);
+      const filePath = att ? resolveAttachmentPath(att.filename) : null;
+      const fileSignature = att ? attachmentFileSignature(att.filename) : "missing";
+      if (
+        !att ||
+        mediaAttachmentNoun(att.mimeType) === undefined ||
+        !filePath ||
+        !fileSignature.startsWith("file:")
+      ) {
+        ledger.forget(entry.key);
+        continue;
+      }
+      this.offerPreview(sink, ledger, { ...entry, fileSignature }, filePath, att.mimeType, nowMs);
+    }
+  }
+
+  private offerPreview(
+    sink: SourcePreviewSink,
+    ledger: IMessagePreviewLedger,
+    entry: PreviewLedgerEntry,
+    filePath: string,
+    mimeType: string,
+    nowMs: number,
+  ): void {
+    ledger.markOffered(entry, nowMs);
+    sink
+      .offer({ externalId: entry.externalId, render: () => this.renderPreview(filePath, mimeType) })
+      .then(
+        (outcome) => {
+          // A ledger closed or replaced since has nothing to record this in.
+          if (this.previewLedger === ledger) ledger.record(entry.key, entry.fileSignature, outcome);
+        },
+        (err: unknown) => {
+          log.debug(`Thumbnail offer failed: ${err instanceof Error ? err.message : String(err)}`);
+        },
+      );
+  }
+
+  private getPreviewLedger(): IMessagePreviewLedger | undefined {
+    if (this.previewLedger || this.previewLedgerFailed) return this.previewLedger;
+    try {
+      this.previewLedger = new IMessagePreviewLedger(this.previewLedgerPath ?? ":memory:");
+    } catch (err) {
+      this.previewLedgerFailed = true;
+      log.warn(
+        `Could not open the thumbnail ledger; no thumbnails this run: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return this.previewLedger;
   }
 
   /**
@@ -1446,9 +1638,9 @@ export class AppleIMessageSource {
             ? await this.readAttachment(att, filename, mimeType, this.extractAttachment)
             : { kind: "nothing-to-read", reason: "extraction-failed" };
         if (outcome.kind === "text") {
-          attachmentDocs.push(
-            buildAttachmentDocument(parentDoc, filename, outcome.result, childMeta),
-          );
+          const child = buildAttachmentDocument(parentDoc, filename, outcome.result, childMeta);
+          attachmentDocs.push(child);
+          if (media) this.notePreviewCandidate(child.externalId, parentDoc, att, mimeType, msg);
           attachmentInfos.push({
             filename,
             mimeType,
@@ -1468,12 +1660,12 @@ export class AppleIMessageSource {
           attachmentId,
         });
         if (media && outcome.kind === "nothing-to-read") {
-          attachmentDocs.push(
-            buildMediaAttachmentDocument(parentDoc, filename, {
-              ...childMeta,
-              description: describeMediaAttachment(msg, mimeType, chat),
-            }),
-          );
+          const child = buildMediaAttachmentDocument(parentDoc, filename, {
+            ...childMeta,
+            description: describeMediaAttachment(msg, mimeType, chat),
+          });
+          attachmentDocs.push(child);
+          this.notePreviewCandidate(child.externalId, parentDoc, att, mimeType, msg);
         }
       }
     }
@@ -1529,6 +1721,26 @@ export class AppleIMessageSource {
       return { kind: "read-failed", reason: "extraction-failed" };
     }
   }
+}
+
+/** An attachment's key in the preview ledger: its GUID, or its row for one without. */
+function previewKey(att: RawIMessageAttachment): string {
+  return att.guid ?? `rowid:${att.attachmentRowId}`;
+}
+
+/** The attachment a preview-ledger key names, as it is in chat.db now. */
+function lookupAttachment(db: Db, key: string): RawIMessageAttachment | null {
+  const byRow = key.startsWith("rowid:");
+  const row = db
+    .prepare(
+      `SELECT a.ROWID as attachmentRowId, a.guid as guid, 0 as messageRowId, a.filename,
+              a.mime_type as mimeType, a.uti as uti, a.transfer_name as transferName,
+              a.total_bytes as totalBytes
+         FROM attachment a
+        WHERE ${byRow ? "a.ROWID = ?" : "a.guid = ?"}`,
+    )
+    .get(byRow ? Number(key.slice("rowid:".length)) : key) as IMessageAttachmentRow | undefined;
+  return row ? resolveIMessageAttachment(row) : null;
 }
 
 function getMaxMessageRowId(db: Db): number {
