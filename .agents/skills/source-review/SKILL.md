@@ -436,6 +436,16 @@ This section owns the deletion contract; § 13 and § 15 refer back to it.
 - Attachments go through `resolveAttachmentConfig(sourceConfig, {
 includeAudioTypes })` and the injected `extractAttachment`; no bespoke
   allow-list.
+- **Preview images.** A source that makes them declares `documentPreviews`
+  and offers each through `host.previews`; it never uploads one itself. It
+  does not await an offer inside `sync()` (the offer waits for that sync's
+  page), records each outcome when it arrives, and keeps its own record of
+  what it offered so an unchanged file is not rendered every sync: `refused`
+  waits for the file to change, `deferred` is retried on a schedule,
+  `not-found` forgets the record, and a resync starts over. Rendering is lazy,
+  bounded in time and size, writes only to private temporary paths, and never
+  modifies the user's original file. A JPEG at most 512 KB. Tests use
+  `fakePreviewSink`.
 - **Analytics reads.** The `analytics.query` handle reaches only the tables
   this source declares — its own, plus any shared with a sibling of the same
   type — and only as a single SELECT. A source that reads a table it does not

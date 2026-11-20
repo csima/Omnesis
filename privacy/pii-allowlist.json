@@ -12378,6 +12378,14 @@
       "reason": "invented sender from the CLAUDE.md example set in the attachment-document builder tests; no corpus provenance"
     },
     {
+      "value": "Maya Reeves",
+      "paths": [
+        "packages/gateway/src/http/routes/document-previews.test.ts",
+        "packages/collector/src/e2e/source-previews.e2e.test.ts"
+      ],
+      "reason": "invented sender from the CLAUDE.md example set in the document-preview route and E2E tests; no corpus provenance"
+    },
+    {
       "value": "This Omnesis",
       "paths": ["packages/providers/telegram/src/session-store.test.ts"],
       "reason": "sentence start in a connection-state detail string, not a name"
