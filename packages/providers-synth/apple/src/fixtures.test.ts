@@ -88,3 +88,44 @@ describe("synthetic conversation identity", () => {
     ).toThrow("Unknown persona");
   });
 });
+
+describe("synthetic conversation attachments", () => {
+  const withFiles = {
+    ...fixture,
+    messages: [
+      {
+        from: "maya",
+        guid: "GUID-1",
+        at: "2026-10-03T10:01:00Z",
+        text: "Photo from the ridge.",
+        attachments: [{ filename: "ridge.jpg", mimeType: "image/jpeg", sizeBytes: 4096 }],
+      },
+      {
+        from: "self",
+        at: "2026-10-03T10:05:00Z",
+        text: "Plan attached.",
+        attachments: [{ filename: "plan.pdf", mimeType: "application/pdf", sizeBytes: 2048 }],
+      },
+    ],
+  };
+
+  test("each file is a child linked to its message, named by a marker on the day", () => {
+    const [day, photo, pdf] = mapChat(withFiles, ctx);
+    const infos = day!.metadata.extra?.attachments as Array<{ attachmentId: string }>;
+    expect(infos.map((info) => `chat-day/att/${info.attachmentId}`)).toEqual([
+      photo!.externalId,
+      pdf!.externalId,
+    ]);
+    expect(day!.content).toContain("ridge.jpg");
+    expect(photo!.metadata.sourceUrl).toBe("messages://open?message-guid=GUID-1");
+    // A message without a guid leaves the child the day's own link (none here).
+    expect(pdf!.metadata.sourceUrl).toBeUndefined();
+  });
+
+  test("the day's hash follows its markers", () => {
+    const plain = first(mapChat(fixture, ctx));
+    const [day] = mapChat(withFiles, ctx);
+    expect(day!.contentHash).not.toBe(plain.contentHash);
+    expect(first(mapChat(withFiles, ctx)).contentHash).toBe(day!.contentHash);
+  });
+});

@@ -7,6 +7,7 @@ import { timeAgo, formatScore, sourceIcon, sourceLabel, docTypeLabel, docHref, i
 import { FileTypeIcon, fileTypeKind, fileTypeLabel } from "../lib/file-type-icons.js";
 import { ScoreDetails } from "./score-details.js";
 import { PeopleBubbles } from "./people-bubbles.js";
+import { PreviewThumbnail, previewSrc } from "./document-preview.js";
 
 // Document types that represent a concrete file blob (vs. an email,
 // conversation, event, …). For these we replace the generic
@@ -51,29 +52,36 @@ export function ResultCard({ result, verbose, onClick, peopleSummary }) {
     navigate(href);
   }
 
+  // Any document with a preview — a photo's thumbnail, a page's screenshot —
+  // shows it beside its text. Decorative: the title beside it names it.
+  const hasThumb = previewSrc(result.preview) !== null;
+
   return html`
-    <a class="result-card" data-type=${docType} href=${href}
+    <a class=${hasThumb ? "result-card result-card-with-thumb" : "result-card"} data-type=${docType} href=${href}
        target=${external ? "_blank" : undefined} rel=${external ? "noopener" : undefined}
        onClick=${handleClick}>
-      <div class="result-title">${result.title || "Untitled"}</div>
-      <div class="result-meta">
-        <span>${sourceIcon(result.sourceId)} ${sourceLabel(result.sourceId)}</span>
-        ${docType && html`
-          ${fileLike && fileKind
-            ? html`<span class="file-type-pill"><${FileTypeIcon} mimeType=${result.mimeType} filename=${result.title} size=${14} /> ${fileTypeLabel({ mimeType: result.mimeType, filename: result.title })}</span>`
-            : html`<span>${docTypeLabel(docType)}</span>`
-          }
-        `}
-        ${result.author && html`<span>${result.author}</span>`}
-        <span>${timeAgo(result.sourceCreatedAt)}</span>
-        <span class="result-score">${formatScore(result.score)}</span>
-        ${result.refCount > 0 && html`<span class="ref-badge">${result.refCount} refs</span>`}
-        ${peopleSummary && peopleSummary.people?.length > 0 && html`
-          <${PeopleBubbles} people=${peopleSummary.people} totalCount=${peopleSummary.total} maxVisible=${4} />
-        `}
+      <div class="result-body">
+        <div class="result-title">${result.title || "Untitled"}</div>
+        <div class="result-meta">
+          <span>${sourceIcon(result.sourceId)} ${sourceLabel(result.sourceId)}</span>
+          ${docType && html`
+            ${fileLike && fileKind
+              ? html`<span class="file-type-pill"><${FileTypeIcon} mimeType=${result.mimeType} filename=${result.title} size=${14} /> ${fileTypeLabel({ mimeType: result.mimeType, filename: result.title })}</span>`
+              : html`<span>${docTypeLabel(docType)}</span>`
+            }
+          `}
+          ${result.author && html`<span>${result.author}</span>`}
+          <span>${timeAgo(result.sourceCreatedAt)}</span>
+          <span class="result-score">${formatScore(result.score)}</span>
+          ${result.refCount > 0 && html`<span class="ref-badge">${result.refCount} refs</span>`}
+          ${peopleSummary && peopleSummary.people?.length > 0 && html`
+            <${PeopleBubbles} people=${peopleSummary.people} totalCount=${peopleSummary.total} maxVisible=${4} />
+          `}
+        </div>
+        <blockquote class="result-snippet">${truncatedSnippet}</blockquote>
+        ${verbose && result.scoreBreakdown && html`<${ScoreDetails} breakdown=${result.scoreBreakdown} />`}
       </div>
-      <blockquote class="result-snippet">${truncatedSnippet}</blockquote>
-      ${verbose && result.scoreBreakdown && html`<${ScoreDetails} breakdown=${result.scoreBreakdown} />`}
+      ${hasThumb && html`<${PreviewThumbnail} preview=${result.preview} className="result-thumb" />`}
     </a>
   `;
 }

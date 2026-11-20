@@ -7,6 +7,7 @@
 // the content column.
 
 import { html } from "htm/preact";
+import { useState } from "preact/hooks";
 import { timeAgo } from "../lib/format.js";
 
 /**
@@ -41,4 +42,25 @@ export function DocumentPreview({ preview, title }) {
       html`<figcaption class="doc-preview-caption">Preview captured ${timeAgo(preview.capturedAt)}</figcaption>`}
     </figure>
   `;
+}
+
+/**
+ * A small thumbnail of a document's `preview`, for lists and strips. Renders
+ * `fallback` (or nothing) when the document has no usable preview, and also
+ * when the image fails to load — a preview deleted since the list was read
+ * shows the placeholder rather than a broken image. Sizing belongs to
+ * `className`; the image is cropped to fill it.
+ */
+export function PreviewThumbnail({ preview, alt = "", className = "", fallback = null }) {
+  const src = previewSrc(preview);
+  const [failedSrc, setFailedSrc] = useState(null);
+  if (!src || failedSrc === src) return fallback;
+  return html`<img
+    class=${`preview-thumb ${className}`.trim()}
+    src=${src}
+    alt=${alt}
+    loading="lazy"
+    decoding="async"
+    onError=${() => setFailedSrc(src)}
+  />`;
 }

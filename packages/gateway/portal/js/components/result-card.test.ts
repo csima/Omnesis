@@ -31,3 +31,27 @@ it("retains the snippet length bound inside the quote", () => {
   render(h(ResultCard, { result: { documentId: "doc-example", chunkText: "a".repeat(400) } }), host);
   expect(host.querySelector("blockquote.result-snippet").textContent).toBe(`${"a".repeat(300)}...`);
 });
+
+it("shows a document's preview as a thumbnail beside its text", () => {
+  render(h(ResultCard, { result: {
+    documentId: "doc-example", sourceId: "example-pages:account", title: "Trail conditions",
+    chunkText: "evidence", score: 0.5,
+    preview: { url: "/documents/doc-example/preview", contentType: "image/webp", width: 1280, height: 800 },
+  } }), host);
+  const card = host.querySelector(".result-card");
+  expect(card.getAttribute("class")).toContain("result-card-with-thumb");
+  const img = card.querySelector("img.result-thumb");
+  expect(img.getAttribute("src")).toBe("/documents/doc-example/preview");
+  // Decorative: the title beside it already names the result.
+  expect(img.getAttribute("alt")).toBe("");
+  expect(card.querySelector(".result-body .result-title").textContent).toBe("Trail conditions");
+});
+
+it("shows no thumbnail without a usable preview", () => {
+  for (const preview of [undefined, { url: "https://elsewhere.example.com/x.webp" }]) {
+    render(h(ResultCard, { result: { documentId: "doc-example", title: "Plain", preview } }), host);
+    const card = host.querySelector(".result-card");
+    expect(card.getAttribute("class")).toBe("result-card");
+    expect(card.querySelector("img")).toBeNull();
+  }
+});

@@ -12,7 +12,7 @@ vi.mock("../api.js", () => ({
 }));
 
 // @ts-expect-error — portal is plain JS without sibling declarations.
-import { DocumentPreview, previewSrc } from "./document-preview.js";
+import { DocumentPreview, PreviewThumbnail, previewSrc } from "./document-preview.js";
 // @ts-expect-error — portal is plain JS without sibling declarations.
 import { BrowserCaptureSettings, hasPairedBrowser } from "./browser-capture-settings.js";
 // @ts-expect-error — portal is plain JS without sibling declarations.
@@ -152,5 +152,29 @@ describe("rendered", () => {
     expect(host.querySelector("[role=alert]")?.textContent).toBe(
       "Pair a browser before changing its capture settings",
     );
+  });
+});
+
+describe("PreviewThumbnail", () => {
+  test("renders the gateway preview, and its fallback when there is none", () => {
+    const dom = parseHTML("<html><body><main></main></body></html>");
+    const saved = { document: globalThis.document, window: globalThis.window };
+    Object.assign(globalThis, { document: dom.document, window: dom.window });
+    const host = dom.document.querySelector("main") as unknown as HTMLElement;
+    try {
+      act(() => render(h(PreviewThumbnail, { preview: PREVIEW, alt: "a.jpg", className: "x" }), host));
+      const img = host.querySelector("img");
+      expect(img?.getAttribute("src")).toBe(PREVIEW.url);
+      expect(img?.getAttribute("class")).toBe("preview-thumb x");
+      expect(img?.getAttribute("alt")).toBe("a.jpg");
+      act(() =>
+        render(h(PreviewThumbnail, { preview: undefined, fallback: h("span", { class: "fb" }) }), host),
+      );
+      expect(host.querySelector("img")).toBeNull();
+      expect(host.querySelector(".fb")).not.toBeNull();
+    } finally {
+      render(null, host);
+      Object.assign(globalThis, saved);
+    }
   });
 });
