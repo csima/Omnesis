@@ -124,6 +124,18 @@ describe("normalizeChat", () => {
     expect(doc.metadata.extra?.participants).toEqual([]);
   });
 
+  test("the owner is recognised by the name on their own messages when the member ids differ", () => {
+    const [doc] = normalizeChat(
+      chat({ participants: [{ ...OWNER, profileUrn: "ACoAAExample" }, MAYA] }),
+      ctx,
+    );
+    expect(doc.metadata.extra?.participants).toEqual(["Maya Reeves"]);
+    expect(doc.metadata.people?.[0]).toMatchObject({
+      name: "Sarah Mendez",
+      lids: expect.arrayContaining(["linkedin:100000001", "linkedin:ACoAAExample"]),
+    });
+  });
+
   test("without a known owner the self sender is marked isSelf rather than given an identity", () => {
     const [doc] = normalizeChat(chat({ participants: [MAYA] }), { ...ctx, ownerUrn: undefined });
     expect(doc.metadata.people?.[0]).toEqual({ role: "participant", isSelf: true });

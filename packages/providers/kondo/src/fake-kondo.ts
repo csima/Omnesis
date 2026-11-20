@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 
-export const RESOURCE_ORIGIN = "https://relay.trykondo.com";
+const RESOURCE_ORIGIN = "https://relay.trykondo.com";
 export const ISSUER = "https://supa.trykondo.com/auth/v1";
 
 export interface FakeParticipant {

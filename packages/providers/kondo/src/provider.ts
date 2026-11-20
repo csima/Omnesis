@@ -295,7 +295,7 @@ interface CallbackListener {
  * Bind the loopback listener on a port the OS picks, and resolve once it is
  * listening so the redirect is registered for a port that answers.
  */
-export function bindCallbackListener(expectedState: string): Promise<CallbackListener> {
+function bindCallbackListener(expectedState: string): Promise<CallbackListener> {
   return new Promise<CallbackListener>((bound, bindFailed) => {
     let settle: ((value: { code: string; state?: string }) => void) | undefined;
     let fail: ((err: Error) => void) | undefined;

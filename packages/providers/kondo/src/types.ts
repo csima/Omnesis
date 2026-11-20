@@ -39,14 +39,14 @@ export const inboxRowSchema = z.object({
 });
 export type KondoInboxRow = z.infer<typeof inboxRowSchema>;
 
-export const participantSchema = z.object({
+const participantSchema = z.object({
   fullName: z.string().nullish(),
   profileUrn: idString.nullish(),
   profileUrl: z.string().nullish(),
 });
 export type KondoParticipant = z.infer<typeof participantSchema>;
 
-export const messageSchema = z.object({
+const messageSchema = z.object({
   sender: z.string().nullish(),
   self: z.boolean().nullish(),
   time: z.string().refine((value) => Number.isFinite(Date.parse(value)), "not a timestamp"),
