@@ -24,6 +24,7 @@
     "@omnesis/provider-google": "*",
     "@omnesis/provider-granola": "*",
     "@omnesis/provider-hermes": "*",
+    "@omnesis/provider-kondo": "*",
     "@omnesis/provider-immich": "*",
     "@omnesis/provider-imap": "*",
     "@omnesis/provider-local-files": "*",
