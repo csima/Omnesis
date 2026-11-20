@@ -69,6 +69,7 @@ import type {
 } from "@omnesis/types";
 import type { SourceRegistry } from "./source-registry.js";
 import type { RegisteredSource } from "./sync-engine-types.js";
+import type { PreviewPageGate } from "./previews/preview-outbox.js";
 
 const log = createLogger("collector:sync");
 
@@ -214,6 +215,11 @@ export class SourceSyncRunner {
     private readonly syncTimeoutMs: number,
     private readonly feedProcess: FeedProcessSupervisor = new FeedProcessSupervisor(),
     private readonly ingestionContext?: DocumentIngestionContext,
+    /**
+     * Holds the previews a source offers during a sync until the page that
+     * carries their documents is written. See `PreviewOutbox`.
+     */
+    private readonly previews?: PreviewPageGate,
   ) {}
 
   /**
@@ -342,6 +348,11 @@ export class SourceSyncRunner {
           // The wall clock the host will actually enforce. Two sources race
           // their own timers against it because they could not see it.
           deadline: Date.now() + this.syncTimeoutMs,
+        }).finally(() => {
+          // Each written page released its offers already; whatever is still
+          // staged rode on a page that was refused, superseded, aborted or
+          // never sent, and is deferred for the source to offer again.
+          this.previews?.drop(source.id);
         }),
     });
   }
@@ -933,6 +944,8 @@ export class SourceSyncRunner {
             stopSuperseded();
             return;
           }
+          // The page's documents are committed: their previews may follow.
+          this.previews?.release(source.id);
           for (const [snapshotIndex, write] of snapshotWrites.entries()) {
             // The source snapshot becomes evidence only after its SQLite page
             // and cursor commit. A retry of this post-commit request carries
@@ -1068,6 +1081,8 @@ export class SourceSyncRunner {
             stopSuperseded();
             return;
           }
+          // The page's documents are committed: their previews may follow.
+          this.previews?.release(source.id);
           for (const doc of result.documents) writtenDocuments.add(doc.externalId);
           totalDeleted += writeResult.tombstonedDeleted ?? result.deletedExternalIds.length;
           reportSnapshotAbsence(source.id, writeResult.absence);

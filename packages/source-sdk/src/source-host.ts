@@ -165,4 +165,59 @@ export interface SourceHost extends ProviderHost {
 
   /** Analytics access, for a source that declares tables. */
   readonly analytics?: SourceAnalyticsAccess;
+
+  /**
+   * Where a source offers its documents' preview images. Present only for a
+   * source that declares `documentPreviews`.
+   */
+  readonly previews?: SourcePreviewSink;
+}
+
+/** A preview image a source rendered for one of its documents. */
+export interface RenderedDocumentPreview {
+  contentType: "image/jpeg";
+  /** Whole pixels, as the image itself says. */
+  width: number;
+  height: number;
+  /** When the image was made, ISO 8601. */
+  capturedAt: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * What became of one offer.
+ *
+ * - `stored`: the gateway keeps the preview.
+ * - `refused`: the gateway will not keep this preview, or `render` had none
+ *   to give; offering the same file again would end the same way.
+ * - `not-found`: the gateway has no such document (any more).
+ * - `deferred`: nothing was decided — the page the offer was made on was not
+ *   written, the gateway was busy or unreachable, or `render` threw. Offer it
+ *   again later.
+ */
+export type DocumentPreviewOutcome = "stored" | "refused" | "not-found" | "deferred";
+
+export interface DocumentPreviewOffer {
+  /** The document the preview belongs to, as this source's page names it. */
+  externalId: string;
+  /**
+   * Make the image. Called at most once, and only after the page carrying the
+   * document has been written, so an offer whose page never lands costs no
+   * rendering. Resolve null when the file has no preview to give; throw when
+   * it could not be made this time.
+   */
+  render: () => Promise<RenderedDocumentPreview | null>;
+}
+
+/**
+ * Preview images for a source's documents.
+ *
+ * An offer made while a sync runs waits for that sync's page to be written,
+ * then is rendered and uploaded in the background, a few at a time across the
+ * whole host. The returned promise settles only after that, so a source must
+ * not await it from inside the sync that made the offer — it records the
+ * outcome when it arrives.
+ */
+export interface SourcePreviewSink {
+  offer(offer: DocumentPreviewOffer): Promise<DocumentPreviewOutcome>;
 }

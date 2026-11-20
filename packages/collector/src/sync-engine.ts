@@ -51,6 +51,7 @@ import {
 } from "./tunables.js";
 import { SourceRegistry } from "./source-registry.js";
 import { SyncDispatcher, type TriggerSyncResult } from "./sync-dispatcher.js";
+import { PreviewOutbox } from "./previews/preview-outbox.js";
 import { SourceSyncRunner, type SyncOutcome } from "./source-sync-runner.js";
 import type { SourceStatus } from "./source-lifecycle.js";
 import type { CollectorInternalConfig } from "./internal-config.js";
@@ -109,6 +110,12 @@ export class SyncEngine {
 
   private pushDebounceMs: number;
 
+  /**
+   * Document previews the sources on this collector offer, held until their
+   * pages are written and then uploaded a few at a time. See `PreviewOutbox`.
+   */
+  readonly previews: PreviewOutbox;
+
   constructor(
     private gateway: GatewayClient,
     opts?: {
@@ -131,12 +138,14 @@ export class SyncEngine {
       },
     );
     this.registry = new SourceRegistry(this.scheduler, this.fileWatchers);
+    this.previews = new PreviewOutbox({ uploader: this.gateway });
     this.runner = new SourceSyncRunner(
       this.gateway,
       this.registry,
       syncTimeoutMs,
       undefined,
       opts?.ingestionContext,
+      this.previews,
     );
     this.dispatcher = new SyncDispatcher(this.registry, (source, reason) =>
       this.syncSource(source, reason),
