@@ -6,11 +6,12 @@ import Database from "better-sqlite3";
 type Db = Database.Database;
 import { AudioUnreadableError, resolveAttachmentConfig } from "@omnesis/core";
 import { SourceId, ProviderId, SyncError } from "@omnesis/types";
+import { fakePreviewSink, type FakePreviewSink } from "@omnesis/source-sdk/testing";
 import { AppleProvider } from "./provider.js";
 import { AppleIMessageSource } from "./imessage.js";
 import { addContact, createAddressBook, renameContact } from "./testing/address-book-fixture.js";
 import type { AttachmentExtractFn, AudioTranscribeFn } from "@omnesis/core";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 
@@ -2134,6 +2135,204 @@ describe("AppleIMessageSource", () => {
         metadata: { sourceUrl: "messages://open?message-guid=msg-1", lowSignal: true },
       });
       expect(photo.extractedContentHash).toBeUndefined();
+    });
+  });
+
+  describe("thumbnails", () => {
+    let attTmpDir: string;
+    let sink: FakePreviewSink;
+    let renders: Array<{ path: string; mimeType: string }>;
+
+    const image = {
+      contentType: "image/jpeg" as const,
+      width: 512,
+      height: 384,
+      capturedAt: "2024-03-08T10:05:00.000Z",
+      bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+    };
+
+    beforeEach(() => {
+      attTmpDir = mkdtempSync(join(tmpdir(), "imessage-thumb-"));
+      sink = fakePreviewSink();
+      renders = [];
+    });
+
+    afterEach(() => {
+      rmSync(attTmpDir, { recursive: true, force: true });
+    });
+
+    function thumbSource() {
+      return new AppleIMessageSource(provider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+        attachmentConfig: resolveAttachmentConfig({ extractAttachments: true }),
+        previews: sink,
+        previewLedgerPath: join(tmpDir, "state", "imessage-previews.db"),
+        renderPreview: async (path, mimeType) => {
+          renders.push({ path, mimeType });
+          return image;
+        },
+      });
+    }
+
+    /** A photo message with its file on disk, unless `onDisk` is false. */
+    function photoMessage(rowId: number, date: number, opts: { onDisk?: boolean } = {}) {
+      const path = join(attTmpDir, `IMG_${rowId}.HEIC`);
+      if (opts.onDisk !== false) writeFileSync(path, `invented photo ${rowId}`);
+      insertMessage(testDb, rowId, 1, { handleId: 1, date, hasAttachments: true });
+      insertAttachment(testDb, rowId, rowId, {
+        filename: path,
+        mimeType: "image/heic",
+        transferName: `IMG_${rowId}.HEIC`,
+        totalBytes: 2048,
+      });
+      return path;
+    }
+
+    async function settle() {
+      await sink.settled();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    test("offers a photo's thumbnail once, for its own document, while the day is rewritten", async () => {
+      const path = photoMessage(1, DATE_2024_03_08_10AM);
+      const attSource = thumbSource();
+      const first = await attSource.sync(null);
+      await settle();
+      const photo = first.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(sink.offers.map((o) => o.externalId)).toEqual([photo.externalId]);
+      expect(sink.offers[0]!.outcome).toBe("stored");
+      expect(renders).toEqual([{ path, mimeType: "image/heic" }]);
+
+      // A new message rewrites the day and its photo; the photo is not offered again.
+      insertMessage(testDb, 2, 1, { text: "Lovely", handleId: 1, date: DATE_2024_03_08_11AM });
+      const second = await attSource.sync(first.cursor);
+      await settle();
+      expect(second.documents.some((d) => d.externalId === photo.externalId)).toBe(true);
+      expect(sink.offers).toHaveLength(1);
+      attSource.dispose();
+    });
+
+    test("a resync forgets what was offered and offers it again", async () => {
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const attSource = thumbSource();
+      await attSource.sync(null);
+      await settle();
+      expect(sink.offers).toHaveLength(1);
+
+      await attSource.sync(null);
+      await settle();
+      expect(sink.offers).toHaveLength(2);
+      expect(sink.offers[1]!.externalId).toBe(sink.offers[0]!.externalId);
+      attSource.dispose();
+    });
+
+    test("a file not on disk gets no offer, and is offered once it arrives", async () => {
+      const path = photoMessage(1, DATE_2024_03_08_10AM, { onDisk: false });
+      const attSource = thumbSource();
+      const first = await attSource.sync(null);
+      await settle();
+      // The photo is described, so its document exists, but there is nothing to render.
+      expect(first.documents.some((d) => d.metadata.documentType === "attachment")).toBe(true);
+      expect(sink.offers).toHaveLength(0);
+
+      // The file arrives from iCloud: the day's signature changes and the day
+      // is written again with no new message, offering the thumbnail.
+      writeFileSync(path, "invented photo, downloaded");
+      const second = await attSource.sync(first.cursor);
+      await settle();
+      expect(second.documents.some((d) => d.metadata.documentType === "attachment")).toBe(true);
+      expect(sink.offers).toHaveLength(1);
+      expect(renders).toEqual([{ path, mimeType: "image/heic" }]);
+      attSource.dispose();
+    });
+
+    test("a refused thumbnail waits for the file to change; a deferred one is offered when due", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2024-03-08T12:00:00Z"));
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const refusedPath = photoMessage(2, DATE_2024_03_08_11AM);
+      const attSource = thumbSource();
+      // Offers go newest first, so the first is the later photo.
+      sink.answerWith((externalId) =>
+        externalId === sink.offers[0]?.externalId ? "refused" : "deferred",
+      );
+      const first = await attSource.sync(null);
+      await settle();
+      expect(sink.offers.map((o) => o.outcome).sort()).toEqual(["deferred", "refused"]);
+      const refusedId = sink.offers.find((o) => o.outcome === "refused")!.externalId;
+      const deferredId = sink.offers.find((o) => o.outcome === "deferred")!.externalId;
+      sink.answerWith("stored");
+
+      // Before the deferred one is due, a pass offers nothing.
+      vi.setSystemTime(new Date("2024-03-08T12:00:30Z"));
+      const second = await attSource.sync(first.cursor);
+      await settle();
+      expect(sink.offers).toHaveLength(2);
+
+      // Once due, the next pass that reaches the tail offers it again.
+      vi.setSystemTime(new Date("2024-03-08T12:02:00Z"));
+      const third = await attSource.sync(second.cursor);
+      await settle();
+      expect(sink.offers.slice(2).map((o) => o.externalId)).toEqual([deferredId]);
+
+      // The refused file is offered again only after it changes.
+      utimesSync(refusedPath, new Date("2024-03-08T12:03:00Z"), new Date("2024-03-08T12:03:00Z"));
+      await attSource.sync(third.cursor);
+      await settle();
+      expect(sink.offers.slice(3).map((o) => o.externalId)).toEqual([refusedId]);
+      attSource.dispose();
+    });
+
+    test("a document the gateway does not know is forgotten and offered with its day again", async () => {
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const attSource = thumbSource();
+      sink.answerWith("not-found");
+      const first = await attSource.sync(null);
+      await settle();
+      sink.answerWith("stored");
+      insertMessage(testDb, 2, 1, { text: "Again", handleId: 1, date: DATE_2024_03_08_11AM });
+      await attSource.sync(first.cursor);
+      await settle();
+      expect(sink.offers.map((o) => o.outcome)).toEqual(["not-found", "stored"]);
+      attSource.dispose();
+    });
+
+    test("offers at most 100 per pass, newest first, and the rest on later passes", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2024-03-08T12:00:00Z"));
+      for (let i = 1; i <= 103; i++) photoMessage(i, DATE_2024_03_08_10AM + i * 1_000_000_000);
+      const attSource = thumbSource();
+      const first = await attSource.sync(null);
+      await settle();
+      expect(sink.offers).toHaveLength(100);
+      const newest = renders.map((r) => r.path);
+      expect(newest[0]).toBe(join(attTmpDir, "IMG_103.HEIC"));
+      expect(newest).not.toContain(join(attTmpDir, "IMG_3.HEIC"));
+
+      vi.setSystemTime(new Date("2024-03-08T12:00:01Z"));
+      await attSource.sync(first.cursor);
+      await settle();
+      expect(sink.offers).toHaveLength(103);
+      expect(
+        renders
+          .slice(100)
+          .map((r) => r.path)
+          .sort(),
+      ).toEqual([1, 2, 3].map((i) => join(attTmpDir, `IMG_${i}.HEIC`)).sort());
+      attSource.dispose();
+    });
+
+    test("a source without a sink offers nothing and opens no ledger", async () => {
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const plain = new AppleIMessageSource(provider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+        attachmentConfig: resolveAttachmentConfig({ extractAttachments: true }),
+        previewLedgerPath: join(tmpDir, "state", "imessage-previews.db"),
+      });
+      await plain.sync(null);
+      expect(existsSync(join(tmpDir, "state", "imessage-previews.db"))).toBe(false);
     });
   });
 
