@@ -9,6 +9,7 @@ import { SyncScheduler } from "./sync-scheduler.js";
 import { FileWatcherManager } from "./file-watcher-manager.js";
 import { FreshnessProbe } from "./freshness-probe.js";
 import { FeedProcessSupervisor } from "./feed-process-supervisor.js";
+import { PreviewOutbox } from "./previews/preview-outbox.js";
 import type {
   RegisteredProvider,
   RegisteredSource,
@@ -3535,6 +3536,109 @@ describe("SourceSyncRunner — initial inventory provenance", () => {
       expect(gateway.getInitialSourceInventory).toHaveBeenCalledTimes(hasCursor ? 0 : 1);
     },
   );
+});
+
+describe("SourceSyncRunner — previews wait for their page", () => {
+  const image = {
+    contentType: "image/jpeg" as const,
+    width: 4,
+    height: 3,
+    capturedAt: "2026-03-04T08:12:00.000Z",
+    bytes: new Uint8Array([0xff, 0xd8, 0xff]),
+  };
+
+  test("an offer renders only after its page is written, and a refused page's offer is deferred", async () => {
+    const { registry } = makeRegistry();
+    const gateway = new RecordingGateway();
+    const uploads: string[] = [];
+    const outbox = new PreviewOutbox({
+      uploader: {
+        putDocumentPreview: async (upload) => {
+          uploads.push(upload.externalId);
+          return { outcome: "stored" };
+        },
+      },
+    });
+    const writesWhenRendered = new Map<string, number>();
+    const outcomes: Array<Promise<string>> = [];
+    let page = 0;
+    const source = makeDocumentSource("photos-synth:maya@example.com", async () => {
+      page += 1;
+      const externalId = `day-${page}/att/photo`;
+      const sink = outbox.sinkFor({ sourceId: "photos-synth:maya@example.com", providerId: "p" });
+      outcomes.push(
+        sink.offer({
+          externalId,
+          render: async () => {
+            writesWhenRendered.set(
+              externalId,
+              gateway.calls.filter((call) => call.kind === "upsertWithCursor").length,
+            );
+            return image;
+          },
+        }),
+      );
+      // The second page is refused by the gateway.
+      if (page === 2) gateway.rejectWrites = true;
+      return {
+        documents: [makeDoc(externalId, "photos-synth:maya@example.com")],
+        deletedExternalIds: [],
+        cursor: { page },
+        hasMore: page === 1,
+      };
+    });
+    registry.registerProvider(makeProvider(source));
+
+    await new SourceSyncRunner(
+      gateway as unknown as GatewayClient,
+      registry,
+      60_000,
+      undefined,
+      undefined,
+      outbox,
+    ).runOne(source);
+
+    expect(await Promise.all(outcomes)).toEqual(["stored", "deferred"]);
+    expect(writesWhenRendered.get("day-1/att/photo")).toBeGreaterThanOrEqual(1);
+    expect(writesWhenRendered.has("day-2/att/photo")).toBe(false);
+    expect(uploads).toEqual(["day-1/att/photo"]);
+    expect(outbox.pending).toBe(0);
+  });
+
+  test("a sync that throws defers the offers its page made", async () => {
+    const { registry } = makeRegistry();
+    const gateway = new RecordingGateway();
+    let rendered = false;
+    const outbox = new PreviewOutbox({
+      uploader: { putDocumentPreview: async () => ({ outcome: "stored" }) },
+    });
+    let outcome: Promise<string> | undefined;
+    const source = makeDocumentSource("photos-synth:maya@example.com", async () => {
+      outcome = outbox
+        .sinkFor({ sourceId: "photos-synth:maya@example.com", providerId: "p" })
+        .offer({
+          externalId: "day-1/att/photo",
+          render: async () => {
+            rendered = true;
+            return image;
+          },
+        });
+      throw new Error("the store went away");
+    });
+    registry.registerProvider(makeProvider(source));
+
+    await new SourceSyncRunner(
+      gateway as unknown as GatewayClient,
+      registry,
+      60_000,
+      undefined,
+      undefined,
+      outbox,
+    ).runOne(source);
+
+    expect(await outcome).toBe("deferred");
+    expect(rendered).toBe(false);
+  });
 });
 
 describe("isGatewayValidationError", () => {

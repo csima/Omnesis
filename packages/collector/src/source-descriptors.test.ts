@@ -920,6 +920,37 @@ describe("extractDescriptors — conversational flag round-trip", () => {
   });
 });
 
+describe("extractDescriptors — document previews round-trip", () => {
+  it("is declared per source within a provider and reaches the wire only where declared", () => {
+    const def = defineProvider({
+      provider: { id: "mixed-preview-provider", name: "mixed previews" },
+      authType: "local",
+      sources: [
+        {
+          id: "photo-child",
+          name: "photo child",
+          description: "makes thumbnails",
+          documentPreviews: true,
+          create: async () => ({
+            sync: async () => ({ documents: [], cursor: {}, hasMore: false }),
+          }),
+        },
+        {
+          id: "text-child",
+          name: "text child",
+          description: "makes none",
+          create: async () => ({
+            sync: async () => ({ documents: [], cursor: {}, hasMore: false }),
+          }),
+        },
+      ],
+    });
+    const serialized = extractDescriptors(def).map((d) => serializeDescriptor(d));
+    expect(serialized.find((d) => d.id === "photo-child")?.documentPreviews).toBe(true);
+    expect(serialized.find((d) => d.id === "text-child")).not.toHaveProperty("documentPreviews");
+  });
+});
+
 describe("Web Pages source registers + renders generically", () => {
   it("extracts a single `web` descriptor that serializes to a JSON-safe shape", () => {
     // The exact path the gateway uses to ship a descriptor to clients:

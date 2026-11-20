@@ -44,8 +44,11 @@ export {
   fakeProviderHost,
   fakeSourceHost,
   fakeAnalytics,
+  fakePreviewSink,
   recordingLogger,
   type FakeAnalytics,
+  type FakePreviewSink,
+  type RecordedPreviewOffer,
   type FakeHostOptions,
   type RecordingLogger,
 } from "./fake-host.js";

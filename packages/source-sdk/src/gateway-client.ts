@@ -428,9 +428,49 @@ export interface AnalyticsPageIngest {
   observationId?: string;
 }
 
+/** One document preview image, named as the page that wrote its document names it. */
+export interface DocumentPreviewUpload {
+  providerId: string;
+  sourceId: string;
+  externalId: string;
+  contentType: "image/jpeg" | "image/webp";
+  width: number;
+  height: number;
+  capturedAt: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * How the gateway answered a preview upload.
+ *
+ * - `stored`: kept.
+ * - `not-found`: the gateway has no such document.
+ * - `unsupported`: this gateway keeps no previews for the source — an older
+ *   gateway without the route, one without its preview store, or a source
+ *   type this collector did not declare previews for. Asking again before the
+ *   collector reconnects gets the same answer.
+ * - `refused`: the gateway will not keep this image — the source is paused or
+ *   removed, the document was deleted for good, or the image is one the
+ *   store does not take.
+ * - `transient`: busy, unreachable or not ready yet; worth another try, after
+ *   `retryAfterMs` when the gateway named a wait.
+ */
+export type DocumentPreviewUploadResult =
+  | { outcome: "stored" }
+  | { outcome: "not-found" }
+  | { outcome: "unsupported"; code?: string }
+  | { outcome: "refused"; status: number; code?: string }
+  | { outcome: "transient"; reason: string; retryAfterMs?: number };
+
 export interface GatewayClient {
   /** Send a batch of documents to the gateway for upserting */
   upsertDocuments(documents: DocumentInput[]): Promise<void>;
+
+  /**
+   * Store a document's preview image. Never throws and never retries in-band:
+   * every failure comes back as an outcome the caller schedules around.
+   */
+  putDocumentPreview?(upload: DocumentPreviewUpload): Promise<DocumentPreviewUploadResult>;
 
   /**
    * Transcribe source audio (e.g. a WhatsApp voice note) via the gateway's

@@ -511,6 +511,9 @@ export interface SourceDescriptor {
    */
   conversational?: boolean;
 
+  /** See `SourceDefinition.documentPreviews`. */
+  documentPreviews?: boolean;
+
   /**
    * Self-identity hook — how this source's account id maps to the self LID
    * alias its normalizer emits. See `SelfIdentitySpec`.
@@ -680,6 +683,12 @@ export interface SerializedDescriptor {
    * attachment child-docs (document). See `SourceDescriptor.conversational`.
    */
   conversational: boolean;
+  /**
+   * Present and true only for a source that offers document previews. The
+   * gateway reads it to decide whether a collector's preview upload for a
+   * source of this type may be kept. See `SourceDefinition.documentPreviews`.
+   */
+  documentPreviews?: boolean;
   singleInstance: boolean;
   /** Multi-device contribution mode; see `SourceDescriptor.multiDevice`. */
   multiDeviceMode: "exclusive" | "handoff" | "replicated" | "partitioned";
@@ -763,6 +772,7 @@ export function serializeDescriptor(d: SourceDescriptor): SerializedDescriptor {
     experimental: d.experimental ?? false,
     widgetOrigins: d.widgetOrigins,
     conversational: d.conversational ?? false,
+    ...(d.documentPreviews === true ? { documentPreviews: true } : {}),
     singleInstance: d.singleInstance ?? false,
     multiDeviceMode: d.multiDevice?.mode ?? "exclusive",
     pushBased: d.pushBased ?? false,

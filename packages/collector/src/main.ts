@@ -992,6 +992,10 @@ export async function main() {
     // Gateway is authoritative for the source registry. Reconcile
     // local state to match: register new, unregister removed, toggle
     // enabled. Idempotent — safe to receive on every reconnect.
+    // The gateway sends it on every connection, so it is also where a source
+    // whose previews this gateway refused gets to offer them again: the
+    // gateway may have been updated, or this collector's descriptors re-read.
+    engine.previews.resumeAll();
     try {
       await manager.applySourcesSnapshot(sources);
       await engine.refreshAllSourceMeta();
