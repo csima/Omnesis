@@ -1330,6 +1330,57 @@ public struct DocumentAttachment: Decodable, Identifiable, Hashable, Sendable {
     public let sourceUrl: String?
     /// Native-app deep link preferred on mobile clients.
     public let appUrl: String?
+    /// The child's preview image (a photo's or video's frame, a PDF's first
+    /// page), when its source captured one. Read leniently: absent on older
+    /// gateways and on children without one.
+    public let preview: DocumentPreview?
+
+    public init(
+        id: String,
+        externalId: String,
+        title: String,
+        attachmentId: String,
+        mimeType: String?,
+        sizeBytes: Int64?,
+        pages: Int?,
+        truncated: Bool?,
+        sourceUrl: String?,
+        appUrl: String?,
+        preview: DocumentPreview? = nil
+    ) {
+        self.id = id
+        self.externalId = externalId
+        self.title = title
+        self.attachmentId = attachmentId
+        self.mimeType = mimeType
+        self.sizeBytes = sizeBytes
+        self.pages = pages
+        self.truncated = truncated
+        self.sourceUrl = sourceUrl
+        self.appUrl = appUrl
+        self.preview = preview
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, externalId, title, attachmentId, mimeType, sizeBytes, pages, truncated, sourceUrl, appUrl, preview
+    }
+
+    /// A `preview` block this build cannot read decodes as nil for that
+    /// child instead of failing the whole attachment list.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        externalId = try container.decode(String.self, forKey: .externalId)
+        title = try container.decode(String.self, forKey: .title)
+        attachmentId = try container.decode(String.self, forKey: .attachmentId)
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        pages = try container.decodeIfPresent(Int.self, forKey: .pages)
+        truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated)
+        sourceUrl = try container.decodeIfPresent(String.self, forKey: .sourceUrl)
+        appUrl = try container.decodeIfPresent(String.self, forKey: .appUrl)
+        preview = container.decodeDocumentPreview(forKey: .preview)
+    }
 }
 
 /// Wire shape of `GET /documents/:id/trail` — the `EventTrail` the

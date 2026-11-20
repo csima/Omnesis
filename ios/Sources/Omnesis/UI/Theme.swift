@@ -340,6 +340,7 @@ struct FlatSectionHeader: View {
                 .scaledFont(size: 12, weight: .semibold)
                 .tracking(0.5)
                 .foregroundStyle(Theme.textSecondary)
+                .layoutPriority(1)
             if showRule {
                 Rectangle()
                     .fill(Theme.border)
