@@ -844,9 +844,9 @@ export function mountDocumentCoreRoutes(app: RouteApp, deps: DocumentRoutesDeps)
  */
 export function mountDocumentRefsRoute(
   app: RouteApp,
-  deps: { db: Db; documentService: DocumentService },
+  deps: { db: Db; documentService: DocumentService; previews?: DocumentPreviewService },
 ): void {
-  const { db, documentService } = deps;
+  const { db, documentService, previews } = deps;
 
   app.get("/documents/:id/refs", scope.read(), (c) => {
     const id = c.req.param("id");
@@ -1021,7 +1021,8 @@ export function mountDocumentRefsRoute(
    * follow the externalId convention `<parent.externalId>/att/<attachmentId>`
    * set by `buildAttachmentDocument` in `@omnesis/core/attachments.ts`.
    * Used by the portal's attachments panel to deep-link the parent's
-   * attachment list to each child doc view.
+   * attachment list to each child doc view. A child with a stored preview
+   * carries its `preview` reference, as it does on `GET /documents/:id`.
    *
    * Both reads seek through an index (see `like-prefix-seek.ts`) while
    * keeping the `LIKE` semantics they have always had: the child match is
@@ -1106,7 +1107,7 @@ export function mountDocumentRefsRoute(
       };
     });
 
-    return c.json({ attachments: children });
+    return c.json({ attachments: withPreviews(children, previews) });
   });
 
   app.get("/links/stats", scope.read(), (c) => {

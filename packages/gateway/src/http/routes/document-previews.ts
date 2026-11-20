@@ -11,7 +11,10 @@
  *     `image/webp` or `image/jpeg`, at most 512 KB. 200 `{ stored, preview }`;
  *     409 when the source keeps no previews or refuses this one, 410 when the
  *     document was deleted for good, 404 when it does not exist (yet), 413 and
- *     415 for an image the store does not take.
+ *     415 for an image the store does not take, and 503
+ *     `PREVIEW_ADMISSION_PENDING` with a Retry-After while the uploading
+ *     collector's source descriptors, which declare its previews, have not
+ *     arrived.
  *   - `GET /documents/:id/preview` serves the image of a readable document with
  *     its content type, `Cache-Control: private` and an ETag; 404 when there
  *     is none.
@@ -25,6 +28,7 @@ import { BadRequestError, NotFoundError, HttpError, ValidationError } from "../e
 import { scope } from "../scope.js";
 import { previewUploadFields, previewUploadJsonBody } from "../schemas/index.js";
 import { MAX_PREVIEW_BYTES } from "../../previews/store.js";
+import { PREVIEW_ADMISSION_PENDING } from "../../previews/service.js";
 import type { DocumentPreviewService, PreviewUpload } from "../../previews/service.js";
 import type { RouteApp } from "./types.js";
 
@@ -64,8 +68,21 @@ export function mountDocumentPreviewRoutes(
     const upload = contentType.startsWith("multipart/form-data")
       ? await readMultipart(c.req.raw)
       : await readJson(c.req.raw);
-    const result = await previewService.upload(upload, c.get("auth"), new URL(c.req.url).hostname);
-    return c.json(result);
+    try {
+      const result = await previewService.upload(
+        upload,
+        c.get("auth"),
+        new URL(c.req.url).hostname,
+      );
+      return c.json(result);
+    } catch (error) {
+      // The collector asks again once its descriptors are in; a few seconds
+      // covers the first answer of a connection.
+      if (error instanceof HttpError && error.code === PREVIEW_ADMISSION_PENDING) {
+        c.header("Retry-After", "5");
+      }
+      throw error;
+    }
   });
 
   app.get("/documents/:id/preview", scope.read(), (c) => {
