@@ -8,9 +8,17 @@ import { AudioUnreadableError, resolveAttachmentConfig } from "@omnesis/core";
 import { SourceId, ProviderId, SyncError } from "@omnesis/types";
 import { fakePreviewSink, type FakePreviewSink } from "@omnesis/source-sdk/testing";
 import { AppleProvider } from "./provider.js";
-import { AppleIMessageSource } from "./imessage.js";
+import {
+  AppleIMessageSource,
+  IMESSAGE_MEDIA_RENDER_VERSION,
+  MAX_MEDIA_BACKFILL_ATTACHMENTS_PER_PASS,
+  MAX_MEDIA_BACKFILL_DAYS_PER_PASS,
+} from "./imessage.js";
 import { addContact, createAddressBook, renameContact } from "./testing/address-book-fixture.js";
-import type { AttachmentExtractFn, AudioTranscribeFn } from "@omnesis/core";
+import type { AttachmentExtractFn, AudioTranscribeFn, ExtractionResult } from "@omnesis/core";
+import type { DocumentInput } from "@omnesis/types";
+import type { SyncCursor } from "@omnesis/source-sdk";
+import type { AppleIMessageSyncCursor } from "./imessage-types.js";
 import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -2861,6 +2869,382 @@ describe("AppleIMessageSource", () => {
       const second = await named.sync(first.cursor);
       expect(second.documents).toHaveLength(1);
       expect(second.documents[0].content).toContain("+15550100123 (Maya Reeves): Edited");
+    });
+  });
+
+  describe("attachment text cache and media backfill", () => {
+    const CHAT = "+15550100123";
+    let mediaDir: string;
+    let extract: ReturnType<typeof vi.fn<AttachmentExtractFn>>;
+    let nextRowId: number;
+
+    beforeEach(() => {
+      mediaDir = mkdtempSync(join(tmpdir(), "imessage-media-"));
+      insertHandle(testDb, 3, CHAT);
+      insertChat(testDb, 3, CHAT, { handleIds: [3] });
+      extract = vi.fn<AttachmentExtractFn>(async () => ({
+        text: "",
+        truncated: false,
+        noText: true,
+      }));
+      nextRowId = 100;
+    });
+
+    afterEach(() => {
+      rmSync(mediaDir, { recursive: true, force: true });
+    });
+
+    function mediaSource(
+      opts: { configDir?: string; previews?: FakePreviewSink } = {},
+    ): AppleIMessageSource {
+      return new AppleIMessageSource(provider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+        attachmentConfig: resolveAttachmentConfig({ extractAttachments: true }),
+        extractAttachment: extract,
+        configDir: opts.configDir,
+        ...(opts.previews
+          ? {
+              previews: opts.previews,
+              previewLedgerPath: join(tmpDir, "state", "imessage-previews.db"),
+              renderPreview: async () => ({
+                contentType: "image/jpeg" as const,
+                width: 256,
+                height: 192,
+                capturedAt: "2024-01-05T10:00:00.000Z",
+                bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+              }),
+            }
+          : {}),
+      });
+    }
+
+    function dayKey(day: number): string {
+      return `${CHAT}:2024-01-${String(day).padStart(2, "0")}`;
+    }
+
+    /** Messages from Maya Reeves on 2024-01-`day`, each carrying one file, which is returned. */
+    function sendFiles(
+      day: number,
+      count = 1,
+      file: { ext: string; mimeType: string } = { ext: "HEIC", mimeType: "image/heic" },
+    ): string[] {
+      const at = dateToImessageNs(new Date(Date.UTC(2024, 0, day, 10)));
+      const paths: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const rowId = nextRowId++;
+        const path = join(mediaDir, `FILE_${rowId}.${file.ext}`);
+        writeFileSync(path, `invented file ${rowId}`);
+        insertMessage(testDb, rowId, 3, {
+          handleId: 3,
+          date: at + i * 1e9,
+          hasAttachments: true,
+        });
+        insertAttachment(testDb, rowId, rowId, {
+          filename: path,
+          mimeType: file.mimeType,
+          transferName: `FILE_${rowId}.${file.ext}`,
+          totalBytes: 2048,
+        });
+        paths.push(path);
+      }
+      return paths;
+    }
+
+    function sendText(day: number, text: string): void {
+      const rowId = nextRowId++;
+      insertMessage(testDb, rowId, 3, {
+        text,
+        handleId: 3,
+        date: dateToImessageNs(new Date(Date.UTC(2024, 0, day, 18))),
+      });
+    }
+
+    function parents(documents: DocumentInput[]): string[] {
+      return documents
+        .filter((d) => d.metadata.documentType === "conversation")
+        .map((d) => d.externalId);
+    }
+
+    function children(documents: DocumentInput[]): DocumentInput[] {
+      return documents.filter((d) => d.metadata.documentType === "attachment");
+    }
+
+    function backfillOf(cursor: SyncCursor): AppleIMessageSyncCursor["mediaBackfill"] {
+      return (cursor as AppleIMessageSyncCursor).mediaBackfill;
+    }
+
+    /** The cursor of a collector that synced everything before the media backfill existed. */
+    async function legacyCursor(source: AppleIMessageSource): Promise<SyncCursor> {
+      const { cursor } = await source.sync(null);
+      const { mediaBackfill: _done, ...legacy } = cursor as AppleIMessageSyncCursor;
+      return legacy;
+    }
+
+    describe("attachment text cache", () => {
+      test("a re-rendered day reuses what its files gave instead of reading them again", async () => {
+        sendFiles(5, 1, { ext: "pdf", mimeType: "application/pdf" });
+        extract.mockResolvedValue({ text: "Invented itinerary for Maya Reeves", truncated: false });
+        const source = mediaSource();
+        const first = await source.sync(null);
+        expect(children(first.documents).map((d) => d.content)).toEqual([
+          "Invented itinerary for Maya Reeves",
+        ]);
+
+        sendText(5, "See you there");
+        const second = await source.sync(first.cursor);
+        expect(parents(second.documents)).toEqual([dayKey(5)]);
+        expect(children(second.documents).map((d) => d.content)).toEqual([
+          "Invented itinerary for Maya Reeves",
+        ]);
+        expect(extract).toHaveBeenCalledTimes(1);
+        source.dispose();
+      });
+
+      test("a file whose size or mtime changed is read again", async () => {
+        const [path] = sendFiles(5, 1, { ext: "pdf", mimeType: "application/pdf" });
+        extract.mockResolvedValueOnce({ text: "First draft", truncated: false });
+        extract.mockResolvedValueOnce({ text: "Second draft", truncated: false });
+        const source = mediaSource();
+        const first = await source.sync(null);
+
+        utimesSync(path!, new Date("2024-02-01T00:00:00Z"), new Date("2024-02-01T00:00:00Z"));
+        const second = await source.sync(first.cursor);
+        expect(children(second.documents).map((d) => d.content)).toEqual(["Second draft"]);
+        expect(extract).toHaveBeenCalledTimes(2);
+        source.dispose();
+      });
+
+      test("a read that failed or is unfinished is not kept, so the next render reads again", async () => {
+        sendFiles(5, 1, { ext: "pdf", mimeType: "application/pdf" });
+        extract.mockRejectedValueOnce(new Error("invented parser crash"));
+        extract.mockResolvedValueOnce(null);
+        extract.mockResolvedValueOnce({ text: "", truncated: false, noExtractor: true });
+        extract.mockResolvedValueOnce({
+          text: "Native page text",
+          truncated: false,
+          extra: { ocrIncomplete: true },
+        } satisfies ExtractionResult);
+        extract.mockResolvedValue({ text: "Every page read", truncated: false });
+        const source = mediaSource();
+        let result = await source.sync(null);
+        for (let pass = 1; pass <= 5; pass++) {
+          sendText(5, `Follow-up ${pass}`);
+          result = await source.sync(result.cursor);
+        }
+        expect(extract).toHaveBeenCalledTimes(5);
+        expect(children(result.documents).map((d) => d.content)).toEqual(["Every page read"]);
+        source.dispose();
+      });
+
+      test("a resync keeps what files gave, across source instances", async () => {
+        sendFiles(5, 2);
+        const first = mediaSource({ configDir: tmpDir });
+        await first.sync(null);
+        first.dispose();
+        expect(extract).toHaveBeenCalledTimes(2);
+
+        const second = mediaSource({ configDir: tmpDir });
+        const resynced = await second.sync(null);
+        expect(children(resynced.documents)).toHaveLength(2);
+        expect(extract).toHaveBeenCalledTimes(2);
+        second.dispose();
+      });
+    });
+
+    describe("one file, one child", () => {
+      test("a message joined to two chats of one conversation renders once, with one child", async () => {
+        // Messages keeps a chat row per service for the same handle; a message
+        // joined to both comes back from the chat join once per chat.
+        insertChat(testDb, 4, CHAT, { handleIds: [3], service: "SMS" });
+        sendFiles(5);
+        testDb
+          .prepare("INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)")
+          .run(4, nextRowId - 1);
+        sendText(5, "Sent from the trailhead");
+        testDb
+          .prepare("INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)")
+          .run(4, nextRowId - 1);
+
+        const source = mediaSource();
+        const first = await source.sync(null);
+        expect(parents(first.documents)).toEqual([dayKey(5)]);
+        const parent = first.documents.find((d) => d.externalId === dayKey(5))!;
+        expect(parent.content.split("Sent from the trailhead")).toHaveLength(2);
+        expect(parent.metadata.extra?.messageCount).toBe(2);
+        const photos = children(first.documents);
+        expect(photos).toHaveLength(1);
+        expect(photos[0]!.externalId).not.toMatch(/:1$/);
+        expect(first.presentExternalIds?.sort()).toEqual(
+          first.documents.map((d) => d.externalId).sort(),
+        );
+        expect(extract).toHaveBeenCalledTimes(1);
+
+        const second = await source.sync(first.cursor);
+        expect(second.documents).toEqual([]);
+        source.dispose();
+      });
+
+      test("the same photo sent twice is two attachments, each with its own child and thumbnail", async () => {
+        // Two messages, two attachment rows, identical name and size: what
+        // Messages holds, so both stay, told apart by their seq.
+        const at = dateToImessageNs(new Date(Date.UTC(2024, 0, 5, 10)));
+        for (const rowId of [200, 201]) {
+          const path = join(mediaDir, `IMG_${rowId}.HEIC`);
+          writeFileSync(path, "invented identical photo");
+          insertMessage(testDb, rowId, 3, {
+            handleId: 3,
+            date: at + (rowId - 200) * 60e9,
+            hasAttachments: true,
+          });
+          insertAttachment(testDb, rowId, rowId, {
+            filename: path,
+            mimeType: "image/heic",
+            transferName: "IMG_4021.HEIC",
+            totalBytes: 2048,
+          });
+        }
+        const sink = fakePreviewSink();
+        const source = mediaSource({ previews: sink });
+        const result = await source.sync(null);
+        await sink.settled();
+        await new Promise((resolve) => setImmediate(resolve));
+        const photos = children(result.documents);
+        expect(photos.map((d) => d.title)).toEqual(["IMG_4021.HEIC", "IMG_4021.HEIC"]);
+        const ids = photos.map((d) => d.externalId).sort();
+        expect(ids[1]).toBe(`${ids[0]}:1`);
+        expect(new Set(photos.map((d) => d.metadata.sourceUrl)).size).toBe(2);
+        expect(sink.offers.map((o) => o.externalId).sort()).toEqual(ids);
+        source.dispose();
+      });
+    });
+
+    describe("media backfill", () => {
+      test("re-renders older days with media, newest first, a share per pass, until none are left", async () => {
+        for (let day = 1; day <= 30; day++) sendFiles(day);
+        const source = mediaSource();
+        const legacy = await legacyCursor(source);
+        expect(extract).toHaveBeenCalledTimes(30);
+
+        const first = await source.sync(legacy);
+        const newest = Array.from({ length: MAX_MEDIA_BACKFILL_DAYS_PER_PASS }, (_, i) =>
+          dayKey(30 - i),
+        );
+        expect(parents(first.documents)).toEqual(newest);
+        expect(children(first.documents)).toHaveLength(MAX_MEDIA_BACKFILL_DAYS_PER_PASS);
+        expect(
+          children(first.documents).every((d) =>
+            newest.includes(d.metadata.extra?.parentExternalId as string),
+          ),
+        ).toBe(true);
+        // The snapshot is unchanged, and no file is read again.
+        expect(first.presentExternalIds).toBeUndefined();
+        expect(extract).toHaveBeenCalledTimes(30);
+        expect(backfillOf(first.cursor)).toEqual({
+          version: IMESSAGE_MEDIA_RENDER_VERSION,
+          before: dayKey(6),
+        });
+
+        const second = await source.sync(first.cursor);
+        expect(parents(second.documents)).toEqual([5, 4, 3, 2, 1].map(dayKey));
+        expect(backfillOf(second.cursor)).toEqual({ version: IMESSAGE_MEDIA_RENDER_VERSION });
+
+        const third = await source.sync(second.cursor);
+        expect(third.documents).toEqual([]);
+        expect(backfillOf(third.cursor)).toEqual({ version: IMESSAGE_MEDIA_RENDER_VERSION });
+        source.dispose();
+      });
+
+      test("an earlier rendering version walks again from the newest day", async () => {
+        for (let day = 1; day <= 3; day++) sendFiles(day);
+        const source = mediaSource();
+        const { cursor } = await source.sync(null);
+        const older = {
+          ...(cursor as AppleIMessageSyncCursor),
+          mediaBackfill: { version: IMESSAGE_MEDIA_RENDER_VERSION - 1, before: dayKey(2) },
+        };
+        const result = await source.sync(older);
+        expect(parents(result.documents)).toEqual([3, 2, 1].map(dayKey));
+        expect(backfillOf(result.cursor)).toEqual({ version: IMESSAGE_MEDIA_RENDER_VERSION });
+        source.dispose();
+      });
+
+      test("a pass stops taking days once they hold enough files, but always takes one", async () => {
+        const perDay = MAX_MEDIA_BACKFILL_ATTACHMENTS_PER_PASS - 10;
+        for (let day = 1; day <= 3; day++) sendFiles(day, perDay);
+        sendFiles(4, MAX_MEDIA_BACKFILL_ATTACHMENTS_PER_PASS * 2);
+        const source = mediaSource();
+        const legacy = await legacyCursor(source);
+
+        // The largest day alone exceeds the bound, and still goes through.
+        const first = await source.sync(legacy);
+        expect(parents(first.documents)).toEqual([dayKey(4)]);
+        const second = await source.sync(first.cursor);
+        expect(parents(second.documents)).toEqual([dayKey(3), dayKey(2)]);
+        const third = await source.sync(second.cursor);
+        expect(parents(third.documents)).toEqual([dayKey(1)]);
+        expect(backfillOf(third.cursor)).toEqual({ version: IMESSAGE_MEDIA_RENDER_VERSION });
+        source.dispose();
+      });
+
+      test("a new bootstrap starts with nothing to backfill", async () => {
+        for (let day = 1; day <= 3; day++) sendFiles(day);
+        const source = mediaSource();
+        const first = await source.sync(null);
+        expect(backfillOf(first.cursor)).toEqual({ version: IMESSAGE_MEDIA_RENDER_VERSION });
+        const second = await source.sync(first.cursor);
+        expect(second.documents).toEqual([]);
+        source.dispose();
+      });
+
+      test("new messages sync at once while the backfill is underway, which resumes on a quiet pass", async () => {
+        for (let day = 1; day <= 30; day++) sendFiles(day);
+        const source = mediaSource();
+        const first = await source.sync(await legacyCursor(source));
+        expect(backfillOf(first.cursor)?.before).toBe(dayKey(6));
+
+        sendText(31, "Landed safely");
+        const second = await source.sync(first.cursor);
+        expect(parents(second.documents)).toEqual([dayKey(31)]);
+        expect(second.documents[0]!.content).toContain("Landed safely");
+        expect(backfillOf(second.cursor)).toEqual(backfillOf(first.cursor));
+
+        const third = await source.sync(second.cursor);
+        expect(parents(third.documents)).toEqual([5, 4, 3, 2, 1].map(dayKey));
+        expect(backfillOf(third.cursor)).toEqual({ version: IMESSAGE_MEDIA_RENDER_VERSION });
+        source.dispose();
+      });
+
+      test("days the backfill re-renders have their thumbnails offered", async () => {
+        for (let day = 1; day <= 3; day++) sendFiles(day);
+        // Synced by a collector that made no thumbnails.
+        const legacy = await legacyCursor(mediaSource());
+        const sink = fakePreviewSink();
+        const source = mediaSource({ previews: sink });
+        const result = await source.sync(legacy);
+        await sink.settled();
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(sink.offers.map((o) => o.externalId).sort()).toEqual(
+          children(result.documents)
+            .map((d) => d.externalId)
+            .sort(),
+        );
+        expect(sink.offers).toHaveLength(3);
+        source.dispose();
+      });
+
+      test("nothing is backfilled while attachment extraction is off", async () => {
+        for (let day = 1; day <= 3; day++) sendFiles(day);
+        const off = new AppleIMessageSource(provider, {
+          sourceId: "apple-imessage:test@icloud.com",
+          providerId: "apple:test@icloud.com",
+          attachmentConfig: resolveAttachmentConfig({ extractAttachments: false }),
+        });
+        const legacy = await legacyCursor(off);
+        const result = await off.sync(legacy);
+        expect(result.documents).toEqual([]);
+        expect(backfillOf(result.cursor)).toBeUndefined();
+      });
     });
   });
 });
