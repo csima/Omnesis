@@ -8,6 +8,7 @@ import { AudioUnreadableError, resolveAttachmentConfig } from "@omnesis/core";
 import { SourceId, ProviderId, SyncError } from "@omnesis/types";
 import { AppleProvider } from "./provider.js";
 import { AppleIMessageSource } from "./imessage.js";
+import { addContact, createAddressBook, renameContact } from "./testing/address-book-fixture.js";
 import type { AttachmentExtractFn, AudioTranscribeFn } from "@omnesis/core";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
@@ -243,6 +244,8 @@ describe("AppleIMessageSource", () => {
       notesDbPath: join(tmpDir, "nonexistent.sqlite"),
       remindersDirPath: join(tmpDir, "nonexistent-dir"),
       imessageDbPath: dbPath,
+      // Never the Mac's real address book, whatever host runs the tests.
+      contactsDirPath: join(tmpDir, "nonexistent-address-book"),
       accountId: "test@icloud.com",
     });
     await provider.initialize();
@@ -392,6 +395,7 @@ describe("AppleIMessageSource", () => {
       notesDbPath: join(tmpDir, "nonexistent-notes-replica"),
       remindersDirPath: join(tmpDir, "nonexistent-reminders-replica"),
       imessageDbPath: replicaPath,
+      contactsDirPath: join(tmpDir, "nonexistent-address-book-replica"),
       accountId: "test@icloud.example",
     });
     const extractAttachment: AttachmentExtractFn = async () => ({
@@ -2124,6 +2128,189 @@ describe("AppleIMessageSource", () => {
         "+14085550123:2024-03-08",
         "+14085550123:2024-03-09",
       ]);
+    });
+  });
+
+  describe("contact names", () => {
+    const handle = "+15550100123";
+    let addressBook: Db;
+    let namedProvider: AppleProvider;
+    let named: AppleIMessageSource;
+
+    beforeEach(async () => {
+      const contactsDir = join(tmpDir, "AddressBook");
+      mkdirSync(contactsDir);
+      addressBook = createAddressBook(join(contactsDir, "AddressBook-v22.abcddb"));
+      insertHandle(testDb, 3, handle);
+      insertChat(testDb, 3, handle, { handleIds: [3] });
+      namedProvider = new AppleProvider({
+        notesDbPath: join(tmpDir, "nonexistent.sqlite"),
+        remindersDirPath: join(tmpDir, "nonexistent-dir"),
+        imessageDbPath: join(tmpDir, "chat.db"),
+        contactsDirPath: contactsDir,
+        accountId: "test@icloud.com",
+      });
+      await namedProvider.initialize();
+      named = new AppleIMessageSource(namedProvider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+      });
+    });
+
+    afterEach(async () => {
+      addressBook.close();
+      await namedProvider.disconnect();
+    });
+
+    function dayNs(day: number, hour = 0, minute = 42): number {
+      return dateToImessageNs(new Date(Date.UTC(2026, 10, day, hour, minute)));
+    }
+
+    test("titles, transcript lines and the participant carry the contact's name", async () => {
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+1 555 010 0123"],
+      });
+      addContact(addressBook, 2, {
+        firstName: "Jamie",
+        lastName: "Lopez",
+        emails: ["friend@example.com"],
+      });
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(20) });
+      insertMessage(testDb, 2, 3, { text: "No problem", isFromMe: true, date: dayNs(20, 0, 43) });
+      insertMessage(testDb, 3, 2, { text: "Chapter four", handleId: 2, date: dayNs(20, 18, 5) });
+
+      const result = await named.sync(null);
+      const oneToOne = result.documents.find((d) => d.externalId === `${handle}:2026-11-20`)!;
+      expect(oneToOne.title).toBe("+15550100123 (Maya Reeves) — 2026-11-20");
+      expect(oneToOne.content).toContain("**00:42** +15550100123 (Maya Reeves): Running late");
+      expect(oneToOne.content).toContain("**00:43** You: No problem");
+      expect(oneToOne.metadata.people?.find((p) => !p.isSelf)?.name).toBe("Maya Reeves");
+
+      const group = result.documents.find((d) => d.externalId === "chat-group-1:2026-11-20")!;
+      expect(group.title).toBe("Family — 2026-11-20");
+      expect(group.content).toContain("**18:05** friend@example.com (Jamie Lopez): Chapter four");
+      expect(group.metadata.people?.find((p) => p.emails?.[0] === "friend@example.com")?.name).toBe(
+        "Jamie Lopez",
+      );
+    });
+
+    test("a day with no named handle keeps the signature it had before names existed", async () => {
+      addContact(addressBook, 1, {
+        firstName: "Jamie",
+        lastName: "Lopez",
+        phones: ["+15550100999"],
+      });
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(20) });
+      const plain = await source.sync(null);
+      const withBook = await named.sync(null);
+      expect(withBook.documents[0].title).toBe("+15550100123 — 2026-11-20");
+      expect(withBook.cursor).toEqual(plain.cursor);
+    });
+
+    test("a contact added or renamed later re-emits that chat's days on the next sync", async () => {
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(19) });
+      insertMessage(testDb, 2, 3, { text: "Here now", handleId: 3, date: dayNs(20) });
+      insertMessage(testDb, 3, 2, { text: "Unrelated", handleId: 2, date: dayNs(20) });
+
+      const first = await named.sync(null);
+      expect(first.documents.map((d) => d.title).sort()).toEqual([
+        "+15550100123 — 2026-11-19",
+        "+15550100123 — 2026-11-20",
+        "Family — 2026-11-20",
+      ]);
+
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      const added = await named.sync(first.cursor);
+      expect(added.documents.map((d) => d.title).sort()).toEqual([
+        "+15550100123 (Maya Reeves) — 2026-11-19",
+        "+15550100123 (Maya Reeves) — 2026-11-20",
+      ]);
+
+      const unchanged = await named.sync(added.cursor);
+      expect(unchanged.documents).toEqual([]);
+
+      renameContact(addressBook, 1, { firstName: "Sarah", lastName: "Mendez" });
+      const renamed = await named.sync(unchanged.cursor);
+      expect(renamed.documents.map((d) => d.title).sort()).toEqual([
+        "+15550100123 (Sarah Mendez) — 2026-11-19",
+        "+15550100123 (Sarah Mendez) — 2026-11-20",
+      ]);
+      expect(renamed.documents[0].content).toContain("+15550100123 (Sarah Mendez): ");
+    });
+
+    test("a handle two contacts claim shows no name", async () => {
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      addContact(addressBook, 2, {
+        firstName: "Jamie",
+        lastName: "Lopez",
+        phones: ["+15550100123"],
+      });
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(20) });
+
+      const result = await named.sync(null);
+      expect(result.documents[0].title).toBe("+15550100123 — 2026-11-20");
+      expect(result.documents[0].content).toContain("**00:42** +15550100123: Running late");
+    });
+
+    test("a mass rename re-renders a bounded share of days per run, newest first", async () => {
+      const days = 203;
+      for (let i = 0; i < days; i++) {
+        insertMessage(testDb, i + 1, 3, {
+          text: `Day ${i}`,
+          handleId: 3,
+          date: dateToImessageNs(new Date(Date.UTC(2026, 0, 1 + i, 9))),
+        });
+      }
+      const first = await named.sync(null);
+      expect(first.documents).toHaveLength(days);
+
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      const second = await named.sync(first.cursor);
+      expect(second.documents).toHaveLength(200);
+      expect(second.documents.every((d) => d.title.includes("(Maya Reeves)"))).toBe(true);
+      const renderedDates = second.documents.map((d) => d.externalId.slice(-10)).sort();
+      expect(renderedDates[0]).toBe("2026-01-04");
+
+      const third = await named.sync(second.cursor);
+      expect(third.documents.map((d) => d.externalId.slice(-10)).sort()).toEqual([
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03",
+      ]);
+      expect(third.documents.every((d) => d.title.includes("(Maya Reeves)"))).toBe(true);
+
+      const fourth = await named.sync(third.cursor);
+      expect(fourth.documents).toEqual([]);
+      expect(fourth.presentExternalIds).toBeUndefined();
+    });
+
+    test("message changes are not held back by the rename bound", async () => {
+      insertMessage(testDb, 1, 3, { text: "Draft", handleId: 3, date: dayNs(20) });
+      const first = await named.sync(null);
+
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      testDb.prepare("UPDATE message SET text = ? WHERE ROWID = 1").run("Edited");
+      const second = await named.sync(first.cursor);
+      expect(second.documents).toHaveLength(1);
+      expect(second.documents[0].content).toContain("+15550100123 (Maya Reeves): Edited");
     });
   });
 });

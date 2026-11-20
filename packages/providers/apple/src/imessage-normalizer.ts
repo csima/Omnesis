@@ -88,15 +88,28 @@ export function isTapbackRemoval(type: number): boolean {
 }
 
 /**
+ * A handle as a conversation shows it: `+14155550123 (Maya Reeves)` when the
+ * Mac's Contacts name it, the bare handle otherwise.
+ */
+export function formatHandle(handle: string, name: string | undefined): string {
+  return name ? `${handle} (${name})` : handle;
+}
+
+/** A message's speaker: "You", or its handle with any contact name. */
+function speakerLabel(msg: ParsedIMessage): string {
+  return msg.isFromMe ? msg.sender : formatHandle(msg.sender, msg.senderName);
+}
+
+/**
  * Build a display name for a chat.
- * For 1-to-1: uses the contact identifier.
+ * For 1-to-1: uses the contact identifier, with its contact name when known.
  * For groups: uses the display name or "Group Chat".
  */
 export function buildChatTitle(chat: IMessageChatInfo): string {
   if (chat.isGroup) {
     return chat.displayName || "Group Chat";
   }
-  return chat.chatIdentifier;
+  return formatHandle(chat.chatIdentifier, chat.handleNames?.[chat.chatIdentifier]);
 }
 
 /**
@@ -177,7 +190,7 @@ export function normalizeDayChat(
     if (tb.tapback.action === "remove") {
       active.delete(reactionKey);
     } else {
-      active.set(reactionKey, `${tb.sender} ${label}`);
+      active.set(reactionKey, `${speakerLabel(tb)} ${label}`);
     }
   }
   for (const [targetGuid, active] of activeTapbacks) {
@@ -203,7 +216,7 @@ export function normalizeDayChat(
       }
 
       const content = parts.join("\n");
-      line = `**${time}** ${msg.sender}: ${content}`;
+      line = `**${time}** ${speakerLabel(msg)}: ${content}`;
     }
 
     lines.push(line);
@@ -277,14 +290,17 @@ export function normalizeDayChat(
 
   // For 1:1 chats, always add the other party from the chat identifier
   if (!chat.isGroup && chat.chatIdentifier) {
-    addHandleParticipant(chat.chatIdentifier, chat.displayName ?? undefined);
+    addHandleParticipant(
+      chat.chatIdentifier,
+      chat.handleNames?.[chat.chatIdentifier] ?? chat.displayName ?? undefined,
+    );
   }
 
   // For groups, add the full roster from chat_handle_join, including people
   // who were silent on this particular day.
   if (chat.isGroup) {
     for (const id of chat.participantHandles ?? []) {
-      addHandleParticipant(id);
+      addHandleParticipant(id, chat.handleNames?.[id]);
     }
   }
 
@@ -301,7 +317,9 @@ export function normalizeDayChat(
     // into `person_aliases` typed as `name`, which breaks cross-source
     // phone matching (closes apple-imessage-phone-stored-as-name-alias).
     let name: string | undefined;
-    if (msg.sender !== id) {
+    if (msg.senderName) {
+      name = msg.senderName;
+    } else if (msg.sender !== id) {
       name = msg.sender;
     } else if (
       msg.sender &&

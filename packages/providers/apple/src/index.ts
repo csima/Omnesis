@@ -395,6 +395,7 @@ export default defineProvider<AppleContext>({
           // per-account state dir would orphan the existing cache -- re-running
           // speech-to-text over every clip in it -- and silently fragment it.
           configDir: host?.configDir,
+          phoneRegion: ctx.phoneRegion,
         });
 
         return {
