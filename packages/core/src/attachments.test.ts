@@ -10,6 +10,7 @@ import {
   deriveAttachmentStableId,
   assignAttachmentSeqs,
   buildAttachmentDocument,
+  buildMediaAttachmentDocument,
   isTrivialExtraction,
   DEFAULT_MAX_SIZE_BYTES,
   DEFAULT_ATTACHMENT_TYPES,
@@ -680,5 +681,99 @@ describe("buildAttachmentDocument", () => {
       occurredAt: "2026-03-04T17:58:00.000Z",
     });
     expect(a.externalId).toBe(b.externalId);
+  });
+
+  test("sourceUrl links the attachment instead of the parent", () => {
+    const doc = buildAttachmentDocument(parent, "report.pdf", result, {
+      mimeType: "application/pdf",
+      sizeBytes: 1234,
+      sourceUrl: "https://example.com/messages/42",
+    });
+    expect(doc.metadata.sourceUrl).toBe("https://example.com/messages/42");
+    expect(doc.metadata.appUrl).toBe(parent.metadata.appUrl);
+  });
+});
+
+describe("buildMediaAttachmentDocument", () => {
+  const parent: DocumentInput = {
+    providerId: ProviderId("chat:maya@example.com"),
+    sourceId: SourceId("chat:maya@example.com"),
+    externalId: "+15550100142:2026-03-04",
+    title: "Maya Reeves — 2026-03-04",
+    content: "a day of chat",
+    contentHash: "cafef00d",
+    metadata: {
+      sourceUrl: "https://example.com/messages/first",
+      documentType: "conversation",
+      people: [
+        { role: "participant", name: "Maya Reeves", phones: ["+15550100142"] },
+        { role: "mentioned", emails: ["jamie@example.com"] },
+      ],
+    },
+    sourceCreatedAt: "2026-03-04T00:00:00.000Z",
+    sourceUpdatedAt: "2026-03-04T22:40:00.000Z",
+  };
+  const meta = {
+    mimeType: "image/heic",
+    sizeBytes: 2_400_000,
+    seq: 0,
+    occurredAt: "2026-03-04T08:12:00.000Z",
+    sourceUrl: "https://example.com/messages/42",
+    description: "Photo sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+  };
+
+  test("holds its description, low-signal, with no extracted hash", () => {
+    const doc = buildMediaAttachmentDocument(parent, "IMG_0001.HEIC", meta);
+    expect(doc.content).toBe(meta.description);
+    expect(doc.title).toBe("IMG_0001.HEIC");
+    expect(doc.metadata.lowSignal).toBe(true);
+    expect(doc.metadata.documentType).toBe("attachment");
+    // No extracted hash, so two photos described alike never earn a
+    // duplicate-content link.
+    expect("extractedContentHash" in doc).toBe(false);
+    expect(doc.metadata.extra).toEqual({
+      parentExternalId: parent.externalId,
+      originalFilename: "IMG_0001.HEIC",
+      mimeType: "image/heic",
+      sizeBytes: 2_400_000,
+    });
+  });
+
+  test("links and dates the message that carried it", () => {
+    const doc = buildMediaAttachmentDocument(parent, "IMG_0001.HEIC", meta);
+    expect(doc.metadata.sourceUrl).toBe("https://example.com/messages/42");
+    expect(doc.sourceCreatedAt).toBe("2026-03-04T08:12:00.000Z");
+    expect(doc.sourceUpdatedAt).toBe("2026-03-04T08:12:00.000Z");
+  });
+
+  test("without a sourceUrl it falls back to the parent's link", () => {
+    const { sourceUrl: _omitted, ...withoutUrl } = meta;
+    const doc = buildMediaAttachmentDocument(parent, "IMG_0001.HEIC", withoutUrl);
+    expect(doc.metadata.sourceUrl).toBe(parent.metadata.sourceUrl);
+  });
+
+  test("inherits the parent's participants but none of its mentions", () => {
+    const doc = buildMediaAttachmentDocument(parent, "IMG_0001.HEIC", meta);
+    expect(doc.metadata.people).toEqual([parent.metadata.people![0]]);
+  });
+
+  test("shares its externalId with the text child, so extraction replaces it in place", () => {
+    const media = buildMediaAttachmentDocument(parent, "scan.pdf", {
+      ...meta,
+      mimeType: "application/pdf",
+      seq: 1,
+    });
+    const text = buildAttachmentDocument(
+      parent,
+      "scan.pdf",
+      { text: "Invoice 4417 due 2026-08-30", truncated: false },
+      { ...meta, mimeType: "application/pdf", seq: 1 },
+    );
+    expect(media.externalId).toBe(text.externalId);
+    expect(media.externalId).toBe(
+      `${parent.externalId}/att/${deriveAttachmentStableId("scan.pdf", 2_400_000, "application/pdf", 1)}`,
+    );
+    expect(text.metadata.lowSignal).toBeUndefined();
+    expect(text.extractedContentHash).toBe(text.contentHash);
   });
 });

@@ -11,6 +11,8 @@ import {
   isTapbackRemoval,
   buildChatTitle,
   buildIMessageSourceUrl,
+  describeMediaAttachment,
+  mediaAttachmentNoun,
   normalizeDayChat,
 } from "./imessage-normalizer.js";
 import { appleIMessageDocumentProfile } from "./document-profiles.js";
@@ -138,6 +140,54 @@ describe("buildIMessageSourceUrl", () => {
   test("emits no link without a message to anchor on", () => {
     expect(buildIMessageSourceUrl(undefined)).toBeUndefined();
     expect(buildIMessageSourceUrl("")).toBeUndefined();
+  });
+});
+
+describe("describeMediaAttachment", () => {
+  const sent = makeMsg({
+    sender: "+15550100142",
+    contactId: "+15550100142",
+    senderName: "Maya Reeves",
+    date: new Date("2026-03-04T08:12:40Z"),
+  });
+
+  test("names the sender with their contact name, and when it was sent", () => {
+    const chat = { ...oneToOneChat, chatIdentifier: "+15550100142" };
+    expect(describeMediaAttachment(sent, "image/heic", chat)).toBe(
+      "Photo sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+    expect(describeMediaAttachment(sent, "video/quicktime", chat)).toBe(
+      "Video sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+    expect(describeMediaAttachment(sent, "application/pdf", chat)).toBe(
+      "PDF sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+  });
+
+  test("names the group a file was sent to", () => {
+    expect(describeMediaAttachment(sent, "image/jpeg", groupChat)).toBe(
+      "Photo sent by +15550100142 (Maya Reeves) in Family on 2026-03-04 at 08:12",
+    );
+  });
+
+  test("names the conversation a file the user sent went to", () => {
+    const mine = makeMsg({ isFromMe: true, sender: "You", date: sent.date });
+    const chat: IMessageChatInfo = {
+      ...oneToOneChat,
+      chatIdentifier: "+15550100142",
+      handleNames: { "+15550100142": "Maya Reeves" },
+    };
+    expect(describeMediaAttachment(mine, "image/png", chat)).toBe(
+      "Photo sent by you to +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+  });
+
+  test("only photos, videos and PDFs are media", () => {
+    expect(mediaAttachmentNoun("image/png; charset=binary")).toBe("Photo");
+    expect(mediaAttachmentNoun("VIDEO/MP4")).toBe("Video");
+    expect(mediaAttachmentNoun("application/pdf")).toBe("PDF");
+    expect(mediaAttachmentNoun("audio/x-m4a")).toBeUndefined();
+    expect(mediaAttachmentNoun("application/zip")).toBeUndefined();
   });
 });
 

@@ -12373,6 +12373,11 @@
       "reason": "invented Telegram fixture user from the CLAUDE.md example set (packages/providers/telegram/src/testing/fixtures.ts)"
     },
     {
+      "value": "Maya Reeves",
+      "paths": ["packages/core/src/attachments.test.ts"],
+      "reason": "invented sender from the CLAUDE.md example set in the attachment-document builder tests; no corpus provenance"
+    },
+    {
       "value": "This Omnesis",
       "paths": ["packages/providers/telegram/src/session-store.test.ts"],
       "reason": "sentence start in a connection-state detail string, not a name"

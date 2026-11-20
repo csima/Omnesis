@@ -9,7 +9,7 @@ import {
   loadActiveUniverse,
   loadSourceFixtureJson,
 } from "@omnesis/providers-synth-common";
-import { deriveAttachmentStableId } from "@omnesis/core";
+import { buildMediaAttachmentDocument } from "@omnesis/core";
 import { parseSourceId } from "@omnesis/types";
 import type { DocumentInput, PersonMention, ProviderId, SourceId } from "@omnesis/types";
 
@@ -175,35 +175,25 @@ export function mapChat(
     sourceCreatedAt: firstAt,
     sourceUpdatedAt: lastAt,
   };
+  // As the real source does for a file it has no text for: a child of its
+  // own whose content says what it is, who sent it and when.
   const attachmentDocuments = e.messages.flatMap((message) =>
     (message.attachments ?? []).map((attachment): DocumentInput => {
-      const stableId = deriveAttachmentStableId(
-        attachment.filename,
-        attachment.sizeBytes,
-        attachment.mimeType,
-      );
-      return {
-        sourceId: ctx.sourceId,
-        providerId: ctx.providerId,
-        externalId: `${e.externalId}/att/${stableId}`,
-        title: attachment.filename,
-        content: `${attachment.filename} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`,
-        contentHash: sha256Hex(
-          `${stableId}:${attachment.filename}:${attachment.mimeType}:${attachment.sizeBytes}`,
-        ),
-        metadata: {
-          documentType: "attachment",
-          people,
-          extra: {
-            parentExternalId: e.externalId,
-            filename: attachment.filename,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-          },
-        },
-        sourceCreatedAt: message.at,
-        sourceUpdatedAt: message.at,
-      };
+      const sender = message.from === "self" ? "you" : getPerson(message.from).name;
+      const noun =
+        attachment.mimeType === "application/pdf"
+          ? "PDF"
+          : attachment.mimeType.startsWith("video/")
+            ? "Video"
+            : attachment.mimeType.startsWith("image/")
+              ? "Photo"
+              : "Attachment";
+      return buildMediaAttachmentDocument(dayDocument, attachment.filename, {
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        occurredAt: message.at,
+        description: `${noun} sent by ${sender} on ${message.at.slice(0, 10)} at ${message.at.slice(11, 16)}`,
+      });
     }),
   );
   return [dayDocument, ...attachmentDocuments];

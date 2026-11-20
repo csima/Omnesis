@@ -47,19 +47,23 @@ interface DocMetaExtracted {
   docType: string;
   threadId: string | null;
   senderAddress: string | null;
+  lowSignal: boolean;
 }
 
 function parseDocMeta(metadataJson: string): DocMetaExtracted {
   let docType = "document";
   let threadId: string | null = null;
   let senderAddress: string | null = null;
+  let lowSignal = false;
   try {
     const m = JSON.parse(metadataJson) as {
       documentType?: string;
+      lowSignal?: unknown;
       extra?: { threadId?: string };
       people?: Array<{ role?: string } & PersonIdentifierSource>;
     };
     if (typeof m.documentType === "string") docType = m.documentType;
+    lowSignal = m.lowSignal === true;
     if (typeof m.extra?.threadId === "string") threadId = m.extra.threadId;
     if (Array.isArray(m.people)) {
       for (const p of m.people) {
@@ -77,7 +81,7 @@ function parseDocMeta(metadataJson: string): DocMetaExtracted {
   } catch {
     // ignore malformed metadata
   }
-  return { docType, threadId, senderAddress };
+  return { docType, threadId, senderAddress, lowSignal };
 }
 
 function toFilterAndGateMeta(
@@ -199,7 +203,7 @@ export function computeNearDupBatch(db: Db, config: ResolvedNearDupConfig): Near
       continue;
     }
     const parsed = parseDocMeta(doc.metadata);
-    if (!isEligibleForNearDup(parsed.docType, config.eligibleDocTypes)) {
+    if (!isEligibleForNearDup(parsed.docType, config.eligibleDocTypes, parsed.lowSignal)) {
       // Type became ineligible (e.g. algo-bump-time eligibility
       // narrowed). Wipe any leftover state and skip the verify step.
       snapshot.signatureDeletes.push(inbox.docId);
@@ -300,7 +304,10 @@ export function computeNearDupBatch(db: Db, config: ResolvedNearDupConfig): Near
         const candDoc = docFetch.get(candId);
         if (!candDoc) continue;
         candParsed = parseDocMeta(candDoc.metadata);
-        if (!isEligibleForNearDup(candParsed.docType, config.eligibleDocTypes)) continue;
+        if (
+          !isEligibleForNearDup(candParsed.docType, config.eligibleDocTypes, candParsed.lowSignal)
+        )
+          continue;
         candShingles = shingles(
           normalizeText(candDoc.content, { stripQuotes: config.algorithm.stripQuotes }),
           config.algorithm.shingleSize,
@@ -438,13 +445,15 @@ export function fetchNearDupInbox(
     // Quick metadata check — if the doc type isn't eligible, mark
     // for deletion without shipping content to the CPU pool.
     let docType = "document";
+    let lowSignal = false;
     try {
-      const m = JSON.parse(doc.metadata) as { documentType?: string };
+      const m = JSON.parse(doc.metadata) as { documentType?: string; lowSignal?: unknown };
       if (typeof m.documentType === "string") docType = m.documentType;
+      lowSignal = m.lowSignal === true;
     } catch {
       /* ignore */
     }
-    if (!isEligibleForNearDup(docType, eligible)) {
+    if (!isEligibleForNearDup(docType, eligible, lowSignal)) {
       deleteDocIds.push(inbox.docId);
       continue;
     }

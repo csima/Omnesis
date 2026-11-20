@@ -1434,6 +1434,166 @@ describe("AppleIMessageSource", () => {
       expect(morning.sourceUpdatedAt).toBe("2024-03-08T10:00:00.000Z");
     });
 
+    test("every photo and video is its own document linking to the message that sent it", async () => {
+      const photoPath = join(attTmpDir, "IMG_0001.HEIC");
+      const clipPath = join(attTmpDir, "IMG_0002.MOV");
+      const scanPath = join(attTmpDir, "receipt.png");
+      writeFileSync(photoPath, "photo bytes");
+      writeFileSync(clipPath, "video bytes");
+      writeFileSync(scanPath, "scan bytes");
+
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+        guid: "guid-photo",
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0001.HEIC",
+        totalBytes: 2048,
+      });
+      insertMessage(testDb, 2, 1, {
+        isFromMe: true,
+        date: DATE_2024_03_08_11AM,
+        hasAttachments: true,
+        guid: "guid-video",
+      });
+      insertAttachment(testDb, 2, 2, {
+        filename: clipPath,
+        mimeType: "video/quicktime",
+        transferName: "IMG_0002.MOV",
+        totalBytes: 4096,
+      });
+      insertAttachment(testDb, 3, 2, {
+        filename: scanPath,
+        mimeType: "image/png",
+        transferName: "receipt.png",
+        totalBytes: 512,
+      });
+
+      // The photo holds no text, the scan does; the video is never read.
+      mockExtract = vi.fn(async (data: Uint8Array) =>
+        Buffer.from(data).toString() === "scan bytes"
+          ? { text: "Invoice 4417 total 120.00 due 2026-08-30", truncated: false }
+          : { text: "", truncated: false, noText: true as const },
+      );
+      const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
+
+      expect(mockExtract).toHaveBeenCalledTimes(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const children = result.documents.filter((d) => d.metadata.documentType === "attachment");
+      expect(children).toHaveLength(3);
+      const byTitle = new Map(children.map((d) => [d.title, d]));
+
+      expect(byTitle.get("IMG_0001.HEIC")).toMatchObject({
+        content: "Photo sent by +14085550123 on 2024-03-08 at 10:00",
+        sourceCreatedAt: "2024-03-08T10:00:00.000Z",
+        metadata: { sourceUrl: "messages://open?message-guid=guid-photo", lowSignal: true },
+      });
+      expect(byTitle.get("IMG_0002.MOV")).toMatchObject({
+        content: "Video sent by you to +14085550123 on 2024-03-08 at 11:00",
+        sourceCreatedAt: "2024-03-08T11:00:00.000Z",
+        metadata: { sourceUrl: "messages://open?message-guid=guid-video", lowSignal: true },
+      });
+      // Extracted text keeps the text builder, and links to its own message
+      // rather than to the day's first one.
+      const scan = byTitle.get("receipt.png")!;
+      expect(scan.content).toBe("Invoice 4417 total 120.00 due 2026-08-30");
+      expect(scan.extractedContentHash).toBe(scan.contentHash);
+      expect(scan.metadata.lowSignal).toBeUndefined();
+      expect(scan.metadata.sourceUrl).toBe("messages://open?message-guid=guid-video");
+      expect(parent.metadata.sourceUrl).toBe("messages://open?message-guid=guid-photo");
+
+      // Every child is named by its marker, by id, and listed in the snapshot.
+      const infos = parent.metadata.extra?.attachments as Array<{
+        filename: string;
+        attachmentId?: string;
+      }>;
+      for (const child of children) {
+        const info = infos.find((i) => i.filename === child.title)!;
+        expect(child.externalId).toBe(`${parent.externalId}/att/${info.attachmentId}`);
+        expect(result.presentExternalIds).toContain(child.externalId);
+      }
+      expect(result.presentExternalIds).toHaveLength(4);
+    });
+
+    test("same-named photos keep their ids as the day grows", async () => {
+      const first = join(attTmpDir, "a", "image.jpg");
+      const second = join(attTmpDir, "b", "image.jpg");
+      mkdirSync(join(attTmpDir, "a"));
+      mkdirSync(join(attTmpDir, "b"));
+      writeFileSync(first, "same size");
+      writeFileSync(second, "same size");
+
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: first,
+        mimeType: "image/jpeg",
+        transferName: "image.jpg",
+        totalBytes: 9,
+        guid: "att-first",
+      });
+      insertMessage(testDb, 2, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_11AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 2, 2, {
+        filename: second,
+        mimeType: "image/jpeg",
+        transferName: "image.jpg",
+        totalBytes: 9,
+        guid: "att-second",
+      });
+
+      const noText = vi.fn(async () => ({ text: "", truncated: false, noText: true as const }));
+      const attSource = createAttSource(noText as AttachmentExtractFn);
+      const before = await attSource.sync(null);
+      const idsBefore = new Map(
+        before.documents
+          .filter((d) => d.metadata.documentType === "attachment")
+          .map((d) => [d.metadata.sourceUrl, d.externalId]),
+      );
+      expect(idsBefore.size).toBe(2);
+      expect(new Set(idsBefore.values()).size).toBe(2);
+
+      // A later message on the same day adds a video and a third copy.
+      const clip = join(attTmpDir, "clip.mp4");
+      writeFileSync(clip, "video");
+      insertMessage(testDb, 3, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_11AM + 60_000_000_000,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 3, 3, {
+        filename: clip,
+        mimeType: "video/mp4",
+        transferName: "clip.mp4",
+        totalBytes: 5,
+      });
+      insertAttachment(testDb, 4, 3, {
+        filename: second,
+        mimeType: "image/jpeg",
+        transferName: "image.jpg",
+        totalBytes: 9,
+        guid: "att-third",
+      });
+
+      const after = await attSource.sync(before.cursor);
+      const children = after.documents.filter((d) => d.metadata.documentType === "attachment");
+      expect(children).toHaveLength(4);
+      for (const [url, id] of idsBefore) {
+        expect(children.find((d) => d.metadata.sourceUrl === url)?.externalId).toBe(id);
+      }
+      for (const child of children) expect(after.presentExternalIds).toContain(child.externalId);
+    });
+
     test("snapshot reconciliation includes extracted attachment child documents", async () => {
       const pdfPath = join(attTmpDir, "brief.pdf");
       writeFileSync(pdfPath, "fake pdf content");
@@ -1484,11 +1644,16 @@ describe("AppleIMessageSource", () => {
       }));
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const first = await attSource.sync(null);
-      expect(first.documents).toHaveLength(1);
+      expect(first.documents).toHaveLength(2);
       expect(mockExtract).not.toHaveBeenCalled();
-      expect(first.documents[0].metadata.extra?.attachments).toEqual([
+      const parent = first.documents.find((d) => d.metadata.documentType === "conversation")!;
+      expect(parent.metadata.extra?.attachments).toEqual([
         expect.objectContaining({ filename: "late.pdf", reason: "download-failed" }),
       ]);
+      // Not on disk yet, so a description stands in for its text.
+      const placeholder = first.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(placeholder.metadata.lowSignal).toBe(true);
+      expect(placeholder.extractedContentHash).toBeUndefined();
 
       writeFileSync(pdfPath, "now local");
 
@@ -1497,6 +1662,9 @@ describe("AppleIMessageSource", () => {
       expect(mockExtract).toHaveBeenCalledOnce();
       const attachmentDoc = second.documents.find((d) => d.metadata.documentType === "attachment");
       expect(attachmentDoc?.content).toBe("Late extracted text");
+      // The extracted text replaces the description in place.
+      expect(attachmentDoc?.externalId).toBe(placeholder.externalId);
+      expect(attachmentDoc?.metadata.lowSignal).toBeUndefined();
     });
 
     test("skips extraction when disabled (default config)", async () => {
@@ -1537,16 +1705,22 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
-      expect(result.documents).toHaveLength(1);
-      const doc = result.documents[0];
-      expect(doc.metadata.documentType).toBe("conversation");
+      expect(result.documents).toHaveLength(2);
+      const doc = result.documents.find((d) => d.metadata.documentType === "conversation")!;
       const atts = doc.metadata.extra?.attachments as any[];
       expect(atts).toBeDefined();
       expect(atts[0].reason).toBe("download-failed");
       expect(mockExtract).not.toHaveBeenCalled();
+      // The PDF is offloaded, not gone: it is still its own document.
+      const child = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(child.title).toBe("report.pdf");
+      expect(child.content).toBe("PDF sent by +14085550123 on 2024-03-08 at 10:00");
+      expect(child.metadata.sourceUrl).toBe("messages://open?message-guid=msg-1");
+      expect(child.externalId).toBe(`${doc.externalId}/att/${atts[0].attachmentId}`);
+      expect(result.presentExternalIds).toContain(child.externalId);
     });
 
-    test("skips unsupported MIME types", async () => {
+    test("a video becomes a described child without being read", async () => {
       const clipPath = join(attTmpDir, "clip.mp4");
       writeFileSync(clipPath, "fake video");
 
@@ -1567,9 +1741,54 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
+      expect(atts[0].reason).toBe("type-excluded");
+      expect(atts[0].attachmentId).toBeDefined();
+      expect(mockExtract).not.toHaveBeenCalled();
+      const video = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(video).toMatchObject({
+        title: "clip.mp4",
+        content: "Video sent by +14085550123 on 2024-03-08 at 10:00",
+        sourceCreatedAt: "2024-03-08T10:00:00.000Z",
+        metadata: {
+          sourceUrl: "messages://open?message-guid=msg-1",
+          lowSignal: true,
+          extra: { parentExternalId: parent.externalId, mimeType: "video/mp4", sizeBytes: 5000 },
+        },
+      });
+      expect(video.extractedContentHash).toBeUndefined();
+      // The parent keeps its plain marker; the link lives on the child only.
+      expect(parent.content).toContain("[Video: clip.mp4]");
+      expect(parent.content).not.toContain("messages://");
+    });
+
+    test("skips unsupported MIME types", async () => {
+      const zipPath = join(attTmpDir, "bundle.zip");
+      writeFileSync(zipPath, "fake archive");
+
+      insertMessage(testDb, 1, 1, {
+        text: "Archive",
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: zipPath,
+        mimeType: "application/zip",
+        transferName: "bundle.zip",
+        totalBytes: 5000,
+      });
+
+      mockExtract = vi.fn(async () => ({ text: "text", pages: 1, truncated: false }));
+      const attSource = createAttSource(mockExtract as AttachmentExtractFn);
+      const result = await attSource.sync(null);
+
       expect(result.documents).toHaveLength(1);
       const atts = result.documents[0].metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("type-excluded");
+      expect(atts[0].attachmentId).toBeUndefined();
       expect(mockExtract).not.toHaveBeenCalled();
     });
 
@@ -1594,10 +1813,14 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
-      expect(result.documents).toHaveLength(1);
-      const atts = result.documents[0].metadata.extra?.attachments as any[];
+      // Too large to read, but still a PDF someone sent: described, not read.
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("too-large");
       expect(mockExtract).not.toHaveBeenCalled();
+      const child = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(child.content).toBe("PDF sent by +14085550123 on 2024-03-08 at 10:00");
     });
 
     test("handles null mimeType", async () => {
@@ -1727,7 +1950,7 @@ describe("AppleIMessageSource", () => {
       expect(convDoc.content).toContain("1KB");
     });
 
-    test("extraction failure logged and skipped", async () => {
+    test("extraction failure falls back to a described child", async () => {
       const pdfPath = join(attTmpDir, "bad.pdf");
       writeFileSync(pdfPath, "corrupt");
 
@@ -1748,14 +1971,16 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
-      expect(result.documents).toHaveLength(1);
-      expect(result.documents[0].metadata.documentType).toBe("conversation");
-      const atts = result.documents[0].metadata.extra?.attachments as any[];
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("extraction-failed");
       expect(atts[0].extracted).toBe(false);
+      const child = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(child.metadata.lowSignal).toBe(true);
     });
 
-    test("records successful OCR with no text without creating an attachment document", async () => {
+    test("a photo whose OCR finds no text becomes a described child", async () => {
       const imagePath = join(attTmpDir, "blank.png");
       writeFileSync(imagePath, "image data");
       insertMessage(testDb, 1, 1, {
@@ -1776,13 +2001,22 @@ describe("AppleIMessageSource", () => {
       );
       const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
 
-      expect(result.documents).toHaveLength(1);
-      const atts = result.documents[0].metadata.extra?.attachments as any[];
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0]).toMatchObject({
         filename: "blank.png",
         extracted: false,
         reason: "no-text",
       });
+      const photo = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(photo).toMatchObject({
+        title: "blank.png",
+        content: "Photo sent by +14085550123 on 2024-03-08 at 10:00",
+        externalId: `${parent.externalId}/att/${atts[0].attachmentId}`,
+        metadata: { sourceUrl: "messages://open?message-guid=msg-1", lowSignal: true },
+      });
+      expect(photo.extractedContentHash).toBeUndefined();
     });
   });
 
