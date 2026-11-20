@@ -32,6 +32,23 @@ export interface AppleIMessageSyncCursor extends Record<string, unknown> {
    * name can be told apart from one whose messages changed.
    */
   lastDaySignatures?: Record<string, string>;
+  /**
+   * How far the re-rendering of older day-chats that hold photos, videos or
+   * PDFs has got. A day rendered before `version` lacks what a later
+   * rendering adds (its media children, their thumbnails), so the source
+   * re-renders such days a share at a time, newest first. `before` is the
+   * last day-chat re-rendered: the walk resumes with the days older than it.
+   * Without `before` at the current version the walk is done; a missing field
+   * or an older version starts it again from the newest day. A sync from no
+   * cursor renders every day afresh, so it starts done.
+   */
+  mediaBackfill?: IMessageMediaBackfill;
+}
+
+/** See `AppleIMessageSyncCursor.mediaBackfill`. */
+export interface IMessageMediaBackfill {
+  version: number;
+  before?: string;
 }
 
 export function isAppleIMessageSyncCursor(v: unknown): v is AppleIMessageSyncCursor {
@@ -46,6 +63,12 @@ export function isAppleIMessageSyncCursor(v: unknown): v is AppleIMessageSyncCur
     for (const [k, v] of Object.entries(c.lastDaySignatures as Record<string, unknown>)) {
       if (typeof k !== "string" || typeof v !== "string") return false;
     }
+  }
+  if (c.mediaBackfill !== undefined) {
+    const backfill = c.mediaBackfill as Record<string, unknown> | null;
+    if (!backfill || typeof backfill !== "object") return false;
+    if (typeof backfill.version !== "number") return false;
+    if (backfill.before !== undefined && typeof backfill.before !== "string") return false;
   }
   return true;
 }
@@ -72,6 +95,8 @@ export interface RawIMessage {
   replyToGuid: string | null;
   threadOriginatorGuid: string | null;
   groupTitle: string | null;
+  /** The chat row this message was read through; a message can be in several. */
+  chatRowId: number | null;
   chatIdentifier: string;
   chatDisplayName: string | null;
   /**

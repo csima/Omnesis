@@ -111,6 +111,57 @@ describe("IMessageTranscriptCache", () => {
     assertUnreadable(path);
   });
 
+  test("keeps what an attachment read found, encrypted, while the file and text limit are unchanged", async () => {
+    const path = await encryptedHome();
+    const cache = new IMessageTranscriptCache(tmpDir);
+    cache.setExtraction("scan", 2048, 1234, 50_000, {
+      text: "Invented receipt total 42.00",
+      truncated: false,
+      pages: 1,
+      extra: { ocr: true },
+    });
+    cache.setExtraction("blank", 512, 99, 50_000, {
+      text: "",
+      truncated: false,
+      noText: true,
+    });
+    assertUnreadable(path);
+    cache.close();
+    const reopened = new IMessageTranscriptCache(tmpDir);
+    try {
+      expect(reopened.getExtraction("scan", 2048, 1234, 50_000)).toEqual({
+        text: "Invented receipt total 42.00",
+        truncated: false,
+        pages: 1,
+        extra: { ocr: true },
+      });
+      expect(reopened.getExtraction("blank", 512, 99, 50_000)).toEqual({
+        text: "",
+        truncated: false,
+        noText: true,
+      });
+      // Another size, mtime or text limit is another read.
+      expect(reopened.getExtraction("scan", 2049, 1234, 50_000)).toBeUndefined();
+      expect(reopened.getExtraction("scan", 2048, 1235, 50_000)).toBeUndefined();
+      expect(reopened.getExtraction("scan", 2048, 1234, 10_000)).toBeUndefined();
+      expect(reopened.getExtraction("unknown", 2048, 1234, 50_000)).toBeUndefined();
+      // A newer read replaces the entry.
+      reopened.setExtraction("scan", 4096, 2000, 50_000, { text: "Retaken", truncated: false });
+      expect(reopened.getExtraction("scan", 2048, 1234, 50_000)).toBeUndefined();
+      expect(reopened.getExtraction("scan", 4096, 2000, 50_000)?.text).toBe("Retaken");
+      // Forgetting unreadable clips, as a resync does, keeps every extraction.
+      reopened.forgetUnreadable();
+      expect(reopened.getExtraction("blank", 512, 99, 50_000)?.noText).toBe(true);
+    } finally {
+      reopened.close();
+    }
+    assertUnreadable(path);
+    for (const entry of readdirSync(join(tmpDir!, "apple-imessage"))) {
+      const bytes = readFileSync(join(tmpDir!, "apple-imessage", entry));
+      expect(bytes.includes(Buffer.from("Invented receipt"))).toBe(false);
+    }
+  });
+
   test("schedules failed clips on a backoff, keyed to their day, and settles them on a transcript", () => {
     const cache = new IMessageTranscriptCache();
     try {

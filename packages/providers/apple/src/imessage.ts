@@ -65,6 +65,7 @@ import type { DocumentInput, SyncIssue } from "@omnesis/types";
 import type { AppleProvider } from "./provider.js";
 import type {
   AppleIMessageSyncCursor,
+  IMessageMediaBackfill,
   RawIMessage,
   RawIMessageAttachment,
   ParsedIMessage,
@@ -97,6 +98,26 @@ const MAX_RENAMED_DAYS_PER_RUN = 200;
  * and later passes take the next share.
  */
 const MAX_PREVIEW_OFFERS_PER_PASS = 100;
+/**
+ * The version of how a day-chat renders its photos, videos and PDFs. Days an
+ * existing cursor rendered under an earlier version are re-rendered by the
+ * media backfill (see `backfillMediaDays`); bump it when a rendering change
+ * must reach days already synced.
+ */
+export const IMESSAGE_MEDIA_RENDER_VERSION = 1;
+/**
+ * Day-chats the media backfill re-renders per sync pass, newest first. Over
+ * twelve thousand day-chats on a long-used Mac, so the rest follow on later
+ * passes.
+ */
+export const MAX_MEDIA_BACKFILL_DAYS_PER_PASS = 25;
+/**
+ * The media backfill also stops taking days once those it took hold this many
+ * photos, videos and PDFs: a file never read before costs an OCR call of most
+ * of a second, and one trip's day can hold hundreds. The first day is always
+ * taken, so a large day cannot stall the walk.
+ */
+export const MAX_MEDIA_BACKFILL_ATTACHMENTS_PER_PASS = 50;
 /**
  * Separates a day signature's message part from its contact-names part. A day
  * with no named handle has no names part, so its signature is what it was
@@ -135,6 +156,8 @@ interface IMessageDaySnapshot {
   externalIds: string[];
   daySignatures: Record<string, string>;
   signature: string;
+  /** Day-chats holding a photo, video or PDF that becomes a child, with how many. */
+  mediaDays: Map<string, number>;
 }
 
 interface IMessageSnapshotReconciliation {
@@ -142,6 +165,7 @@ interface IMessageSnapshotReconciliation {
   presentExternalIds?: string[];
   snapshotSignature?: string;
   daySignatures?: Record<string, string>;
+  mediaBackfill?: IMessageMediaBackfill;
 }
 
 /**
@@ -288,6 +312,8 @@ export class AppleIMessageSource {
   /** Opened on the first offer, so a source without previews opens nothing. */
   private previewLedger?: IMessagePreviewLedger;
   private previewLedgerFailed = false;
+  /** Set once the sidecar would not open for the extraction cache; reads go uncached. */
+  private extractionCacheFailed = false;
   /** The media documents this sync pass wrote, collected as its days are built. */
   private previewCandidates: PreviewCandidate[] = [];
 
@@ -342,6 +368,11 @@ export class AppleIMessageSource {
     this.previewCandidates = [];
     if (state === null && this.previews) this.getPreviewLedger()?.clear();
 
+    // A sync from no cursor renders every day as this version does, so it has
+    // nothing to backfill.
+    const mediaBackfill: IMessageMediaBackfill | undefined =
+      state === null ? { version: IMESSAGE_MEDIA_RENDER_VERSION } : state.mediaBackfill;
+
     // Convert dataCutoff to iMessage nanosecond timestamp for filtering
     const cutoffNs = this.dataCutoff ? isoToImessageNs(this.dataCutoff) : null;
 
@@ -368,17 +399,26 @@ export class AppleIMessageSource {
     // Fetch new messages since last sync (no date filter — the bump above
     // handles the bulk skip; the post-fetch affectedDays filter catches
     // any anomalous high-ROWID-old-date rows from a backup restore).
-    const rows = this.fetchMessageRows(db, "WHERE m.ROWID > ? ORDER BY m.ROWID ASC LIMIT ?", [
-      effectiveLastRowId,
-      PAGE_SIZE + 1,
-    ]);
+    // The page is counted in rows as read, before a message read through two
+    // chats of one conversation is taken once, so a page cut short by that
+    // still reports that more follow.
+    const rows = this.fetchMessageRows(
+      db,
+      "WHERE m.ROWID > ? ORDER BY m.ROWID ASC LIMIT ?",
+      [effectiveLastRowId, PAGE_SIZE + 1],
+      { asRead: true },
+    );
 
     const hasMore = rows.length > PAGE_SIZE;
-    const pageRows = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
+    const pageRows = oncePerConversation(hasMore ? rows.slice(0, PAGE_SIZE) : rows);
 
     if (pageRows.length === 0) {
-      const { documents, presentExternalIds, snapshotSignature, daySignatures } =
-        await this.reconcileSnapshot(db, cutoffNs, state, new Set<string>());
+      // Only a pass that read no new message takes a share of the media
+      // backfill, so a pass carrying new messages is never held up by it.
+      const reconciled = await this.reconcileSnapshot(db, cutoffNs, state, new Set<string>(), {
+        progress: mediaBackfill,
+      });
+      const { documents, presentExternalIds, snapshotSignature, daySignatures } = reconciled;
       this.offerPreviews(db, true);
       return {
         documents,
@@ -392,6 +432,7 @@ export class AppleIMessageSource {
           lastRowId: effectiveLastRowId,
           lastSnapshotSignature: snapshotSignature,
           lastDaySignatures: daySignatures,
+          mediaBackfill: reconciled.mediaBackfill,
         } satisfies AppleIMessageSyncCursor,
         hasMore: false,
         progress: imessageProgress(isBootstrap ? "bootstrap" : "incremental", 0),
@@ -558,6 +599,7 @@ export class AppleIMessageSource {
         cycleQueueTotal: hasMore ? totalMessages : undefined,
         lastSnapshotSignature: snapshotSignature,
         lastDaySignatures: daySignatures,
+        mediaBackfill,
       } satisfies AppleIMessageSyncCursor,
       hasMore,
       progress: imessageProgress(
@@ -609,10 +651,15 @@ export class AppleIMessageSource {
     return this.schemaColumns;
   }
 
+  /**
+   * Message rows joined to their chat, once per message and conversation
+   * (`oncePerConversation`), or every joined row with `asRead`.
+   */
   private fetchMessageRows(
     db: Db,
     whereClause: string,
     params: ReadonlyArray<number | string>,
+    opts: { asRead?: boolean } = {},
   ): RawIMessage[] {
     const columns = this.getSchemaColumns(db);
     const sql = `SELECT
@@ -640,6 +687,7 @@ export class AppleIMessageSource {
           columns.threadOriginatorGuid ? "m.thread_originator_guid" : "NULL"
         } as threadOriginatorGuid,
         ${columns.groupTitle ? "m.group_title" : "NULL"} as groupTitle,
+        c.ROWID as chatRowId,
         c.chat_identifier as chatIdentifier,
         c.display_name as chatDisplayName,
         c.style as chatStyle,
@@ -655,7 +703,8 @@ export class AppleIMessageSource {
         GROUP BY chat_id
       ) hc ON hc.chat_id = c.ROWID
       ${whereClause}`;
-    return db.prepare(sql).all(...params) as RawIMessage[];
+    const rows = db.prepare(sql).all(...params) as RawIMessage[];
+    return opts.asRead ? rows : oncePerConversation(rows);
   }
 
   /**
@@ -986,6 +1035,7 @@ export class AppleIMessageSource {
 
     const daySignatures: Record<string, string> = {};
     const externalIds: string[] = [];
+    const mediaDays = new Map<string, number>();
     for (const [key, parts] of Array.from(dayParts.entries()).sort(([a], [b]) =>
       a.localeCompare(b),
     )) {
@@ -996,9 +1046,12 @@ export class AppleIMessageSource {
         : contentSignature;
       externalIds.push(key);
       if (this.attachmentConfig.enabled) {
-        externalIds.push(
-          ...this.enumerateAttachmentExternalIdsForDay(key, dayRows.get(key) ?? [], attMap),
-        );
+        const entries = this.collectEligibleAttachmentEntries(dayRows.get(key) ?? [], attMap);
+        externalIds.push(...enumerateAttachmentExternalIdsForDay(key, entries));
+        const media = entries.filter(
+          (entry) => mediaAttachmentNoun(entry.mimeType) !== undefined,
+        ).length;
+        if (media > 0) mediaDays.set(key, media);
       }
     }
     externalIds.sort();
@@ -1009,7 +1062,7 @@ export class AppleIMessageSource {
         .join("\n") + `\nids\n${externalIds.join("\n")}`,
     );
 
-    return { externalIds, daySignatures, signature };
+    return { externalIds, daySignatures, signature, mediaDays };
   }
 
   /**
@@ -1021,12 +1074,17 @@ export class AppleIMessageSource {
    * Days renamed beyond this run's share keep their previous signature, and
    * the snapshot signature is left unset, so the next run compares again and
    * takes the next share.
+   *
+   * With `mediaBackfill`, the run also takes a share of the media backfill
+   * from where its `progress` left off and returns where it got to; without
+   * it, it returns no progress, for the caller to carry what it had.
    */
   private async reconcileSnapshot(
     db: Db,
     cutoffNs: number | null,
     state: AppleIMessageSyncCursor | null,
     emittedDayKeys: Set<string>,
+    mediaBackfill?: { progress: IMessageMediaBackfill | undefined },
   ): Promise<IMessageSnapshotReconciliation> {
     const documents: DocumentInput[] = [];
     const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
@@ -1066,7 +1124,86 @@ export class AppleIMessageSource {
         emittedDayKeys,
       )),
     );
-    return { documents, presentExternalIds, snapshotSignature, daySignatures };
+    const backfill = mediaBackfill
+      ? await this.backfillMediaDays(
+          db,
+          cutoffNs,
+          newSnapshot.mediaDays,
+          mediaBackfill.progress,
+          emittedDayKeys,
+        )
+      : undefined;
+    if (backfill) documents.push(...backfill.documents);
+    return {
+      documents,
+      presentExternalIds,
+      snapshotSignature,
+      daySignatures,
+      mediaBackfill: backfill?.mediaBackfill,
+    };
+  }
+
+  /**
+   * Re-render a share of the day-chats holding a photo, video or PDF that an
+   * earlier rendering version left without what this one adds — their media
+   * children, and through those the thumbnails the normal offer path makes —
+   * newest first, resuming after `progress.before`. A share is at most
+   * `MAX_MEDIA_BACKFILL_DAYS_PER_PASS` days and stops early once its days hold
+   * `MAX_MEDIA_BACKFILL_ATTACHMENTS_PER_PASS` attachments. A day this pass
+   * already wrote counts as walked without being rendered again. Text a file
+   * gave before is reused from the sidecar, so only a file never read is read.
+   *
+   * The days are rendered exactly as any changed day is: the snapshot and the
+   * day signatures are left as they are.
+   */
+  private async backfillMediaDays(
+    db: Db,
+    cutoffNs: number | null,
+    mediaDays: ReadonlyMap<string, number>,
+    progress: IMessageMediaBackfill | undefined,
+    alreadyEmitted: Set<string>,
+  ): Promise<{ documents: DocumentInput[]; mediaBackfill?: IMessageMediaBackfill }> {
+    // Nothing becomes a child while extraction is off, so nothing is owed yet.
+    if (!this.attachmentConfig.enabled) return { documents: [], mediaBackfill: progress };
+    const resuming = progress?.version === IMESSAGE_MEDIA_RENDER_VERSION ? progress : undefined;
+    if (resuming && resuming.before === undefined)
+      return { documents: [], mediaBackfill: resuming };
+    const before = resuming?.before;
+    const remaining = [...mediaDays.keys()]
+      .filter((key) => before === undefined || compareDayKeysNewestFirst(key, before) > 0)
+      .sort(compareDayKeysNewestFirst);
+
+    const documents: DocumentInput[] = [];
+    let days = 0;
+    let attachments = 0;
+    let walked = 0;
+    for (const key of remaining) {
+      if (days >= MAX_MEDIA_BACKFILL_DAYS_PER_PASS) break;
+      if (attachments >= MAX_MEDIA_BACKFILL_ATTACHMENTS_PER_PASS) break;
+      walked++;
+      if (alreadyEmitted.has(key)) continue;
+      const parsed = parseDayExternalId(key);
+      if (!parsed) continue;
+      documents.push(
+        ...(await this.buildDayDocuments(db, parsed.chatIdentifier, parsed.date, null, cutoffNs)),
+      );
+      alreadyEmitted.add(key);
+      days++;
+      attachments += mediaDays.get(key) ?? 0;
+    }
+    const left = remaining.length - walked;
+    if (days > 0 || left === 0) {
+      log.info(
+        `Re-rendered ${days} older day-chats with photos, videos or PDFs; ${left === 0 ? "none left" : `${left} to go`}`,
+      );
+    }
+    return {
+      documents,
+      mediaBackfill:
+        left === 0
+          ? { version: IMESSAGE_MEDIA_RENDER_VERSION }
+          : { version: IMESSAGE_MEDIA_RENDER_VERSION, before: remaining[walked - 1] },
+    };
   }
 
   /**
@@ -1096,7 +1233,7 @@ export class AppleIMessageSource {
         changed.push(key);
       }
     }
-    renamed.sort((a, b) => b.slice(-10).localeCompare(a.slice(-10)) || a.localeCompare(b));
+    renamed.sort(compareDayKeysNewestFirst);
     const deferred = renamed.slice(MAX_RENAMED_DAYS_PER_RUN);
 
     const documents: DocumentInput[] = [];
@@ -1161,31 +1298,6 @@ export class AppleIMessageSource {
       this.configDir !== undefined &&
       existsSync(join(this.configDir, "apple-imessage", "transcripts.db"))
     );
-  }
-
-  private enumerateAttachmentExternalIdsForDay(
-    parentExternalId: string,
-    rows: ReadonlyArray<RawIMessage>,
-    attMap: Map<number, RawIMessageAttachment[]>,
-  ): string[] {
-    const entries = this.collectEligibleAttachmentEntries(rows, attMap);
-    return assignAttachmentSeqs(
-      entries,
-      (entry) => ({
-        filename: entry.filename,
-        sizeBytes: entry.raw.totalBytes,
-        mimeType: entry.mimeType,
-      }),
-      (entry) => `${entry.raw.guid ?? ""}:${entry.raw.attachmentRowId}`,
-    ).map(({ item, seq }) => {
-      const stableId = deriveAttachmentStableId(
-        item.filename,
-        item.raw.totalBytes,
-        item.mimeType,
-        seq,
-      );
-      return `${parentExternalId}/att/${stableId}`;
-    });
   }
 
   private collectEligibleAttachmentEntries(
@@ -1686,6 +1798,12 @@ export class AppleIMessageSource {
    * backend could make (`noExtractor`), settles that there is nothing to read.
    * The recorded reason for the latter stays `extraction-failed`, as it was
    * before the extractor could tell the two apart.
+   *
+   * What a read found — text, or no text — is kept in the sidecar against the
+   * file's size and mtime, so rendering the day again reuses it rather than
+   * reading (and OCRing) the unchanged file again. A failed read, a read no
+   * backend could make and a PDF whose scanned pages still await OCR are not
+   * kept, so each is read again on the next render.
    */
   private async readAttachment(
     att: RawIMessageAttachment,
@@ -1695,21 +1813,30 @@ export class AppleIMessageSource {
   ): Promise<AttachmentReadOutcome> {
     const filePath = att.filename ? resolveAttachmentPath(att.filename) : null;
     if (!filePath) return { kind: "read-failed", reason: "download-failed" };
-    if (!existsSync(filePath)) {
+    let file: { size: number; mtimeMs: number };
+    try {
+      file = statSync(filePath);
+    } catch {
       log.debug(`Attachment file not found: ${filePath}`);
       return { kind: "read-failed", reason: "download-failed" };
     }
 
+    const maxTextLength = this.attachmentConfig.maxTextLength;
+    const guid = att.guid;
+    const cache = guid ? this.extractionCache() : undefined;
+    const cached = guid
+      ? cache?.getExtraction(guid, file.size, file.mtimeMs, maxTextLength)
+      : undefined;
+    if (cached) {
+      return cached.noText
+        ? { kind: "nothing-to-read", reason: "no-text" }
+        : { kind: "text", result: cached };
+    }
+
+    let result: ExtractionResult | null;
     try {
       const data = new Uint8Array(await readFile(filePath));
-      const result = await extract(data, mimeType, {
-        maxTextLength: this.attachmentConfig.maxTextLength,
-        reportUnconfigured: true,
-      });
-      if (!result) return { kind: "read-failed", reason: "extraction-failed" };
-      if (result.noExtractor) return { kind: "nothing-to-read", reason: "extraction-failed" };
-      if (result.noText) return { kind: "nothing-to-read", reason: "no-text" };
-      return { kind: "text", result };
+      result = await extract(data, mimeType, { maxTextLength, reportUnconfigured: true });
     } catch (err) {
       // Transient extraction-backend blip → fail the page so it retries,
       // rather than recording a permanent extraction failure and advancing
@@ -1720,7 +1847,64 @@ export class AppleIMessageSource {
       );
       return { kind: "read-failed", reason: "extraction-failed" };
     }
+    if (!result) return { kind: "read-failed", reason: "extraction-failed" };
+    if (result.noExtractor) return { kind: "nothing-to-read", reason: "extraction-failed" };
+    if (guid && cache && result.extra?.ocrIncomplete !== true) {
+      cache.setExtraction(guid, file.size, file.mtimeMs, maxTextLength, result);
+    }
+    if (result.noText) return { kind: "nothing-to-read", reason: "no-text" };
+    return { kind: "text", result };
   }
+
+  /**
+   * The sidecar that keeps what attachment reads found, or `undefined` when
+   * it will not open (its encryption key unavailable): reads then go
+   * uncached rather than failing the sync.
+   */
+  private extractionCache(): IMessageTranscriptCache | undefined {
+    if (this.extractionCacheFailed) return undefined;
+    try {
+      return this.getTranscriptCache();
+    } catch (err) {
+      this.extractionCacheFailed = true;
+      log.warn(
+        `Could not open the attachment text cache; attachments are read afresh: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+  }
+}
+
+/** The child ids a day-chat's eligible attachments get, numbered as `extractAttachments` numbers them. */
+function enumerateAttachmentExternalIdsForDay(
+  parentExternalId: string,
+  entries: ReadonlyArray<IMessageAttachmentEntry>,
+): string[] {
+  return assignAttachmentSeqs(
+    entries,
+    (entry) => ({
+      filename: entry.filename,
+      sizeBytes: entry.raw.totalBytes,
+      mimeType: entry.mimeType,
+    }),
+    (entry) => `${entry.raw.guid ?? ""}:${entry.raw.attachmentRowId}`,
+  ).map(({ item, seq }) => {
+    const stableId = deriveAttachmentStableId(
+      item.filename,
+      item.raw.totalBytes,
+      item.mimeType,
+      seq,
+    );
+    return `${parentExternalId}/att/${stableId}`;
+  });
+}
+
+/**
+ * Orders day-chat keys (`<chat>:YYYY-MM-DD`) newest day first, and by key
+ * within a day.
+ */
+function compareDayKeysNewestFirst(a: string, b: string): number {
+  return b.slice(-10).localeCompare(a.slice(-10)) || a.localeCompare(b);
 }
 
 /** An attachment's key in the preview ledger: its GUID, or its row for one without. */
@@ -1741,6 +1925,32 @@ function lookupAttachment(db: Db, key: string): RawIMessageAttachment | null {
     )
     .get(byRow ? Number(key.slice("rowid:".length)) : key) as IMessageAttachmentRow | undefined;
   return row ? resolveIMessageAttachment(row) : null;
+}
+
+/**
+ * One row per message and conversation. Messages can keep several chat rows
+ * for one conversation — the same handle under iMessage and SMS, say — all
+ * with the same `chat_identifier`, and a message joined to more than one of
+ * them comes back once per chat. Rendered as is, the day would show the
+ * message twice and number its attachments as two files, so the child ids
+ * would no longer match the snapshot's. The row of the lowest chat ROWID is
+ * kept, so the chat's name and size do not depend on the scan's order; the
+ * rows keep the order of their first appearance.
+ */
+function oncePerConversation(rows: RawIMessage[]): RawIMessage[] {
+  const at = new Map<string, number>();
+  const kept: RawIMessage[] = [];
+  for (const row of rows) {
+    const key = `${row.rowId}\u0000${row.chatIdentifier ?? ""}`;
+    const index = at.get(key);
+    if (index === undefined) {
+      at.set(key, kept.length);
+      kept.push(row);
+    } else if ((row.chatRowId ?? Infinity) < (kept[index]!.chatRowId ?? Infinity)) {
+      kept[index] = row;
+    }
+  }
+  return kept;
 }
 
 function getMaxMessageRowId(db: Db): number {

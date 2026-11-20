@@ -28,6 +28,15 @@
  * apart, with the size and mtime it had: it is not sent again while the file
  * is unchanged, since the same bytes decode the same way. A resync forgets
  * these, so a decoder that has since improved is given another try.
+ *
+ * The same store also keeps what reading a photo, PDF or other file found:
+ * its extracted text, or that a read ran and found none. A day is rendered
+ * again whenever anything in it changes, and OCR takes most of a second per
+ * image, so an unchanged file is read once. The entry holds the file's size
+ * and mtime and the text limit it was read with; a file that changed, or a
+ * different limit, is read again. A read that failed is never kept, so it is
+ * tried again on the next render. A resync keeps these: they describe the
+ * file's bytes, which a resync does not change.
  */
 
 import { chmodSync, mkdirSync } from "node:fs";
@@ -37,6 +46,7 @@ import {
   readStorageKeySync,
   storageEncryptionRequired,
   TRANSCRIBER_UNAVAILABLE,
+  type ExtractionResult,
 } from "@omnesis/core";
 import { openTranscriptDatabase } from "./imessage-transcript-storage.js";
 
@@ -94,6 +104,8 @@ export class IMessageTranscriptCache {
   private retainUnreadableDayStmt: Database.Statement;
   private forgetUnreadableDayStmt: Database.Statement;
   private forgetAllUnreadableStmt: Database.Statement;
+  private getExtractionStmt: Database.Statement;
+  private setExtractionStmt: Database.Statement;
 
   constructor(configDir?: string) {
     this.db = this.openDb(configDir);
@@ -130,6 +142,13 @@ export class IMessageTranscriptCache {
         mtime_ms REAL
       );
       CREATE INDEX IF NOT EXISTS unreadable_clips_day ON unreadable_clips(day_key);
+      CREATE TABLE IF NOT EXISTS extracted_texts (
+        attachment_guid TEXT PRIMARY KEY,
+        size INTEGER NOT NULL,
+        mtime_ms REAL NOT NULL,
+        max_text_length INTEGER NOT NULL,
+        result TEXT NOT NULL
+      );
     `);
       this.getStmt = this.db.prepare(
         "SELECT transcript, duration_sec as durationSec, size, mtime_ms as mtimeMs FROM transcripts WHERE attachment_guid = ?",
@@ -195,6 +214,19 @@ export class IMessageTranscriptCache {
         "DELETE FROM unreadable_clips WHERE day_key = ?",
       );
       this.forgetAllUnreadableStmt = this.db.prepare("DELETE FROM unreadable_clips");
+      this.getExtractionStmt = this.db.prepare(
+        `SELECT size, mtime_ms AS mtimeMs, max_text_length AS maxTextLength, result
+         FROM extracted_texts WHERE attachment_guid = ?`,
+      );
+      this.setExtractionStmt = this.db.prepare(
+        `INSERT INTO extracted_texts (attachment_guid, size, mtime_ms, max_text_length, result)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(attachment_guid) DO UPDATE SET
+           size = excluded.size,
+           mtime_ms = excluded.mtime_ms,
+           max_text_length = excluded.max_text_length,
+           result = excluded.result`,
+      );
     } catch (error) {
       this.close();
       throw error;
@@ -349,6 +381,53 @@ export class IMessageTranscriptCache {
     return this.backlogStmt.get(TRANSCRIBER_UNAVAILABLE) as TranscriptionBacklogCounts;
   }
 
+  /**
+   * What an earlier read of the attachment's file found, while the file still
+   * has this size and mtime and is read to the same text limit: its text, or
+   * `noText` when the read found none. `undefined` on a miss.
+   */
+  getExtraction(
+    attachmentGuid: string,
+    size: number,
+    mtimeMs: number,
+    maxTextLength: number,
+  ): ExtractionResult | undefined {
+    const row = this.getExtractionStmt.get(attachmentGuid) as
+      { size: number; mtimeMs: number; maxTextLength: number; result: string } | undefined;
+    if (!row) return undefined;
+    if (row.size !== size || row.mtimeMs !== mtimeMs || row.maxTextLength !== maxTextLength) {
+      return undefined;
+    }
+    return parseExtraction(row.result);
+  }
+
+  /**
+   * Keep what a read of the attachment's file found. Only a settled answer
+   * belongs here — text, or a read that ran and found none — never a failure.
+   */
+  setExtraction(
+    attachmentGuid: string,
+    size: number,
+    mtimeMs: number,
+    maxTextLength: number,
+    result: ExtractionResult,
+  ): void {
+    const stored: ExtractionResult = {
+      text: result.text,
+      truncated: result.truncated,
+      ...(result.pages !== undefined ? { pages: result.pages } : {}),
+      ...(result.noText ? { noText: true as const } : {}),
+      ...(result.extra !== undefined ? { extra: result.extra } : {}),
+    };
+    this.setExtractionStmt.run(
+      attachmentGuid,
+      size,
+      mtimeMs,
+      maxTextLength,
+      JSON.stringify(stored),
+    );
+  }
+
   /** Close the underlying database. */
   close(): void {
     try {
@@ -358,4 +437,23 @@ export class IMessageTranscriptCache {
       // Best-effort — a double close or already-closed handle is harmless.
     }
   }
+}
+
+/** A kept extraction, or `undefined` for a row that does not read as one. */
+function parseExtraction(json: string): ExtractionResult | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const result = value as Record<string, unknown>;
+  if (typeof result.text !== "string" || typeof result.truncated !== "boolean") return undefined;
+  if (result.pages !== undefined && typeof result.pages !== "number") return undefined;
+  if (result.noText !== undefined && result.noText !== true) return undefined;
+  if (result.extra !== undefined && (!result.extra || typeof result.extra !== "object")) {
+    return undefined;
+  }
+  return result as unknown as ExtractionResult;
 }
