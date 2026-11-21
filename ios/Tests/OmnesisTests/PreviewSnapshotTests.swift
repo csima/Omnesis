@@ -7883,17 +7883,30 @@ final class PreviewSnapshotTests: XCTestCase {
 
     /// Settings → Safari in each state the pairing and its credential can be in.
     func testSafariCaptureSettingsStates() {
-        let states: [(SafariCaptureStatus, Bool, String)] = [
-            (.ready, false, "ready"),
-            (.ready, true, "whats-sent"),
-            (.preparing, false, "connecting"),
-            (.unpaired, false, "unpaired"),
+        struct SafariCase {
+            let status: SafariCaptureStatus
+            var expanded = false
+            let name: String
+        }
+        let cases = [
+            SafariCase(status: .ready, name: "ready"),
+            SafariCase(status: .ready, expanded: true, name: "whats-sent"),
+            SafariCase(status: .preparing, name: "connecting"),
+            SafariCase(status: .unpaired, name: "unpaired"),
         ]
-        for (status, expanded, name) in states {
+        for safariCase in cases {
             let form = Form {
-                SafariCaptureSettingsSection(pairing: nil, status: status, showsWhatsSent: expanded)
+                SafariCaptureSettingsSection(
+                    pairing: nil,
+                    status: safariCase.status,
+                    showsWhatsSent: safariCase.expanded
+                )
             }
-            snapshot(form, name: "safari-capture-settings-\(name)", size: CGSize(width: 393, height: 620))
+            snapshot(
+                form,
+                name: "safari-capture-settings-\(safariCase.name)",
+                size: CGSize(width: 393, height: 620)
+            )
         }
     }
 
