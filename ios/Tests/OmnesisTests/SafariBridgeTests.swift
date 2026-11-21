@@ -225,7 +225,7 @@ final class SafariBridgeTests: XCTestCase {
         XCTAssertTrue(sent.requests.isEmpty)
     }
 
-    func testAnUnreadableKeychainIsNeitherPairedNorUnpaired() async throws {
+    func testAnUnreadableKeychainIsNeitherPairedNorUnpaired() async {
         let bridge = SafariBridge(store: UnreadableStore()) { _, _ in throw URLError(.badURL) }
         let status = await bridge.respond(to: ["type": "status"])
         XCTAssertNil(status["paired"], "the extension drops its queue on an unpaired answer")
@@ -299,13 +299,33 @@ final class SafariBridgeTests: XCTestCase {
 private struct UnreadableStore: PairingStore {
     struct Locked: Error {}
 
-    func set(_: String, forKey _: String) throws { throw Locked() }
-    func get(_: String) throws -> String? { throw Locked() }
-    func getLegacySynchronizable(_: String) throws -> String? { throw Locked() }
-    func hasLegacySynchronizableValues() throws -> Bool { throw Locked() }
-    func deleteLegacySynchronizableValues() throws { throw Locked() }
-    func delete(_: String) throws { throw Locked() }
-    func deleteAll() throws { throw Locked() }
+    func set(_: String, forKey _: String) throws {
+        throw Locked()
+    }
+
+    func get(_: String) throws -> String? {
+        throw Locked()
+    }
+
+    func getLegacySynchronizable(_: String) throws -> String? {
+        throw Locked()
+    }
+
+    func hasLegacySynchronizableValues() throws -> Bool {
+        throw Locked()
+    }
+
+    func deleteLegacySynchronizableValues() throws {
+        throw Locked()
+    }
+
+    func delete(_: String) throws {
+        throw Locked()
+    }
+
+    func deleteAll() throws {
+        throw Locked()
+    }
 }
 
 private final class Recorder: @unchecked Sendable {

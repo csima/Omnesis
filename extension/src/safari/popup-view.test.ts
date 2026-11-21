@@ -115,6 +115,15 @@ describe("popupModel", () => {
     ).toBe("Saving pages you read");
   });
 
+  it("does not repeat a page's out-of-date word on a pause or an exclusion", () => {
+    for (const reason of ["paused", "excluded-domain"] as const) {
+      expect(
+        popupModel(paired, "https://news.example.org/story", NOW, { state: "excluded", reason })
+          .headline,
+      ).toBe("Saving pages you read");
+    }
+  });
+
   it("counts one waiting page in the singular and names a recent save", () => {
     const model = popupModel(
       { ...paired, queued: 1, lastCapturedAt: NOW - 60_000 },

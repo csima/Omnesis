@@ -389,6 +389,48 @@ describe("capture", () => {
     expect(alarms.has(SAFARI_DRAIN_ALARM), "and none once nothing waits").toBe(false);
   });
 
+  it("sends pages held by a refused credential once the app has replaced it", async () => {
+    await background.start();
+    app.credentialRefused = true;
+    const item = await emission("https://news.example.org/story", "Snow above the tree line.");
+    expect(await ask<CaptureAck>(await captureMessage(item))).toEqual({ ok: true, accepted: true });
+    await settled();
+    expect(app.delivered("/documents")).toEqual([]);
+    expect(await ask<SafariPopupAck>({ type: "safari-status" }, popup)).toMatchObject({
+      ok: true,
+      status: { refused: true, queued: 2 },
+    });
+
+    app.credentialRefused = false;
+    clock += 1_000;
+    expect(
+      await ask<SafariPopupAck>({ type: "safari-status" }, popup),
+      "opening the popup asks the gateway again",
+    ).toMatchObject({ ok: true, status: { refused: false } });
+    await settled();
+    expect(app.delivered("/documents")).toHaveLength(1);
+    expect(app.delivered("/analytics/ingest")).toHaveLength(1);
+  });
+
+  it("asks about a refused credential again as pages load, a few seconds apart", async () => {
+    await background.start();
+    app.credentialRefused = true;
+    const item = await emission("https://news.example.org/story", "Snow above the tree line.");
+    await ask<CaptureAck>(await captureMessage(item));
+    await settled();
+
+    app.credentialRefused = false;
+    clock += 5_000;
+    await ask({ type: "safari-sync" });
+    await settled();
+    expect(app.delivered("/documents"), "too soon after the refusal").toEqual([]);
+
+    clock += 15_000;
+    await ask({ type: "safari-sync" });
+    await settled();
+    expect(app.delivered("/documents")).toHaveLength(1);
+  });
+
   it("takes a capture a page staged before a stopped background could accept it", async () => {
     const item = await emission("https://news.example.org/story", "Snow above the tree line.");
     const message = await captureMessage(item);

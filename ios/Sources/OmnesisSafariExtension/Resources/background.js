@@ -1987,6 +1987,7 @@
   var SAFARI_PAIRING_SYNCED_KEY = "omnesis.safari.pairingSyncedAt.v1";
   var PAIRING_SYNC_INTERVAL_MS = 6e4;
   var UNPAIRED_SYNC_INTERVAL_MS = 5e3;
+  var REFUSED_RECHECK_INTERVAL_MS = 15e3;
   var NATIVE_CREDENTIAL_PLACEHOLDER = "native";
   function isObjectWithType(message, type) {
     return typeof message === "object" && message !== null && message.type === type;
@@ -2264,9 +2265,29 @@
         () => void 0
       );
     }
+    async function recheckRefusedWork(force) {
+      const client = await buildClient();
+      if (!client) return false;
+      const health = await client.getHealth();
+      if (!health || health.ok) return false;
+      if (!force && Math.abs(now() - health.at) < REFUSED_RECHECK_INTERVAL_MS) return false;
+      if ((await client.probeAuth()).auth !== "ok") return false;
+      await clearPushHealth(store);
+      await client.resetBackoff();
+      return true;
+    }
+    function recheckRefused(force = false) {
+      return serializeQueueWork(() => recheckRefusedWork(force)).then(
+        (released) => {
+          if (released) void drain();
+        },
+        () => void 0
+      );
+    }
     async function readStatus(opts) {
       const pairing = opts.fresh ? await syncPairing(true) : await loadPairing();
       if (!pairing) return { paired: false };
+      if (opts.fresh) await recheckRefused(true);
       const policy = await currentPolicy({ refresh: opts.fresh });
       const client = await buildClient();
       const [gatewayHost, queued, health, connectivity, recent] = await Promise.all([
@@ -2318,6 +2339,7 @@
       async start() {
         try {
           if (await syncPairing()) await currentPolicy();
+          await recheckRefused();
           await recoverPendingHandoffs();
         } catch {
         } finally {
@@ -2348,7 +2370,10 @@
         }
         if (fromPage && isObjectWithType(message, SAFARI_SYNC_MESSAGE_TYPE)) {
           respond(
-            syncPairing().then((pairing) => ({ paired: pairing !== null })),
+            syncPairing().then((pairing) => {
+              if (pairing) void recheckRefused();
+              return { paired: pairing !== null };
+            }),
             sendResponse,
             () => ({ paired: false })
           );

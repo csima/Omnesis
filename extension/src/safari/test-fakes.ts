@@ -57,6 +57,8 @@ export class FakeNativeApp {
     gatewayHost: "gateway.example.com",
   };
   online = true;
+  /** The gateway no longer accepts the credential the app holds. */
+  credentialRefused = false;
   policy = capturePolicy();
   readonly requests: NativeRequest[] = [];
   statusReads = 0;
@@ -71,6 +73,9 @@ export class FakeNativeApp {
     }
     if (!this.online) return Promise.resolve({ ok: false, reason: "network" });
     const body = message.body === undefined ? undefined : (JSON.parse(message.body) as unknown);
+    if (this.credentialRefused) {
+      return Promise.resolve({ ok: true, status: 401, body: '{"error":"unauthorized"}' });
+    }
     this.requests.push({ method: message.method, path: message.path, body });
     return Promise.resolve(this.answer(message.method, message.path, body));
   };
@@ -106,12 +111,20 @@ export class FakeNativeApp {
       };
       return ok(this.policy);
     }
-    if (method === "POST" && path === "/documents") return ok({ ingested: 1 });
+    if (method === "POST" && path === "/documents") {
+      return ok({ ingested: (body as { documents: unknown[] }).documents.length });
+    }
     if (method === "POST" && path === "/analytics/ingest") return ok({ ingested: 1, deleted: 0 });
     return { ok: false, reason: "refused" };
   }
 
+  /** Requests that carried something to store; the empty credential check is not one. */
   delivered(path: string): NativeRequest[] {
-    return this.requests.filter((request) => request.method === "POST" && request.path === path);
+    return this.requests.filter(
+      (request) =>
+        request.method === "POST" &&
+        request.path === path &&
+        (request.body as { documents?: unknown[] }).documents?.length !== 0,
+    );
   }
 }
