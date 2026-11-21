@@ -209,12 +209,15 @@ private final class ScriptedHTTP: @unchecked Sendable {
         return sent
     }
 
-    lazy var perform: SafariCaptureCredentialProvisioner.Request = { [self] request in
+    private func next(for request: URLRequest) -> (Int, String)? {
         lock.lock()
+        defer { lock.unlock() }
         sent.append(request)
-        let answer = answers.isEmpty ? nil : answers.removeFirst()
-        lock.unlock()
-        guard let answer, let url = request.url,
+        return answers.isEmpty ? nil : answers.removeFirst()
+    }
+
+    lazy var perform: SafariCaptureCredentialProvisioner.Request = { [self] request in
+        guard let answer = next(for: request), let url = request.url,
               let response = HTTPURLResponse(
                   url: url, statusCode: answer.0, httpVersion: "HTTP/1.1", headerFields: nil
               )
