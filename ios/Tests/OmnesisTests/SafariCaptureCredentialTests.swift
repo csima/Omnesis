@@ -15,7 +15,8 @@ final class SafariCaptureCredentialTests: XCTestCase {
         fingerprint: String? = String(repeating: "a", count: 64),
         tlsMode: PairingTlsMode? = nil,
         url: URL? = nil
-    ) -> Pairing {
+    )
+        -> Pairing {
         Pairing(
             url: url ?? baseURL,
             token: "omn_broad",
@@ -26,6 +27,22 @@ final class SafariCaptureCredentialTests: XCTestCase {
             scopes: ["admin", "read"],
             fingerprint: fingerprint,
             tlsMode: tlsMode
+        )
+    }
+
+    private func stored(
+        token: String,
+        tlsMode: String = "pinned-leaf",
+        fingerprint: String? = String(repeating: "a", count: 64)
+    )
+        -> SafariCaptureCredentials.StoredCredential {
+        .init(
+            url: baseURL.absoluteString,
+            token: token,
+            deviceId: "device_1",
+            generation: "tok_1",
+            tlsMode: tlsMode,
+            fingerprint: fingerprint
         )
     }
 
@@ -94,10 +111,10 @@ final class SafariCaptureCredentialTests: XCTestCase {
 
     func testRefusesAPairingWithoutAVerifiedConnectionBeforeAskingTheGateway() async throws {
         let http = ScriptedHTTP([])
-        let insecure: [Pairing] = [
+        let insecure: [Pairing] = try [
             pairing(fingerprint: nil, tlsMode: .legacy),
             pairing(fingerprint: "abc", tlsMode: .pinnedLeaf),
-            pairing(tlsMode: .system, url: URL(string: "http://gateway.example.test:17600")!),
+            pairing(tlsMode: .system, url: XCTUnwrap(URL(string: "http://gateway.example.test:17600"))),
         ]
         for pairing in insecure {
             let store = InMemoryStore()
@@ -155,14 +172,8 @@ final class SafariCaptureCredentialTests: XCTestCase {
 
     func testDiscardRemovesOnlyTheCredentialItWasGiven() throws {
         let store = InMemoryStore()
-        let old = SafariCaptureCredentials.StoredCredential(
-            url: baseURL.absoluteString, token: "omn_old", deviceId: "device_1",
-            generation: "tok_1", tlsMode: "system", fingerprint: nil
-        )
-        let new = SafariCaptureCredentials.StoredCredential(
-            url: baseURL.absoluteString, token: "omn_new", deviceId: "device_1",
-            generation: "tok_1", tlsMode: "system", fingerprint: nil
-        )
+        let old = stored(token: "omn_old", tlsMode: "system", fingerprint: nil)
+        let new = stored(token: "omn_new", tlsMode: "system", fingerprint: nil)
         try SafariCaptureCredentials.commit(new, keychain: store)
         SafariCaptureCredentials.discard(old, keychain: store)
         XCTAssertEqual(try SafariCaptureCredentials.stored(keychain: store), new)
@@ -170,13 +181,9 @@ final class SafariCaptureCredentialTests: XCTestCase {
         XCTAssertNil(try SafariCaptureCredentials.stored(keychain: store))
     }
 
-    func testStatusFollowsThePairingAndItsCredential() {
+    func testStatusFollowsThePairingAndItsCredential() throws {
         let current = pairing()
-        let matching = SafariCaptureCredentials.StoredCredential(
-            url: baseURL.absoluteString, token: "omn_web", deviceId: "device_1",
-            generation: "tok_1", tlsMode: "pinned-leaf",
-            fingerprint: String(repeating: "a", count: 64)
-        )
+        let matching = stored(token: "omn_web")
         XCTAssertEqual(SafariCaptureStatus.resolve(pairing: nil, stored: matching), .unpaired)
         XCTAssertEqual(SafariCaptureStatus.resolve(pairing: current, stored: nil), .preparing)
         XCTAssertEqual(SafariCaptureStatus.resolve(pairing: current, stored: matching), .ready)
@@ -186,8 +193,8 @@ final class SafariCaptureCredentialTests: XCTestCase {
             "a credential minted for an earlier pairing is not this pairing's"
         )
         XCTAssertEqual(
-            SafariCaptureStatus.resolve(
-                pairing: pairing(url: URL(string: "https://other.example.test")!), stored: matching
+            try SafariCaptureStatus.resolve(
+                pairing: pairing(url: XCTUnwrap(URL(string: "https://other.example.test"))), stored: matching
             ),
             .preparing
         )

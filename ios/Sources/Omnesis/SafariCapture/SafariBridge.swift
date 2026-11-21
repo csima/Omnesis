@@ -11,7 +11,8 @@ public struct SafariBridge: Sendable {
     public typealias Transport = @Sendable (
         URLRequest,
         SafariCaptureCredentials.StoredCredential
-    ) async throws -> (Data, HTTPURLResponse)
+    ) async throws
+        -> (Data, HTTPURLResponse)
 
     /// A page's text is capped far below this by the extension.
     static let maxBodyBytes = 2 * 1024 * 1024
@@ -102,7 +103,7 @@ public struct SafariBridge: Sendable {
         var reply: [String: Any] = [
             "ok": true,
             "status": response.statusCode,
-            "body": String(decoding: data, as: UTF8.self),
+            "body": String(data: data, encoding: .utf8) ?? "",
         ]
         if let retryAfter = response.value(forHTTPHeaderField: "Retry-After") {
             reply["retryAfter"] = retryAfter

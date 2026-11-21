@@ -25,7 +25,8 @@ final class SafariBridgeTests: XCTestCase {
         url: String = "https://gateway.example.test:17600",
         tlsMode: String = "pinned-leaf",
         fingerprint: String? = String(repeating: "a", count: 64)
-    ) -> SafariCaptureCredentials.StoredCredential {
+    )
+        -> SafariCaptureCredentials.StoredCredential {
         .init(
             url: url,
             token: token,
@@ -38,7 +39,8 @@ final class SafariBridgeTests: XCTestCase {
 
     private func store(
         holding credential: SafariCaptureCredentials.StoredCredential?
-    ) throws -> InMemoryStore {
+    ) throws
+        -> InMemoryStore {
         let store = InMemoryStore()
         if let credential { try SafariCaptureCredentials.commit(credential, keychain: store) }
         return store
@@ -239,7 +241,8 @@ final class SafariBridgeTests: XCTestCase {
         status: Int,
         body: String,
         headers: [String: String] = [:]
-    ) throws -> (Data, HTTPURLResponse) {
+    ) throws
+        -> (Data, HTTPURLResponse) {
         let url = try XCTUnwrap(request.url)
         let response = try XCTUnwrap(HTTPURLResponse(
             url: url,

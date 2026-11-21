@@ -20,7 +20,8 @@ public enum SafariCaptureStatus: Equatable, Sendable {
     static func resolve(
         pairing: Pairing?,
         stored: SafariCaptureCredentials.StoredCredential?
-    ) -> SafariCaptureStatus {
+    )
+        -> SafariCaptureStatus {
         guard let pairing else { return .unpaired }
         guard let stored,
               stored.baseURL != nil,
