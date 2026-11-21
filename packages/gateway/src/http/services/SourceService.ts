@@ -103,6 +103,7 @@ import {
 import { epochScope } from "../../source-write-epoch-fence.js";
 import { listSourceSyncIssues } from "../../data/repositories/SourceSyncIssueRepository.js";
 import { withActivity } from "../../observability/main-activity.js";
+import { gatewayHostedDefinitions } from "../../internal-source-descriptors.js";
 import { assertSourceJoinDiscoverable } from "./source-join-preflight.js";
 import { SourceStreamCleanupCoordinator } from "./SourceStreamCleanupCoordinator.js";
 import {
@@ -224,6 +225,11 @@ function liveHolder(holder: SyncLeaseHolder | null | undefined): DeviceId | null
   return holder && !holder.expired ? holder.deviceId : null;
 }
 
+/** The types the gateway hosts itself; their data arrives by push only. */
+const GATEWAY_HOSTED_SOURCE_TYPES: ReadonlySet<string> = new Set(
+  gatewayHostedDefinitions().map((definition) => String(definition.id)),
+);
+
 /**
  * Whether a device may host a source of this type. A collector hosts every
  * type unless it advertises `hostableSourceTypes`, in which case only those.
@@ -241,14 +247,16 @@ export function deviceCanHostType(device: DeviceRecord, sourceType: SourceType):
 
 /**
  * Whether a source's data only ever arrives by push, with nothing behind it
- * that a sync command makes re-read a store: a browser extension holds no
- * archive of the pages it captured, and a collector-hosted push source has an
- * inert `sync()` — an external runtime pushes its data. A phone pushes too,
- * but re-reads its own store when told to sync, so its sources are not
- * push-only. Wiping a push-only source is unrecoverable, so a resync of one
- * is refused.
+ * that a sync command makes re-read a store: a source the gateway hosts itself
+ * is fed by clients that hold no archive of what they captured, whichever
+ * device its row names; a browser extension holds none either; and a
+ * collector-hosted push source has an inert `sync()` — an external runtime
+ * pushes its data. A phone pushes too, but re-reads its own store when told to
+ * sync, so the sources it reads from the phone are not push-only. Wiping a
+ * push-only source is unrecoverable, so a resync of one is refused.
  */
 function isPushOnly(host: DeviceRecord, sourceType: SourceType): boolean {
+  if (GATEWAY_HOSTED_SOURCE_TYPES.has(sourceType)) return true;
   if (host.kind === "browser") return true;
   if (host.kind !== "collector") return false;
   return (host.capabilities.pushBasedSourceTypes ?? []).includes(sourceType);
