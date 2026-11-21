@@ -743,6 +743,15 @@ export interface SourceDefinition<
    */
   conversational?: boolean;
   /**
+   * Whether this source makes a preview image for some of its documents — a
+   * thumbnail of a photo, the first frame of a video, the first page of a
+   * PDF. A source that declares it is lent `host.previews`, through which it
+   * offers each preview after the document is written; the gateway keeps
+   * previews only from a collector whose descriptors declare this for the
+   * source's type. Defaults to false.
+   */
+  documentPreviews?: boolean;
+  /**
    * Self-identity hook — declares how this source's account id maps to the
    * self LID alias its normalizer emits, so the gateway resolves the source's
    * self-authored PersonMentions to the canonical self person without
@@ -980,6 +989,8 @@ export interface ProviderSourceEntry<
   urlTargetRole?: "fallback" | "reference";
   /** See `SourceDefinition.conversational`. Set per-source within a provider. */
   conversational?: boolean;
+  /** See `SourceDefinition.documentPreviews`. Set per-source within a provider. */
+  documentPreviews?: boolean;
   /** See `SourceDefinition.selfIdentity`. Set per-source within a provider. */
   selfIdentity?: SelfIdentitySpec;
   /**

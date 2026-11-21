@@ -55,6 +55,8 @@ import type {
   IngestAnalyticsResponse,
   UpsertWithCursorResponse,
   PendingStructuredPage,
+  DocumentPreviewUpload,
+  DocumentPreviewUploadResult,
 } from "@omnesis/source-sdk";
 import type { DocumentInput, AccountId, SourceId, SourceType, ProviderId } from "@omnesis/types";
 import type {
@@ -140,6 +142,41 @@ function parseRetryAfterMs(header: string | null): number | undefined {
   if (!header) return undefined;
   const seconds = Number(header);
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+}
+
+/** How long one preview upload may take before it counts as a transient failure. */
+const PREVIEW_UPLOAD_TIMEOUT_MS = 60_000;
+
+/** Codes for a gateway that keeps no previews for this source at all. */
+const PREVIEWS_UNSUPPORTED_CODES = new Set(["PREVIEWS_UNAVAILABLE", "PREVIEWS_NOT_ACCEPTED"]);
+
+/**
+ * What a preview upload's refusal means for the uploader. Exported for its
+ * table test; the client is the only caller.
+ */
+export function classifyPreviewUploadResponse(
+  status: number,
+  code: string | undefined,
+  retryAfterMs?: number,
+): DocumentPreviewUploadResult {
+  if (status >= 200 && status < 300) return { outcome: "stored" };
+  if (status === 404) {
+    // Any other 404 is a gateway that predates the route.
+    return code === "PREVIEW_DOCUMENT_NOT_FOUND"
+      ? { outcome: "not-found" }
+      : { outcome: "unsupported", code };
+  }
+  if (status === 409 && code !== undefined && PREVIEWS_UNSUPPORTED_CODES.has(code)) {
+    return { outcome: "unsupported", code };
+  }
+  if (status === 408 || status === 429 || status >= 500 || status === 401) {
+    return {
+      outcome: "transient",
+      reason: `gateway answered ${status}${code ? ` ${code}` : ""}`,
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    };
+  }
+  return { outcome: "refused", status, code };
 }
 
 /**
@@ -619,6 +656,62 @@ export class HttpGatewayClient implements GatewayClient {
     // disabled, unsupported type, bad request). Treat as genuinely-no-content.
     log.debug(`${label} request returned ${res.status} — treating as no content`);
     return null;
+  }
+
+  /**
+   * Upload one document preview as multipart form data. Sent once: a caller
+   * that holds a queue of previews owns the retry schedule, and re-posting
+   * half a megabyte three times per blip would only add to the load on a
+   * gateway that is already struggling.
+   */
+  async putDocumentPreview(upload: DocumentPreviewUpload): Promise<DocumentPreviewUploadResult> {
+    const form = new FormData();
+    form.set("providerId", upload.providerId);
+    form.set("sourceId", upload.sourceId);
+    form.set("externalId", upload.externalId);
+    form.set("width", String(upload.width));
+    form.set("height", String(upload.height));
+    form.set("capturedAt", upload.capturedAt);
+    form.set(
+      "image",
+      new Blob([upload.bytes as unknown as BlobPart], { type: upload.contentType }),
+      "preview",
+    );
+    const path = "/documents/preview";
+    let res: Response;
+    try {
+      await this.beforeRequest?.();
+      res = await fetch(`${this.baseUrl}${path}`, {
+        redirect: "manual",
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "User-Agent": "omnesis-collector",
+        },
+        body: form,
+        signal: AbortSignal.timeout(PREVIEW_UPLOAD_TIMEOUT_MS),
+      });
+      await assertNotCloudflareAccessRefusal(`${this.baseUrl}${path}`, res);
+    } catch (err) {
+      return { outcome: "transient", reason: toErrorMessage(err) };
+    }
+    if (res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return { outcome: "stored" };
+    }
+    const code = await res
+      .json()
+      .then((body: unknown) =>
+        body && typeof body === "object" && typeof (body as { code?: unknown }).code === "string"
+          ? (body as { code: string }).code
+          : undefined,
+      )
+      .catch(() => undefined);
+    return classifyPreviewUploadResponse(
+      res.status,
+      code,
+      parseRetryAfterMs(res.headers.get("retry-after")),
+    );
   }
 
   async deleteDocuments(

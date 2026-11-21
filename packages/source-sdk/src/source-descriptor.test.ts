@@ -84,6 +84,15 @@ describe("serializeDescriptor", () => {
     ).toBe("replicated");
   });
 
+  it("declares document previews only for a source that offers them", () => {
+    const declared = serializeDescriptor(descriptor({ documentPreviews: true }));
+    expect(JSON.parse(JSON.stringify(declared)).documentPreviews).toBe(true);
+    expect(serializeDescriptor(descriptor())).not.toHaveProperty("documentPreviews");
+    expect(serializeDescriptor(descriptor({ documentPreviews: false }))).not.toHaveProperty(
+      "documentPreviews",
+    );
+  });
+
   it("serializes member-scoped params while leaving legacy params source-scoped by omission", () => {
     const serialized = serializeDescriptor(
       descriptor({

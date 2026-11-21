@@ -5,8 +5,12 @@
  * Accepting and serving document previews.
  *
  * Shared code knows nothing about where a preview comes from. A source opts in
- * by registering a {@link PreviewAdmission} for its source id; an upload for a
- * source with none is refused. The admission is the source's own rule for
+ * one of two ways. A source the gateway hosts registers a
+ * {@link PreviewAdmission} for its source id. A source a collector hosts
+ * declares `documentPreviews` in its descriptor, and an upload from that
+ * collector is admitted by the declaration (`declared-admission.ts`); a
+ * registration, where there is one, takes precedence. An upload for a source
+ * with neither is refused. The admission is the source's own rule for
  * whether this preview may be kept — a browser screenshot, for instance, only
  * while its capture policy has screenshots switched on and still allows the
  * page — and runs after the checks every preview shares: the caller may write
@@ -29,12 +33,16 @@ import {
   type PreviewContentType,
   type StoredPreviewMeta,
 } from "./store.js";
+import type { DeclaredPreviewAdmission } from "./declared-admission.js";
 import type { DeviceId, Scope } from "@omnesis/types";
 import type Database from "better-sqlite3";
 
 type Db = Database.Database;
 
 const log = createLogger("gateway").child("previews");
+
+/** The refusal code for an upload whose collector has not reported its descriptors yet. */
+export const PREVIEW_ADMISSION_PENDING = "PREVIEW_ADMISSION_PENDING";
 
 const reportedFailures = new Set<string>();
 
@@ -120,7 +128,11 @@ export interface DocumentPreviewServiceDeps {
   ) => { rejected: ReadonlyArray<{ sourceId: string; reason: string }> };
   /** The stream the caller's documents for a source live in. */
   streamFor: (sourceId: string, auth: { deviceId: DeviceId | null }) => string;
+  /** Previews a collector's descriptors declare, for sources with no registration. */
+  declared?: DeclaredPreviewAdmission;
 }
+
+const admitDeclared: PreviewAdmission = () => null;
 
 export class DocumentPreviewService {
   private readonly admissions = new Map<string, PreviewAdmission>();
@@ -141,10 +153,8 @@ export class DocumentPreviewService {
     assertExternalDocumentWrite(upload.sourceId);
     const contentType = checkImage(upload);
 
-    const admission = this.admissions.get(upload.sourceId);
-    if (!admission) {
-      throw new HttpError(409, "PREVIEWS_NOT_ACCEPTED", "This source does not keep previews");
-    }
+    const admission =
+      this.admissions.get(upload.sourceId) ?? (await this.declaredAdmission(upload.sourceId, auth));
     const rejection = this.deps.gatePush([upload.sourceId], auth).rejected[0];
     if (rejection) {
       throw new HttpError(409, "SOURCE_REJECTED", `The source is ${rejection.reason}`);
@@ -217,6 +227,23 @@ export class DocumentPreviewService {
       out.clear();
     }
     return out;
+  }
+
+  /** The declared rule for a source with no registration of its own, or a refusal. */
+  private async declaredAdmission(
+    sourceId: string,
+    auth: PreviewUploadAuth,
+  ): Promise<PreviewAdmission> {
+    const verdict = (await this.deps.declared?.check(sourceId, auth.deviceId)) ?? "not-declared";
+    if (verdict === "accepted") return admitDeclared;
+    if (verdict === "pending") {
+      throw new HttpError(
+        503,
+        PREVIEW_ADMISSION_PENDING,
+        "The collector's source descriptors have not arrived yet; try again shortly",
+      );
+    }
+    throw new HttpError(409, "PREVIEWS_NOT_ACCEPTED", "This source does not keep previews");
   }
 
   private isSuppressed(upload: PreviewUpload, streamId: string): boolean {

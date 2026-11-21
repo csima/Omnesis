@@ -2343,7 +2343,10 @@
     },
     {
       "value": "United Kingdom",
-      "paths": ["evals/universes/sacha-bellamy/_build/background-desktop.mjs"],
+      "paths": [
+        "evals/universes/sacha-bellamy/_build/background-desktop.mjs",
+        "packages/providers/apple/src/contact-names.test.ts"
+      ],
       "reason": "Reviewed original fictional demo authoring data moved from background facade without output changes; exact module path only."
     },
     {
@@ -2776,7 +2779,10 @@
         "evals/universes/immich-sync/cast.json",
         "evals/universes/immich-sync/sources/immich/fake-corpus.json",
         "packages/providers/immich/src/document-event-profile.test.ts",
-        "packages/providers/immich/src/source.test.ts"
+        "packages/providers/immich/src/source.test.ts",
+        "packages/providers/apple/src/contact-names.test.ts",
+        "packages/providers/apple/src/imessage-normalizer.test.ts",
+        "packages/providers/apple/src/imessage.test.ts"
       ],
       "reason": "Reviewed deterministic output of the original fictional universe authoring modules; fictional cast/venue/product or public title-case prose, never personal corpus data."
     },
@@ -2901,7 +2907,10 @@
         "packages/providers/immich/src/document-event-profile.test.ts",
         "packages/providers/immich/src/provider.test.ts",
         "packages/providers/immich/src/source.test.ts",
-        "packages/providers/strava/src/broker.test.ts"
+        "packages/providers/strava/src/broker.test.ts",
+        "packages/providers/apple/src/contact-names.test.ts",
+        "packages/providers/apple/src/imessage-normalizer.test.ts",
+        "packages/providers/apple/src/imessage.test.ts"
       ],
       "reason": "Reviewed deterministic output of the original fictional universe authoring modules; fictional cast/venue/product or public title-case prose, never personal corpus data."
     },
@@ -3358,7 +3367,8 @@
         "evals/universes/immich-sync/cast.json",
         "evals/universes/immich-sync/sources/immich/fake-corpus.json",
         "packages/providers/immich/src/normalizer.test.ts",
-        "packages/providers/immich/src/provider.test.ts"
+        "packages/providers/immich/src/provider.test.ts",
+        "packages/providers/apple/src/contact-names.test.ts"
       ],
       "reason": "Reviewed original fictional demo cast, invented venue/product, or public title-case prose in the named authoring module/test; no personal-corpus provenance."
     },
@@ -3790,7 +3800,8 @@
       "value": "Studio Northstar",
       "paths": [
         "evals/universes/sacha-bellamy/_build/media_test.py",
-        "packages/providers/notion/src/broker.test.ts"
+        "packages/providers/notion/src/broker.test.ts",
+        "packages/providers/apple/src/contact-names.test.ts"
       ],
       "reason": "Reviewed original fictional demo cast, invented venue/product, or public title-case prose in the named authoring module/test; no personal-corpus provenance."
     },
@@ -10321,7 +10332,9 @@
         "packages/collector/src/e2e/immich-sync.e2e.test.ts",
         "packages/providers/immich/src/document-event-profile.test.ts",
         "packages/providers/immich/src/normalizer.test.ts",
-        "packages/providers/immich/src/source.test.ts"
+        "packages/providers/immich/src/source.test.ts",
+        "packages/providers/apple/src/contact-names.test.ts",
+        "packages/providers/apple/src/imessage.test.ts"
       ],
       "reason": "reviewed existing fixture"
     },
@@ -12358,6 +12371,19 @@
         "packages/providers/telegram/src/provider.test.ts"
       ],
       "reason": "invented Telegram fixture user from the CLAUDE.md example set (packages/providers/telegram/src/testing/fixtures.ts)"
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": ["packages/core/src/attachments.test.ts"],
+      "reason": "invented sender from the CLAUDE.md example set in the attachment-document builder tests; no corpus provenance"
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": [
+        "packages/gateway/src/http/routes/document-previews.test.ts",
+        "packages/collector/src/e2e/source-previews.e2e.test.ts"
+      ],
+      "reason": "invented sender from the CLAUDE.md example set in the document-preview route and E2E tests; no corpus provenance"
     },
     {
       "value": "This Omnesis",

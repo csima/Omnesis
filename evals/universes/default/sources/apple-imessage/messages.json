@@ -145,5 +145,61 @@
       },
       { "from": "self", "at": "2025-09-14T19:02:00Z", "text": "Noted. Calendar updated." }
     ]
+  },
+  {
+    "externalId": "synth-apple-im-011",
+    "chatId": "im_carol",
+    "chatTitle": "Carol Nakamura",
+    "date": "2025-09-15",
+    "counterparty": "p_carol",
+    "messages": [
+      {
+        "from": "p_carol",
+        "guid": "SYNTH-IM-GUID-0011-A",
+        "at": "2025-09-15T06:52:00Z",
+        "text": "Sunrise over lane 3 this morning.",
+        "attachments": [
+          {
+            "filename": "track-sunrise.jpg",
+            "mimeType": "image/jpeg",
+            "sizeBytes": 2140311,
+            "previewAssetPath": "assets/imessage/track-sunrise.jpg"
+          }
+        ]
+      },
+      {
+        "from": "p_carol",
+        "guid": "SYNTH-IM-GUID-0011-B",
+        "at": "2025-09-15T07:31:00Z",
+        "text": "Your 800 splits, straight off the board.",
+        "attachments": [
+          {
+            "filename": "splits-board.jpg",
+            "mimeType": "image/jpeg",
+            "sizeBytes": 1876402,
+            "previewAssetPath": "assets/imessage/splits-board.jpg"
+          },
+          {
+            "filename": "cooldown-lap.mov",
+            "mimeType": "video/quicktime",
+            "sizeBytes": 18874368
+          }
+        ]
+      },
+      {
+        "from": "self",
+        "guid": "SYNTH-IM-GUID-0011-C",
+        "at": "2025-09-15T08:05:00Z",
+        "text": "Thanks. Here is the plan for the next six weeks.",
+        "attachments": [
+          {
+            "filename": "training-plan.pdf",
+            "mimeType": "application/pdf",
+            "sizeBytes": 96412,
+            "previewAssetPath": "assets/imessage/training-plan-page1.jpg"
+          }
+        ]
+      }
+    ]
   }
 ]

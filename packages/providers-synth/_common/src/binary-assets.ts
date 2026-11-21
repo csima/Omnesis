@@ -96,3 +96,32 @@ export function loadBinaryFixtureAssets(
     }
   });
 }
+
+/**
+ * The pixel size a JPEG says it has, read from its first start-of-frame
+ * marker, or null for bytes that are not a JPEG or carry no frame header.
+ */
+export function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 4 <= bytes.length) {
+    if (bytes[offset] !== 0xff) return null;
+    const marker = bytes[offset + 1]!;
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    const length = (bytes[offset + 2]! << 8) | bytes[offset + 3]!;
+    // SOF0–SOF15, except DHT (C4), JPG (C8) and DAC (CC), which share the range.
+    const isFrame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+    if (isFrame) {
+      if (offset + 9 > bytes.length) return null;
+      const height = (bytes[offset + 5]! << 8) | bytes[offset + 6]!;
+      const width = (bytes[offset + 7]! << 8) | bytes[offset + 8]!;
+      return width > 0 && height > 0 ? { width, height } : null;
+    }
+    if (length < 2) return null;
+    offset += 2 + length;
+  }
+  return null;
+}

@@ -33,10 +33,17 @@ export const DEFAULT_ELIGIBLE_DOC_TYPES: readonly string[] = [
   "conversation",
 ];
 
+/**
+ * A low-signal document (`metadata.lowSignal`) never takes part, whatever its
+ * type: its body is a stub — a photo's one-line description, a logo's stray
+ * OCR — and two stubs a source writes from the same template differ by a word
+ * or two, which reads as a near-duplicate of files that are not.
+ */
 export function isEligibleForNearDup(
   docType: string | null | undefined,
   eligibleTypes: ReadonlySet<string>,
+  lowSignal = false,
 ): boolean {
-  if (docType == null) return false;
+  if (docType == null || lowSignal) return false;
   return eligibleTypes.has(docType);
 }

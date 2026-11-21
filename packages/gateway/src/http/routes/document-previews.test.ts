@@ -31,7 +31,12 @@ import { createDevice } from "../../data/repositories/DeviceRepository.js";
 import { createToken } from "../../data/repositories/TokenRepository.js";
 import { isSourceCleanupPending } from "../../data/repositories/SourceRepository.js";
 import { DocumentPreviewStore, MAX_PREVIEW_BYTES } from "../../previews/store.js";
-import type { Scope } from "@omnesis/types";
+import { createDeclaredPreviewAdmission } from "../../previews/declared-admission.js";
+import {
+  CollectorDescriptorCache,
+  type CollectorDescriptorTransport,
+} from "../services/CollectorDescriptorCache.js";
+import type { DeviceId, Scope } from "@omnesis/types";
 import type Database from "better-sqlite3";
 
 type Db = Database.Database;
@@ -56,6 +61,20 @@ function cleanupDb(path: string) {
 function mintToken(kind: "browser" | "cli", scopes: readonly Scope[]): string {
   const dev = createDevice(db, { name: `test-${randomUUID()}`, kind });
   return createToken(db, dev.id, scopes).token;
+}
+
+/**
+ * What each connected collector answers `source.descriptors` with; a device
+ * absent from the map is not connected, and a pending promise never answers.
+ */
+const descriptorAnswers = new Map<string, Promise<{ descriptors: unknown[] }>>();
+
+function descriptorCache(): CollectorDescriptorCache {
+  const transport = {
+    connectionEpoch: (deviceId: string) => (descriptorAnswers.has(deviceId) ? 1 : 0),
+    sendCommand: (deviceId: string) => descriptorAnswers.get(deviceId)!,
+  } as unknown as CollectorDescriptorTransport;
+  return new CollectorDescriptorCache({ wsServer: () => transport, firstAnswerWaitMs: 20 });
 }
 
 function call(path: string, token: string | null, init: RequestInit = {}) {
@@ -155,7 +174,12 @@ beforeEach(async () => {
   store = DocumentPreviewStore.open(previewPath, null);
   analyticsDb = new AnalyticsDb(analyticsPath);
   await analyticsDb.open();
-  app = createServer(db, undefined, { analyticsDb, previewStore: store });
+  descriptorAnswers.clear();
+  app = createServer(db, undefined, {
+    analyticsDb,
+    previewStore: store,
+    collectorDescriptors: descriptorCache(),
+  });
   resetOwnedWebDomains();
   browserToken = mintToken("browser", [writeScope(SourceType("web"))]);
   readToken = mintToken("cli", [SCOPE_READ]);
@@ -499,5 +523,161 @@ describe("a gateway whose preview store is unavailable", () => {
     expect(db.prepare("SELECT 1 FROM documents WHERE id = ?").get(id)).toBeUndefined();
 
     store = DocumentPreviewStore.open(previewPath, null);
+  });
+});
+
+describe("previews a collector's source declares", () => {
+  const PHOTOS = "photos-synth:maya@example.com";
+  const PARENT = "chat-1:2026-03-04";
+  const CHILD = `${PARENT}/att/a1b2c3d4`;
+
+  function collector(descriptors: Array<Record<string, unknown>> | "never") {
+    const dev = createDevice(db, {
+      name: `collector-${randomUUID()}`,
+      kind: "collector",
+      capabilities: {
+        hostableSourceTypes: [SourceType("photos-synth")],
+        memberScopedParams: { "photos-synth": [] },
+      },
+    });
+    descriptorAnswers.set(
+      dev.id,
+      descriptors === "never" ? new Promise(() => {}) : Promise.resolve({ descriptors }),
+    );
+    return {
+      deviceId: dev.id,
+      token: createToken(db, dev.id, [writeScope(SourceType("photos-synth")), SCOPE_READ]).token,
+    };
+  }
+
+  const declaring = () =>
+    collector([
+      { id: "photos-synth", name: "Photos", documentPreviews: true },
+      { id: "notes-synth", name: "Notes" },
+    ]);
+
+  async function pushDay(token: string) {
+    const doc = (externalId: string, title: string) => ({
+      providerId: PHOTOS,
+      sourceId: PHOTOS,
+      externalId,
+      title,
+      content: `${title}, an invented record for preview tests.`,
+      contentHash: `hash-${externalId}`,
+      metadata: {},
+      sourceCreatedAt: "2026-03-04T08:12:00Z",
+      sourceUpdatedAt: "2026-03-04T08:12:00Z",
+    });
+    const res = await call("/documents", token, {
+      method: "POST",
+      body: JSON.stringify({
+        documents: [doc(PARENT, "A day of messages"), doc(CHILD, "Photo sent by Maya Reeves")],
+      }),
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+  }
+
+  function uploadAs(token: string, externalId = CHILD) {
+    const form = new FormData();
+    form.set("providerId", PHOTOS);
+    form.set("sourceId", PHOTOS);
+    form.set("externalId", externalId);
+    form.set("width", "512");
+    form.set("height", "384");
+    form.set("capturedAt", "2026-03-04T08:13:00.000Z");
+    form.set("image", new Blob([jpeg(96)], { type: "image/jpeg" }), "preview.jpg");
+    return app.request("/documents/preview", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+  }
+
+  function idOf(externalId: string): string {
+    return db
+      .prepare<[string], { id: string }>("SELECT id FROM documents WHERE external_id = ?")
+      .get(externalId)!.id;
+  }
+
+  test("are stored and carried on the document and in its parent's attachments", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const stored = await uploadAs(mac.token);
+    expect(stored.status, await stored.clone().text()).toBe(200);
+    const childId = idOf(CHILD);
+    expect(store.describe(childId)).toMatchObject({ contentType: "image/jpeg", width: 512 });
+
+    const shown = (await (await call(`/documents/${childId}`, readToken)).json()) as {
+      preview?: { url: string };
+    };
+    expect(shown.preview?.url).toBe(`/documents/${childId}/preview`);
+
+    const attachments = (await (
+      await call(`/documents/${idOf(PARENT)}/attachments`, readToken)
+    ).json()) as { attachments: Array<{ id: string; preview?: { url: string; width: number } }> };
+    expect(attachments.attachments).toHaveLength(1);
+    expect(attachments.attachments[0]).toMatchObject({
+      id: childId,
+      preview: { url: `/documents/${childId}/preview`, width: 512 },
+    });
+  });
+
+  test("an attachment without a preview carries none", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const attachments = (await (
+      await call(`/documents/${idOf(PARENT)}/attachments`, readToken)
+    ).json()) as { attachments: Array<Record<string, unknown>> };
+    expect(attachments.attachments[0]).not.toHaveProperty("preview");
+  });
+
+  test("are refused from a collector whose descriptors do not declare them", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const other = collector([{ id: "photos-synth", name: "Photos" }]);
+    const res = await uploadAs(other.token);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("PREVIEWS_NOT_ACCEPTED");
+    expect(store.count()).toBe(0);
+  });
+
+  test("are refused from a device that is not a collector", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const cli = mintToken("cli", [writeScope(SourceType("photos-synth"))]);
+    const res = await uploadAs(cli);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe("PREVIEWS_NOT_ACCEPTED");
+  });
+
+  test("wait, retriably, for a collector whose descriptors have not arrived", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const slow = collector("never");
+    const res = await uploadAs(slow.token);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    expect(((await res.json()) as { code: string }).code).toBe("PREVIEW_ADMISSION_PENDING");
+    expect(store.count()).toBe(0);
+  });
+
+  test("are 404 for a document not pushed yet", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const res = await uploadAs(mac.token, `${PARENT}/att/not-yet`);
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { code: string }).code).toBe("PREVIEW_DOCUMENT_NOT_FOUND");
+  });
+
+  test("the admission refuses no device and an unknown source, and waits on a silent collector", async () => {
+    const mac = declaring();
+    await pushDay(mac.token);
+    const slow = collector("never");
+    const admission = createDeclaredPreviewAdmission({ db, descriptors: descriptorCache() });
+    expect(await admission.check(PHOTOS, null)).toBe("not-declared");
+    expect(await admission.check(PHOTOS, undefined)).toBe("not-declared");
+    expect(await admission.check("unknown-synth:x", mac.deviceId as DeviceId)).toBe("not-declared");
+    expect(await admission.check(PHOTOS, mac.deviceId as DeviceId)).toBe("accepted");
+    expect(await admission.check(PHOTOS, slow.deviceId as DeviceId)).toBe("pending");
   });
 });

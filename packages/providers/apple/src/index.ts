@@ -356,6 +356,9 @@ export default defineProvider<AppleContext>({
       // emitted as separate attachment child-docs. iMessage only — the other
       // Apple sources are not conversation streams.
       conversational: true,
+      // Photos, videos and PDFs get a thumbnail, made on the Mac with sips and
+      // Quick Look and kept in the gateway's preview store.
+      documentPreviews: true,
       contract: {
         state: appleImessageStateSpec,
         requires: ["state-envelope"],
@@ -395,6 +398,9 @@ export default defineProvider<AppleContext>({
           // per-account state dir would orphan the existing cache -- re-running
           // speech-to-text over every clip in it -- and silently fragment it.
           configDir: host?.configDir,
+          phoneRegion: ctx.phoneRegion,
+          previews: host?.previews,
+          previewLedgerPath: host ? join(host.stateDir, "imessage-previews.db") : undefined,
         });
 
         return {

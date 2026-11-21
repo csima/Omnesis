@@ -11,6 +11,7 @@ import {
   resolveAttachmentConfig,
   shouldExtractAttachment,
   buildAttachmentDocument,
+  buildMediaAttachmentDocument,
   formatAttachmentMarkers,
   deriveAttachmentStableId,
   assignAttachmentSeqs,
@@ -23,6 +24,7 @@ import { SourceId, ProviderId, isTransientSyncError } from "@omnesis/types";
 import { unavailableStorePage } from "./store-unavailable.js";
 import { parseAttributedBody } from "./imessage-attributed-body.js";
 import { IMessageTranscriptCache } from "./imessage-transcript-cache.js";
+import { ContactNameDirectory, HandleNameIndex } from "./contact-names.js";
 import {
   imessageDateToDate,
   isoToImessageNs,
@@ -32,6 +34,9 @@ import {
   isTapbackRemoval,
   normalizeDayChat,
   imessagePersonIdentifiers,
+  buildIMessageSourceUrl,
+  describeMediaAttachment,
+  mediaAttachmentNoun,
 } from "./imessage-normalizer.js";
 import { validateAppleIMessageSyncCursor } from "./imessage-types.js";
 import {
@@ -40,13 +45,22 @@ import {
   type IMessageAttachmentRow,
 } from "./imessage-attachment-type.js";
 import { throwOnOpenFailure } from "./db-helpers/internal.js";
+import { IMessagePreviewLedger, type PreviewLedgerEntry } from "./imessage-preview-ledger.js";
+import { renderIMessageThumbnail } from "./imessage-thumbnails.js";
 import type {
   AttachmentInfo,
   AttachmentExtractionConfig,
   AttachmentExtractFn,
   AudioTranscribeFn,
+  ExtractionResult,
 } from "@omnesis/core";
-import type { SyncCursor, SyncProgress, SyncResult } from "@omnesis/source-sdk";
+import type {
+  RenderedDocumentPreview,
+  SourcePreviewSink,
+  SyncCursor,
+  SyncProgress,
+  SyncResult,
+} from "@omnesis/source-sdk";
 import type { DocumentInput, SyncIssue } from "@omnesis/types";
 import type { AppleProvider } from "./provider.js";
 import type {
@@ -69,6 +83,26 @@ const PAGE_SIZE = 500;
  * once; the rest follow on later runs so one run never renders them all.
  */
 const MAX_DUE_TRANSCRIPTION_DAYS_PER_RUN = 25;
+/**
+ * Day-chats re-rendered per run because only the contact names of their
+ * handles changed. Granting Contacts access, or the first sync after names
+ * were introduced, renames every named conversation at once; the newest days
+ * go first and the rest follow on later runs, so one run never renders them
+ * all. Days whose messages changed are not counted against this.
+ */
+const MAX_RENAMED_DAYS_PER_RUN = 200;
+/**
+ * Thumbnails offered per sync pass, newest first. A first sync of a long
+ * history finds thousands; the rest wait in the preview ledger, due at once,
+ * and later passes take the next share.
+ */
+const MAX_PREVIEW_OFFERS_PER_PASS = 100;
+/**
+ * Separates a day signature's message part from its contact-names part. A day
+ * with no named handle has no names part, so its signature is what it was
+ * before names existed.
+ */
+const DAY_SIGNATURE_NAMES_SEPARATOR = "+";
 
 // Messages' "Keep Messages" setting (30 Days / 1 Year / Forever, under
 // Settings > Messages) prunes chat.db locally and silently once it is set to
@@ -103,10 +137,38 @@ interface IMessageDaySnapshot {
   signature: string;
 }
 
+interface IMessageSnapshotReconciliation {
+  documents: DocumentInput[];
+  presentExternalIds?: string[];
+  snapshotSignature?: string;
+  daySignatures?: Record<string, string>;
+}
+
+/**
+ * What reading one attachment came to: its text; a settled answer that there
+ * is none to read, which a photo, video or PDF is described in place of; or a
+ * failed read, which emits nothing so an earlier child survives.
+ */
+type AttachmentReadOutcome =
+  | { kind: "text"; result: ExtractionResult }
+  | { kind: "nothing-to-read"; reason: AttachmentInfo["reason"] }
+  | { kind: "read-failed"; reason: AttachmentInfo["reason"] };
+
 interface IMessageAttachmentEntry {
   raw: RawIMessageAttachment;
   filename: string;
   mimeType: string;
+}
+
+/** A photo, video or PDF document this pass wrote, whose thumbnail may be offered. */
+interface PreviewCandidate {
+  key: string;
+  externalId: string;
+  dayKey: string;
+  /** The attachment's path as chat.db stores it. */
+  storedPath: string | null;
+  mimeType: string;
+  sentAtMs: number;
 }
 
 export interface AppleIMessageSourceOptions {
@@ -129,6 +191,23 @@ export interface AppleIMessageSourceOptions {
    * falls back to an in-memory cache (de-dupes within a run only).
    */
   configDir?: string;
+  /**
+   * The collector's phone region, the last hint for normalizing a contact's
+   * national-format number when matching handles to contact names.
+   */
+  phoneRegion?: string;
+  /**
+   * Where thumbnails of photos, videos and PDFs are offered (`host.previews`).
+   * Without it no thumbnail is made.
+   */
+  previews?: SourcePreviewSink;
+  /**
+   * The preview ledger's file (`<stateDir>/imessage-previews.db`); in memory
+   * when undefined.
+   */
+  previewLedgerPath?: string;
+  /** Makes one thumbnail; `renderIMessageThumbnail` unless a test supplies one. */
+  renderPreview?: (filePath: string, mimeType: string) => Promise<RenderedDocumentPreview | null>;
 }
 
 /**
@@ -196,6 +275,21 @@ export class AppleIMessageSource {
   private transcriptCache?: IMessageTranscriptCache;
   private schemaColumns?: IMessageSchemaColumns;
   private schemaColumnsDb?: Db;
+  /** The Mac's Contacts as handle → name, rebuilt only when they change. */
+  private readonly contactNames: ContactNameDirectory;
+  /** This sync pass's contact names, read once at its start. */
+  private names: HandleNameIndex = HandleNameIndex.empty;
+  private readonly previews?: SourcePreviewSink;
+  private readonly previewLedgerPath?: string;
+  private readonly renderPreview: (
+    filePath: string,
+    mimeType: string,
+  ) => Promise<RenderedDocumentPreview | null>;
+  /** Opened on the first offer, so a source without previews opens nothing. */
+  private previewLedger?: IMessagePreviewLedger;
+  private previewLedgerFailed = false;
+  /** The media documents this sync pass wrote, collected as its days are built. */
+  private previewCandidates: PreviewCandidate[] = [];
 
   constructor(
     private provider: AppleProvider,
@@ -211,6 +305,14 @@ export class AppleIMessageSource {
     this.transcribeAudio = opts.transcribeAudio;
     this.isTranscriptionVocabularyEnabled = opts.isTranscriptionVocabularyEnabled;
     this.configDir = opts.configDir;
+    this.contactNames = new ContactNameDirectory(
+      () => provider.getContactsStores(),
+      opts.phoneRegion,
+    );
+    this.previews = opts.previews;
+    this.previewLedgerPath = opts.previewLedgerPath;
+    this.renderPreview =
+      opts.renderPreview ?? ((filePath, mimeType) => renderIMessageThumbnail(filePath, mimeType));
   }
 
   async sync(cursor: SyncCursor | null): Promise<SyncResult> {
@@ -219,6 +321,7 @@ export class AppleIMessageSource {
       throwOnOpenFailure(this.provider.getIMessageOpenFailure());
       return unavailableStorePage(cursor ?? { lastRowId: 0 });
     }
+    this.names = this.contactNames.current();
 
     let state: AppleIMessageSyncCursor | null = validateAppleIMessageSyncCursor(cursor);
     const maxMessageRowId = getMaxMessageRowId(db);
@@ -235,6 +338,9 @@ export class AppleIMessageSource {
     if (state === null && this.transcribeAudio && this.hasTranscriptSidecar()) {
       this.getTranscriptCache().forgetUnreadable();
     }
+    // A resync may follow a wiped source, so every thumbnail is offered again.
+    this.previewCandidates = [];
+    if (state === null && this.previews) this.getPreviewLedger()?.clear();
 
     // Convert dataCutoff to iMessage nanosecond timestamp for filtering
     const cutoffNs = this.dataCutoff ? isoToImessageNs(this.dataCutoff) : null;
@@ -271,35 +377,9 @@ export class AppleIMessageSource {
     const pageRows = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
 
     if (pageRows.length === 0) {
-      const documents: DocumentInput[] = [];
-      const emittedDayKeys = new Set<string>();
-      const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
-      let presentExternalIds: string[] | undefined;
-      let snapshotSignature = state?.lastSnapshotSignature;
-      let daySignatures = state?.lastDaySignatures;
-      if (newSnapshot.signature !== state?.lastSnapshotSignature) {
-        presentExternalIds = newSnapshot.externalIds;
-        snapshotSignature = newSnapshot.signature;
-        documents.push(
-          ...(await this.rebuildChangedDays(
-            db,
-            cutoffNs,
-            state?.lastDaySignatures,
-            newSnapshot.daySignatures,
-            emittedDayKeys,
-            state !== null && state.lastDaySignatures === undefined,
-          )),
-        );
-        daySignatures = newSnapshot.daySignatures;
-      }
-      documents.push(
-        ...(await this.rebuildDueTranscriptionDays(
-          db,
-          cutoffNs,
-          newSnapshot.daySignatures,
-          emittedDayKeys,
-        )),
-      );
+      const { documents, presentExternalIds, snapshotSignature, daySignatures } =
+        await this.reconcileSnapshot(db, cutoffNs, state, new Set<string>());
+      this.offerPreviews(db, true);
       return {
         documents,
         deletedExternalIds: [],
@@ -385,6 +465,7 @@ export class AppleIMessageSource {
         replyToGuid: row.replyToGuid ?? undefined,
         threadOriginatorGuid: row.threadOriginatorGuid ?? undefined,
         contactId: row.contactId ?? undefined,
+        senderName: row.isFromMe ? undefined : this.names.nameFor(row.contactId),
       });
     }
 
@@ -451,40 +532,21 @@ export class AppleIMessageSource {
     // enumerate the complete current source ID set (parent day docs AND
     // attachment child docs). The same scan computes per-day content
     // signatures; if a day changed without a new ROWID (edit, unsend,
-    // tapback removal, local attachment file arrival), re-emit just that day.
+    // tapback removal, local attachment file arrival, a contact renamed in
+    // the Mac's Contacts), re-emit just that day.
     let presentExternalIds: string[] | undefined;
     let snapshotSignature = state?.lastSnapshotSignature;
     let daySignatures = state?.lastDaySignatures;
     if (!hasMore) {
-      const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
-      if (newSnapshot.signature !== state?.lastSnapshotSignature) {
-        presentExternalIds = newSnapshot.externalIds;
-        snapshotSignature = newSnapshot.signature;
-        documents.push(
-          ...(await this.rebuildChangedDays(
-            db,
-            cutoffNs,
-            state?.lastDaySignatures,
-            newSnapshot.daySignatures,
-            emittedDayKeys,
-            state !== null && state.lastDaySignatures === undefined,
-          )),
-        );
-        daySignatures = newSnapshot.daySignatures;
-      }
-      documents.push(
-        ...(await this.rebuildDueTranscriptionDays(
-          db,
-          cutoffNs,
-          newSnapshot.daySignatures,
-          emittedDayKeys,
-        )),
-      );
+      const reconciled = await this.reconcileSnapshot(db, cutoffNs, state, emittedDayKeys);
+      documents.push(...reconciled.documents);
+      ({ presentExternalIds, snapshotSignature, daySignatures } = reconciled);
     }
 
     log.info(
       `Sync produced ${documents.length} docs from ${pageRows.length} messages (${isBootstrap ? "bootstrap" : "incremental"}, hasMore: ${hasMore}, snapshot: ${presentExternalIds?.length ?? "unchanged"})`,
     );
+    this.offerPreviews(db, !hasMore);
 
     return {
       documents,
@@ -676,15 +738,42 @@ export class AppleIMessageSource {
     // Derive isGroup from `COUNT(DISTINCT handle_id)` rather than chat.style —
     // Apple's style constants flipped meaning across macOS versions.
     const isGroup = row.chatHandleCount > 1;
+    const participantHandles = isGroup
+      ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
+      : undefined;
     return {
       chatIdentifier: row.chatIdentifier,
       displayName: row.chatDisplayName,
       isGroup,
       service: row.service ?? "iMessage",
-      participantHandles: isGroup
-        ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
-        : undefined,
+      participantHandles,
+      handleNames: this.handleNames(participantHandles ?? [row.chatIdentifier]),
     };
+  }
+
+  /** The contact names of these handles, for the ones a single card names. */
+  private handleNames(handles: readonly string[]): Record<string, string> | undefined {
+    let names: Record<string, string> | undefined;
+    for (const handle of handles) {
+      const name = this.names.nameFor(handle);
+      if (name) (names ??= {})[handle] = name;
+    }
+    return names;
+  }
+
+  /**
+   * The contact-names part of a day signature: every handle the day renders
+   * or mentions that a contact names, with that name. `undefined` when none
+   * is named, so a Mac without Contacts keeps the signatures it had.
+   */
+  private namesSignature(handles: ReadonlySet<string> | undefined): string | undefined {
+    if (!handles) return undefined;
+    const named: string[] = [];
+    for (const handle of handles) {
+      const name = this.names.nameFor(handle);
+      if (name) named.push(`${handle}\u0000${name}`);
+    }
+    return named.length > 0 ? computeContentHash(named.sort().join("\n")) : undefined;
   }
 
   private async buildDayDocuments(
@@ -722,7 +811,7 @@ export class AppleIMessageSource {
       this.id,
       this.isTranscriptionVocabularyEnabled?.() === true,
     );
-    const attachmentDocs = await this.extractAttachments(doc, dayParsed, attMap);
+    const attachmentDocs = await this.extractAttachments(doc, dayParsed, attMap, info);
     return [doc, ...attachmentDocs];
   }
 
@@ -821,6 +910,7 @@ export class AppleIMessageSource {
       replyToGuid: row.replyToGuid ?? undefined,
       threadOriginatorGuid: row.threadOriginatorGuid ?? undefined,
       contactId: row.contactId ?? undefined,
+      senderName: row.isFromMe ? undefined : this.names.nameFor(row.contactId),
     };
   }
 
@@ -836,17 +926,29 @@ export class AppleIMessageSource {
     const rowsByGuid = new Map(renderableRows.map((row) => [row.guid, row]));
     const dayParts = new Map<string, string[]>();
     const dayRows = new Map<string, RawIMessage[]>();
+    /** Every handle a day's document names: its chat's, and its senders'. */
+    const dayHandles = new Map<string, Set<string>>();
     const rosterCache = new Map<string, string[]>();
 
     for (const row of renderableRows) {
       const key = dayKeyForRow(row);
       const parts = dayParts.get(key) ?? [];
       parts.push(messageSignaturePart(row));
-      const info = this.chatInfoFromRow(db, row, rosterCache);
-      if (info.participantHandles) {
-        parts.push(`roster:${info.participantHandles.join("\u0000")}`);
+      const roster =
+        row.chatHandleCount > 1
+          ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
+          : undefined;
+      if (roster) {
+        parts.push(`roster:${roster.join("\u0000")}`);
       }
       dayParts.set(key, parts);
+
+      let handles = dayHandles.get(key);
+      if (!handles) {
+        handles = new Set(roster ?? [row.chatIdentifier]);
+        dayHandles.set(key, handles);
+      }
+      if (!row.isFromMe && row.contactId) handles.add(row.contactId);
 
       const groupedRows = dayRows.get(key) ?? [];
       groupedRows.push(row);
@@ -865,6 +967,7 @@ export class AppleIMessageSource {
       const parts = dayParts.get(key) ?? [];
       parts.push(tapbackSignaturePart(row));
       dayParts.set(key, parts);
+      if (!row.isFromMe && row.contactId) dayHandles.get(key)?.add(row.contactId);
     }
 
     const attMap = this.fetchAttachmentsForMessages(
@@ -886,9 +989,13 @@ export class AppleIMessageSource {
     for (const [key, parts] of Array.from(dayParts.entries()).sort(([a], [b]) =>
       a.localeCompare(b),
     )) {
-      daySignatures[key] = computeContentHash(parts.sort().join("\n"));
+      const contentSignature = computeContentHash(parts.sort().join("\n"));
+      const names = this.namesSignature(dayHandles.get(key));
+      daySignatures[key] = names
+        ? `${contentSignature}${DAY_SIGNATURE_NAMES_SEPARATOR}${names}`
+        : contentSignature;
       externalIds.push(key);
-      if (this.attachmentConfig.enabled && this.extractAttachment) {
+      if (this.attachmentConfig.enabled) {
         externalIds.push(
           ...this.enumerateAttachmentExternalIdsForDay(key, dayRows.get(key) ?? [], attMap),
         );
@@ -905,6 +1012,69 @@ export class AppleIMessageSource {
     return { externalIds, daySignatures, signature };
   }
 
+  /**
+   * Snapshot reconciliation, run once the cursor has caught up to the tail:
+   * enumerate the complete current source ID set (parent day docs AND
+   * attachment child docs), re-emit the days whose signature changed without
+   * a new ROWID, and retry the voice clips that are due.
+   *
+   * Days renamed beyond this run's share keep their previous signature, and
+   * the snapshot signature is left unset, so the next run compares again and
+   * takes the next share.
+   */
+  private async reconcileSnapshot(
+    db: Db,
+    cutoffNs: number | null,
+    state: AppleIMessageSyncCursor | null,
+    emittedDayKeys: Set<string>,
+  ): Promise<IMessageSnapshotReconciliation> {
+    const documents: DocumentInput[] = [];
+    const newSnapshot = this.buildIMessageSnapshot(db, cutoffNs);
+    let presentExternalIds: string[] | undefined;
+    let snapshotSignature = state?.lastSnapshotSignature;
+    let daySignatures = state?.lastDaySignatures;
+    if (newSnapshot.signature !== state?.lastSnapshotSignature) {
+      presentExternalIds = newSnapshot.externalIds;
+      const rebuilt = await this.rebuildChangedDays(
+        db,
+        cutoffNs,
+        state?.lastDaySignatures,
+        newSnapshot.daySignatures,
+        emittedDayKeys,
+        state !== null && state.lastDaySignatures === undefined,
+      );
+      documents.push(...rebuilt.documents);
+      daySignatures = newSnapshot.daySignatures;
+      snapshotSignature = newSnapshot.signature;
+      if (rebuilt.deferred.length > 0) {
+        daySignatures = { ...newSnapshot.daySignatures };
+        for (const key of rebuilt.deferred) {
+          const previous = state?.lastDaySignatures?.[key];
+          if (previous !== undefined) daySignatures[key] = previous;
+        }
+        snapshotSignature = undefined;
+        log.info(
+          `Contact names changed on ${rebuilt.deferred.length} more day-chats than one run re-renders; they follow on the next syncs`,
+        );
+      }
+    }
+    documents.push(
+      ...(await this.rebuildDueTranscriptionDays(
+        db,
+        cutoffNs,
+        newSnapshot.daySignatures,
+        emittedDayKeys,
+      )),
+    );
+    return { documents, presentExternalIds, snapshotSignature, daySignatures };
+  }
+
+  /**
+   * Re-emit the days whose signature changed. A day whose messages are
+   * unchanged and only its contact names differ is renamed: at most
+   * `MAX_RENAMED_DAYS_PER_RUN` of those are rebuilt, newest first, and the
+   * rest come back as `deferred`.
+   */
   private async rebuildChangedDays(
     db: Db,
     cutoffNs: number | null,
@@ -912,12 +1082,25 @@ export class AppleIMessageSource {
     current: Record<string, string>,
     alreadyEmitted: Set<string>,
     rebuildAllWhenPreviousMissing = false,
-  ): Promise<DocumentInput[]> {
-    if (!previous && !rebuildAllWhenPreviousMissing) return [];
-    const documents: DocumentInput[] = [];
+  ): Promise<{ documents: DocumentInput[]; deferred: string[] }> {
+    if (!previous && !rebuildAllWhenPreviousMissing) return { documents: [], deferred: [] };
+    const changed: string[] = [];
+    const renamed: string[] = [];
     for (const [key, signature] of Object.entries(current)) {
       if (alreadyEmitted.has(key)) continue;
-      if (previous?.[key] === signature) continue;
+      const before = previous?.[key];
+      if (before === signature) continue;
+      if (before !== undefined && daySignatureContent(before) === daySignatureContent(signature)) {
+        renamed.push(key);
+      } else {
+        changed.push(key);
+      }
+    }
+    renamed.sort((a, b) => b.slice(-10).localeCompare(a.slice(-10)) || a.localeCompare(b));
+    const deferred = renamed.slice(MAX_RENAMED_DAYS_PER_RUN);
+
+    const documents: DocumentInput[] = [];
+    for (const key of [...changed, ...renamed.slice(0, MAX_RENAMED_DAYS_PER_RUN)]) {
       const parsed = parseDayExternalId(key);
       if (!parsed) continue;
       documents.push(
@@ -925,7 +1108,7 @@ export class AppleIMessageSource {
       );
       alreadyEmitted.add(key);
     }
-    return documents;
+    return { documents, deferred };
   }
 
   /**
@@ -1014,15 +1197,31 @@ export class AppleIMessageSource {
       const parsed = this.parseMessageRow(row, attMap);
       if (!parsed || parsed.tapback) continue;
       for (const raw of attMap.get(row.rowId) ?? []) {
-        const filename = imessageAttachmentFilename(raw);
-        const mimeType = raw.mimeType;
-        if (!mimeType) continue;
-        const check = shouldExtractAttachment(mimeType, raw.totalBytes, this.attachmentConfig);
-        if (!check.extract) continue;
-        entries.push({ raw, filename, mimeType });
+        const entry = this.attachmentChildEntry(raw);
+        if (entry) entries.push(entry);
       }
     }
     return entries;
+  }
+
+  /**
+   * The attachment as a child document, or null when it does not become one:
+   * a file whose text can be extracted, and every photo, video and PDF
+   * whether or not it has text (see `extractAttachments`). The one test both
+   * the documents and the snapshot's id list use, so `seq` — numbered within
+   * this set — agrees between them, and a media child is never pruned for
+   * being missing from the snapshot.
+   *
+   * Widening the set to media keeps every earlier child's `seq`: a tie group
+   * shares its filename, size and MIME type, and so its eligibility.
+   */
+  private attachmentChildEntry(raw: RawIMessageAttachment): IMessageAttachmentEntry | null {
+    const mimeType = raw.mimeType;
+    if (!mimeType) return null;
+    const media = mediaAttachmentNoun(mimeType) !== undefined;
+    if (!media && !shouldExtractAttachment(mimeType, raw.totalBytes, this.attachmentConfig).extract)
+      return null;
+    return { raw, filename: imessageAttachmentFilename(raw), mimeType };
   }
 
   /**
@@ -1195,19 +1394,171 @@ export class AppleIMessageSource {
   dispose(): void {
     this.transcriptCache?.close();
     this.transcriptCache = undefined;
+    this.previewLedger?.close();
+    this.previewLedger = undefined;
+  }
+
+  /** Remember a media document this pass wrote, for `offerPreviews`. */
+  private notePreviewCandidate(
+    externalId: string,
+    parentDoc: DocumentInput,
+    att: RawIMessageAttachment,
+    mimeType: string,
+    msg: ParsedIMessage,
+  ): void {
+    if (!this.previews) return;
+    this.previewCandidates.push({
+      key: previewKey(att),
+      externalId,
+      dayKey: parentDoc.externalId,
+      storedPath: att.filename,
+      mimeType,
+      sentAtMs: msg.date.getTime(),
+    });
   }
 
   /**
-   * Extract text from supported attachments in a day-chat's messages.
-   * Mutates the parent doc to add attachment markers and metadata.
-   * Returns an array of attachment DocumentInputs.
+   * Offer the thumbnails of the media documents this pass wrote, newest
+   * first, skipping a file the ledger has already settled and one that is not
+   * on disk (offloaded to iCloud): its arrival changes the day's signature,
+   * which writes the day again and offers it then. At most
+   * `MAX_PREVIEW_OFFERS_PER_PASS` are offered; the rest are left in the
+   * ledger, due at once. Once the walk has reached the tail, the deferred
+   * thumbnails that are due take what is left of the share.
+   *
+   * The offers are made, not awaited: each waits for this pass's page to be
+   * written, so its answer arrives after the pass returns and is written to
+   * the ledger then.
+   */
+  private offerPreviews(db: Db, includeDue: boolean): void {
+    const candidates = this.previewCandidates;
+    this.previewCandidates = [];
+    const sink = this.previews;
+    if (!sink) return;
+    const ledger = this.getPreviewLedger();
+    if (!ledger) return;
+    const nowMs = Date.now();
+    candidates.sort((a, b) => b.sentAtMs - a.sentAtMs);
+    const seen = new Set<string>();
+    let offered = 0;
+    for (const candidate of candidates) {
+      if (seen.has(candidate.key)) continue;
+      seen.add(candidate.key);
+      const filePath = resolveAttachmentPath(candidate.storedPath);
+      const fileSignature = attachmentFileSignature(candidate.storedPath);
+      if (!filePath || !fileSignature.startsWith("file:")) continue;
+      if (!ledger.shouldOffer(candidate.key, fileSignature, nowMs)) continue;
+      const entry: PreviewLedgerEntry = {
+        key: candidate.key,
+        externalId: candidate.externalId,
+        dayKey: candidate.dayKey,
+        fileSignature,
+      };
+      if (offered >= MAX_PREVIEW_OFFERS_PER_PASS) {
+        ledger.markWaiting(entry, nowMs);
+        continue;
+      }
+      this.offerPreview(sink, ledger, entry, filePath, candidate.mimeType, nowMs);
+      offered++;
+    }
+    if (includeDue) {
+      this.offerDuePreviews(db, sink, ledger, MAX_PREVIEW_OFFERS_PER_PASS - offered, nowMs);
+    }
+  }
+
+  /**
+   * Offer again the deferred thumbnails whose next attempt is due, reading
+   * each attachment's file afresh from chat.db. One whose attachment is gone,
+   * or whose file is not on disk, is forgotten: a file that arrives later
+   * rewrites its day, which offers it then.
+   */
+  private offerDuePreviews(
+    db: Db,
+    sink: SourcePreviewSink,
+    ledger: IMessagePreviewLedger,
+    limit: number,
+    nowMs: number,
+  ): void {
+    for (const entry of ledger.due(nowMs, limit)) {
+      const att = lookupAttachment(db, entry.key);
+      const filePath = att ? resolveAttachmentPath(att.filename) : null;
+      const fileSignature = att ? attachmentFileSignature(att.filename) : "missing";
+      if (
+        !att ||
+        mediaAttachmentNoun(att.mimeType) === undefined ||
+        !filePath ||
+        !fileSignature.startsWith("file:")
+      ) {
+        ledger.forget(entry.key);
+        continue;
+      }
+      this.offerPreview(sink, ledger, { ...entry, fileSignature }, filePath, att.mimeType, nowMs);
+    }
+  }
+
+  private offerPreview(
+    sink: SourcePreviewSink,
+    ledger: IMessagePreviewLedger,
+    entry: PreviewLedgerEntry,
+    filePath: string,
+    mimeType: string,
+    nowMs: number,
+  ): void {
+    ledger.markOffered(entry, nowMs);
+    sink
+      .offer({ externalId: entry.externalId, render: () => this.renderPreview(filePath, mimeType) })
+      .then(
+        (outcome) => {
+          // A ledger closed or replaced since has nothing to record this in.
+          if (this.previewLedger === ledger) ledger.record(entry.key, entry.fileSignature, outcome);
+        },
+        (err: unknown) => {
+          log.debug(`Thumbnail offer failed: ${err instanceof Error ? err.message : String(err)}`);
+        },
+      );
+  }
+
+  private getPreviewLedger(): IMessagePreviewLedger | undefined {
+    if (this.previewLedger || this.previewLedgerFailed) return this.previewLedger;
+    try {
+      this.previewLedger = new IMessagePreviewLedger(this.previewLedgerPath ?? ":memory:");
+    } catch (err) {
+      this.previewLedgerFailed = true;
+      log.warn(
+        `Could not open the thumbnail ledger; no thumbnails this run: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return this.previewLedger;
+  }
+
+  /**
+   * Turn a day-chat's attachments into child documents, and add their
+   * markers and metadata to the parent. Returns the children.
+   *
+   * A file with extracted text becomes a child holding that text. A photo,
+   * video or PDF with no text to read — read and found empty, a type nothing
+   * reads, too large to read, no OCR configured — becomes a child holding a
+   * line that says what it is (`describeMediaAttachment`). Both share an
+   * externalId, so a file that later yields text replaces its description in
+   * place.
+   *
+   * A read that failed — the file not on disk (offloaded to iCloud), the
+   * extractor or OCR backend erroring — emits no child at all. Its id stays
+   * in the snapshot (`attachmentChildEntry`), so whatever child an earlier
+   * read left, text or description, is kept rather than overwritten or
+   * pruned, and the day is rendered again once the file changes.
+   *
+   * Each child links to the message that carried it, which opens Messages at
+   * that message; the parent's markers stay plain text, because a link in
+   * content would become a link edge of its own.
    */
   private async extractAttachments(
     parentDoc: DocumentInput,
     dayParsed: ParsedIMessage[],
     dayAttMap: Map<number, RawIMessageAttachment[]>,
+    chat: IMessageChatInfo,
   ): Promise<DocumentInput[]> {
-    if (!this.attachmentConfig.enabled || !this.extractAttachment) {
+    if (!this.attachmentConfig.enabled) {
       return [];
     }
 
@@ -1217,12 +1568,8 @@ export class AppleIMessageSource {
     for (const msg of dayParsed) {
       if (msg.tapback) continue;
       for (const raw of dayAttMap.get(msg.rowId) ?? []) {
-        const filename = imessageAttachmentFilename(raw);
-        const mimeType = raw.mimeType;
-        if (!mimeType) continue;
-        const check = shouldExtractAttachment(mimeType, raw.totalBytes, this.attachmentConfig);
-        if (!check.extract) continue;
-        eligibleEntries.push({ raw, filename, mimeType });
+        const entry = this.attachmentChildEntry(raw);
+        if (entry) eligibleEntries.push(entry);
       }
     }
     const seqByAttachmentRowId = new Map<number, number>();
@@ -1258,7 +1605,8 @@ export class AppleIMessageSource {
         }
 
         const check = shouldExtractAttachment(mimeType, att.totalBytes, this.attachmentConfig);
-        if (!check.extract) {
+        const media = mediaAttachmentNoun(mimeType) !== undefined;
+        if (!check.extract && !media) {
           attachmentInfos.push({
             filename,
             mimeType,
@@ -1269,95 +1617,55 @@ export class AppleIMessageSource {
           continue;
         }
 
-        // Resolve file path
-        if (!att.filename) {
+        const seq = seqByAttachmentRowId.get(att.attachmentRowId) ?? 0;
+        const attachmentId = deriveAttachmentStableId(filename, att.totalBytes, mimeType, seq);
+        const childMeta = {
+          mimeType,
+          sizeBytes: att.totalBytes,
+          seq,
+          // The parent is a whole day of chat, so its timestamps bound the
+          // day rather than dating this file, and its link opens the day's
+          // first message. Stamp and link the message that carried it, or
+          // every attachment sent that day sorts and opens as if it arrived
+          // with the first message.
+          occurredAt: msg.date.toISOString(),
+          sourceUrl: buildIMessageSourceUrl(msg.guid),
+        };
+
+        const outcome: AttachmentReadOutcome = !check.extract
+          ? { kind: "nothing-to-read", reason: check.reason }
+          : this.extractAttachment
+            ? await this.readAttachment(att, filename, mimeType, this.extractAttachment)
+            : { kind: "nothing-to-read", reason: "extraction-failed" };
+        if (outcome.kind === "text") {
+          const child = buildAttachmentDocument(parentDoc, filename, outcome.result, childMeta);
+          attachmentDocs.push(child);
+          if (media) this.notePreviewCandidate(child.externalId, parentDoc, att, mimeType, msg);
           attachmentInfos.push({
             filename,
             mimeType,
             size: att.totalBytes,
-            extracted: false,
-            reason: "download-failed",
+            extracted: true,
+            attachmentId,
           });
           continue;
         }
 
-        const filePath = resolveAttachmentPath(att.filename);
-        if (!filePath) {
-          attachmentInfos.push({
-            filename,
-            mimeType,
-            size: att.totalBytes,
-            extracted: false,
-            reason: "download-failed",
+        attachmentInfos.push({
+          filename,
+          mimeType,
+          size: att.totalBytes,
+          extracted: false,
+          reason: outcome.reason,
+          attachmentId,
+        });
+        if (media && outcome.kind === "nothing-to-read") {
+          const child = buildMediaAttachmentDocument(parentDoc, filename, {
+            ...childMeta,
+            description: describeMediaAttachment(msg, mimeType, chat),
           });
-          continue;
-        }
-        if (!existsSync(filePath)) {
-          log.debug(`Attachment file not found: ${filePath}`);
-          attachmentInfos.push({
-            filename,
-            mimeType,
-            size: att.totalBytes,
-            extracted: false,
-            reason: "download-failed",
-          });
-          continue;
-        }
-
-        try {
-          const data = new Uint8Array(await readFile(filePath));
-          const result = await this.extractAttachment(data, mimeType, {
-            maxTextLength: this.attachmentConfig.maxTextLength,
-          });
-          if (!result) {
-            attachmentInfos.push({
-              filename,
-              mimeType,
-              size: att.totalBytes,
-              extracted: false,
-              reason: "extraction-failed",
-            });
-            continue;
-          }
-          if (result.noText) {
-            attachmentInfos.push({
-              filename,
-              mimeType,
-              size: att.totalBytes,
-              extracted: false,
-              reason: "no-text",
-            });
-            continue;
-          }
-
-          const seq = seqByAttachmentRowId.get(att.attachmentRowId) ?? 0;
-          const attDoc = buildAttachmentDocument(parentDoc, filename, result, {
-            mimeType,
-            sizeBytes: att.totalBytes,
-            seq,
-            // The parent is a whole day of chat, so its timestamps bound the
-            // day rather than dating this file. Stamp the message that carried
-            // it, or every attachment sent that day sorts as if it arrived
-            // with the first message.
-            occurredAt: msg.date.toISOString(),
-          });
-          attachmentDocs.push(attDoc);
-          attachmentInfos.push({ filename, mimeType, size: att.totalBytes, extracted: true });
-        } catch (err) {
-          // Transient extraction-backend blip → fail the page so it retries,
-          // rather than recording a permanent extraction failure and advancing
-          // the cursor past a file that would extract cleanly later.
-          if (isTransientSyncError(err)) throw err;
-          log.debug(
-            `Failed to extract attachment ${filename}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          attachmentInfos.push({
-            filename,
-            mimeType,
-            size: att.totalBytes,
-            extracted: false,
-            reason: "extraction-failed",
-          });
+          attachmentDocs.push(child);
+          this.notePreviewCandidate(child.externalId, parentDoc, att, mimeType, msg);
         }
       }
     }
@@ -1369,6 +1677,70 @@ export class AppleIMessageSource {
 
     return attachmentDocs;
   }
+
+  /**
+   * Read one attachment from disk and extract its text. A file not on disk is
+   * `download-failed`, which the day signature turns into a re-render once
+   * the file arrives; an extractor that returns nothing or throws is a failed
+   * read too. Only a read that ran and found no text, or that no configured
+   * backend could make (`noExtractor`), settles that there is nothing to read.
+   * The recorded reason for the latter stays `extraction-failed`, as it was
+   * before the extractor could tell the two apart.
+   */
+  private async readAttachment(
+    att: RawIMessageAttachment,
+    filename: string,
+    mimeType: string,
+    extract: AttachmentExtractFn,
+  ): Promise<AttachmentReadOutcome> {
+    const filePath = att.filename ? resolveAttachmentPath(att.filename) : null;
+    if (!filePath) return { kind: "read-failed", reason: "download-failed" };
+    if (!existsSync(filePath)) {
+      log.debug(`Attachment file not found: ${filePath}`);
+      return { kind: "read-failed", reason: "download-failed" };
+    }
+
+    try {
+      const data = new Uint8Array(await readFile(filePath));
+      const result = await extract(data, mimeType, {
+        maxTextLength: this.attachmentConfig.maxTextLength,
+        reportUnconfigured: true,
+      });
+      if (!result) return { kind: "read-failed", reason: "extraction-failed" };
+      if (result.noExtractor) return { kind: "nothing-to-read", reason: "extraction-failed" };
+      if (result.noText) return { kind: "nothing-to-read", reason: "no-text" };
+      return { kind: "text", result };
+    } catch (err) {
+      // Transient extraction-backend blip → fail the page so it retries,
+      // rather than recording a permanent extraction failure and advancing
+      // the cursor past a file that would extract cleanly later.
+      if (isTransientSyncError(err)) throw err;
+      log.debug(
+        `Failed to extract attachment ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { kind: "read-failed", reason: "extraction-failed" };
+    }
+  }
+}
+
+/** An attachment's key in the preview ledger: its GUID, or its row for one without. */
+function previewKey(att: RawIMessageAttachment): string {
+  return att.guid ?? `rowid:${att.attachmentRowId}`;
+}
+
+/** The attachment a preview-ledger key names, as it is in chat.db now. */
+function lookupAttachment(db: Db, key: string): RawIMessageAttachment | null {
+  const byRow = key.startsWith("rowid:");
+  const row = db
+    .prepare(
+      `SELECT a.ROWID as attachmentRowId, a.guid as guid, 0 as messageRowId, a.filename,
+              a.mime_type as mimeType, a.uti as uti, a.transfer_name as transferName,
+              a.total_bytes as totalBytes
+         FROM attachment a
+        WHERE ${byRow ? "a.ROWID = ?" : "a.guid = ?"}`,
+    )
+    .get(byRow ? Number(key.slice("rowid:".length)) : key) as IMessageAttachmentRow | undefined;
+  return row ? resolveIMessageAttachment(row) : null;
 }
 
 function getMaxMessageRowId(db: Db): number {
@@ -1447,6 +1819,12 @@ function attachmentSignaturePart(att: RawIMessageAttachment): string {
     att.totalBytes,
     attachmentFileSignature(att.filename),
   ].join("\u0000");
+}
+
+/** The message part of a day signature, without its contact-names part. */
+function daySignatureContent(signature: string): string {
+  const separator = signature.indexOf(DAY_SIGNATURE_NAMES_SEPARATOR);
+  return separator === -1 ? signature : signature.slice(0, separator);
 }
 
 function parseDayExternalId(externalId: string): { chatIdentifier: string; date: string } | null {

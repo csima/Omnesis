@@ -16,7 +16,15 @@
  */
 
 import type { Logger } from "@omnesis/core";
-import type { ProviderHost, SourceAnalyticsAccess, SourceHost } from "../source-host.js";
+import type {
+  DocumentPreviewOffer,
+  DocumentPreviewOutcome,
+  ProviderHost,
+  RenderedDocumentPreview,
+  SourceAnalyticsAccess,
+  SourceHost,
+  SourcePreviewSink,
+} from "../source-host.js";
 
 /** A logger that records instead of printing, so a test can assert on it. */
 export interface RecordingLogger extends Logger {
@@ -76,6 +84,70 @@ export function fakeAnalytics(): FakeAnalytics {
   };
 }
 
+/** One offer a source made, and what became of it. */
+export interface RecordedPreviewOffer {
+  externalId: string;
+  /** What `render` gave, once the sink has rendered it; undefined before. */
+  rendered?: RenderedDocumentPreview | null;
+  outcome?: DocumentPreviewOutcome;
+}
+
+/**
+ * A preview sink that renders each offer at once and answers with a chosen
+ * outcome, recording both.
+ *
+ * Rendering happens before the offer resolves, as the real sink does after
+ * the page is written, so a test sees exactly the bytes a source would
+ * upload. A render that resolves null is `refused` and one that throws is
+ * `deferred`, whatever `answer` says, matching the real sink.
+ */
+export interface FakePreviewSink extends SourcePreviewSink {
+  readonly offers: readonly RecordedPreviewOffer[];
+  /** The outcome every later offer gets once rendered; `stored` by default. */
+  answerWith(
+    outcome: DocumentPreviewOutcome | ((externalId: string) => DocumentPreviewOutcome),
+  ): void;
+  /** Wait until every offer made so far has settled. */
+  settled(): Promise<void>;
+}
+
+export function fakePreviewSink(): FakePreviewSink {
+  const offers: RecordedPreviewOffer[] = [];
+  const pending: Promise<unknown>[] = [];
+  let answer: DocumentPreviewOutcome | ((externalId: string) => DocumentPreviewOutcome) = "stored";
+  return {
+    offers,
+    answerWith(outcome) {
+      answer = outcome;
+    },
+    async settled() {
+      while (pending.length > 0) await Promise.allSettled(pending.splice(0));
+    },
+    offer(offer: DocumentPreviewOffer) {
+      const record: RecordedPreviewOffer = { externalId: offer.externalId };
+      offers.push(record);
+      const chosen = answer;
+      const result = (async (): Promise<DocumentPreviewOutcome> => {
+        try {
+          record.rendered = await offer.render();
+        } catch {
+          record.outcome = "deferred";
+          return record.outcome;
+        }
+        record.outcome =
+          record.rendered === null
+            ? "refused"
+            : typeof chosen === "function"
+              ? chosen(offer.externalId)
+              : chosen;
+        return record.outcome;
+      })();
+      pending.push(result);
+      return result;
+    },
+  };
+}
+
 export interface FakeHostOptions {
   /** Defaults to a temp-shaped path; supply a real one when the source writes. */
   stateDir?: string;
@@ -89,6 +161,8 @@ export interface FakeHostOptions {
   includeAudioTypes?: boolean;
   /** Pass `fakeAnalytics()` for a source that declares tables. */
   analytics?: SourceAnalyticsAccess;
+  /** Pass `fakePreviewSink()` for a source that declares `documentPreviews`. */
+  previews?: SourcePreviewSink;
 }
 
 /** Account-scoped services, for testing a provider's shared context. */
@@ -111,5 +185,6 @@ export function fakeSourceHost(options: FakeHostOptions = {}): SourceHost {
     transcribeAudio: options.transcribeAudio,
     includeAudioTypes: options.includeAudioTypes ?? false,
     analytics: options.analytics,
+    previews: options.previews,
   };
 }

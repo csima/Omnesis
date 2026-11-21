@@ -635,6 +635,9 @@ async function setupSourceDefinition(
         sourceType: def.id,
         gateway: ctx.gateway,
         declaresAnalytics: Array.isArray(def.analyticsSchemas),
+        providerId: String(providerId),
+        previewOutbox: ctx.engine?.previews,
+        declaresPreviews: def.documentPreviews === true,
       });
       const options: CreateOptions = {
         accountId,
@@ -967,6 +970,9 @@ async function setupProviderDefinition(
                   sourceType: sourceDef.id,
                   gateway: ctx.gateway,
                   declaresAnalytics: Array.isArray(sourceDef.analyticsSchemas),
+                  providerId: String(providerId),
+                  previewOutbox: ctx.engine?.previews,
+                  declaresPreviews: sourceDef.documentPreviews === true,
                 }),
               },
               context,

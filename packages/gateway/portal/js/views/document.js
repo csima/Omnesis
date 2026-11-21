@@ -23,6 +23,7 @@ import { MetadataPanel } from "../components/metadata-panel.js";
 import { GraphTimelinePanel } from "../components/graph-card.js";
 import { ConfirmModal } from "../components/confirm-modal.js";
 import { DocumentPreview } from "../components/document-preview.js";
+import { AttachmentStrip } from "../components/attachment-strip.js";
 import { navigate } from "../lib/router.js";
 import { useCursorPage } from "../lib/use-cursor-page.js";
 
@@ -237,6 +238,7 @@ export function DocumentView({ id }) {
       <div class="doc-layout">
         <div class="doc-main">
           <${DocumentPreview} preview=${doc.preview} title=${doc.title} />
+          <${AttachmentStrip} attachments=${attachmentChildren} attachmentInfos=${meta.extra?.attachments} />
           <div class="doc-content" dangerouslySetInnerHTML=${{ __html: contentHtml }}></div>
         </div>
         <div class="doc-side-rail">

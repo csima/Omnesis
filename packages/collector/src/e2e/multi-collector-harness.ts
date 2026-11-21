@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { createServer, type AddressInfo } from "node:net";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { GatewayWsClient } from "@omnesis/gateway-client";
+import { GatewayWsClient, HttpGatewayClient } from "@omnesis/gateway-client";
 import {
   createRecordingUpdater,
   registerSelfUpdateCommand,
@@ -42,6 +42,7 @@ import type {
   WsEventPayload,
 } from "@omnesis/core";
 import type { DoctorReport } from "@omnesis/core/doctor";
+import type { DocumentPreviewUpload, DocumentPreviewUploadResult } from "@omnesis/source-sdk";
 import type { DeviceCapability } from "@omnesis/types";
 
 const execFileAsync = promisify(execFile);
@@ -476,6 +477,20 @@ export class MultiCollectorHarness {
       throw new Error(`push as ${collector.name} failed: ${res.status} ${await res.text()}`);
     }
     return (await res.json()) as { ingested: number };
+  }
+
+  /**
+   * Upload a document preview as `collector`, through the real
+   * `HttpGatewayClient` a collector's preview outbox drives, and return how
+   * the client classified the gateway's answer. `providerId` defaults to the
+   * source id, as {@link pushDocuments} names it.
+   */
+  async uploadPreview(
+    collector: PairedCollector,
+    upload: Omit<DocumentPreviewUpload, "providerId"> & { providerId?: string },
+  ): Promise<DocumentPreviewUploadResult> {
+    const client = new HttpGatewayClient(collector.gatewayBase, collector.token);
+    return client.putDocumentPreview({ providerId: upload.sourceId, ...upload });
   }
 
   async destroy(): Promise<void> {

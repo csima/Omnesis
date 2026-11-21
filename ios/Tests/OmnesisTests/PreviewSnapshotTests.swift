@@ -2963,6 +2963,129 @@ final class PreviewSnapshotTests: XCTestCase {
         snapshot(view, name: "31d-inspector-graph-tab-same-entity")
     }
 
+    /// Graph tab rows for attachments: the preview beside each child that
+    /// has one (a video's with its play badge), and the strip's file-type
+    /// placeholder for a child without one or whose preview the gateway no
+    /// longer serves. Rendered in a window so that missing preview settles
+    /// into its placeholder before the capture.
+    func testInspectorGraphTabAttachmentPreviews() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let view = DocumentInspectorSheet(
+            doc: PreviewMocks.documentDetailWithAttachments,
+            people: [],
+            refs: nil,
+            attachments: PreviewMocks.attachmentsMixed,
+            initialTab: .graph
+        )
+        .environment(AppStore.preview())
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+        renderInWindow(view, name: "31f-inspector-graph-tab-attachment-previews")
+    }
+
+    // MARK: - Attachment strip
+
+    private func attachmentStrip(_ attachments: [DocumentAttachment]) -> some View {
+        NavigationStack {
+            ScrollView {
+                DocumentAttachmentStrip(attachments: attachments)
+                    .padding(Theme.Spacing.lg)
+            }
+            .background(Theme.bgPrimary.ignoresSafeArea())
+        }
+        .environment(AppStore.preview())
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+    }
+
+    private static let stripCanvas = CGSize(width: 393, height: 240)
+
+    func testAttachmentStripWithPreviews() {
+        PreviewMocks.primeDocumentPreviewImages()
+        snapshot(
+            attachmentStrip(PreviewMocks.attachmentsWithPreviews),
+            name: "30r-attachment-strip-previews",
+            size: Self.stripCanvas
+        )
+    }
+
+    /// Mixed: previews, typed placeholders, and (after loading settles in a
+    /// window) a missing preview falling back to its placeholder.
+    func testAttachmentStripMixed() {
+        PreviewMocks.primeDocumentPreviewImages()
+        for scheme in [ColorScheme.dark, .light] {
+            renderInWindow(
+                attachmentStrip(PreviewMocks.attachmentsMixed),
+                name: scheme == .dark ? "30s-attachment-strip-mixed" : "30s-attachment-strip-mixed-light",
+                scheme: scheme,
+                size: Self.stripCanvas
+            )
+        }
+    }
+
+    func testAttachmentStripWithoutPreviews() {
+        snapshot(
+            attachmentStrip(PreviewMocks.attachmentsWithoutPreviews),
+            name: "30t-attachment-strip-no-previews",
+            size: Self.stripCanvas
+        )
+    }
+
+    func testAttachmentStripLongFilename() {
+        PreviewMocks.primeDocumentPreviewImages()
+        snapshot(
+            attachmentStrip(PreviewMocks.attachmentsLongFilename),
+            name: "30u-attachment-strip-long-filename",
+            size: Self.stripCanvas
+        )
+    }
+
+    func testAttachmentStripLargeText() {
+        PreviewMocks.primeDocumentPreviewImages()
+        snapshot(
+            attachmentStrip(PreviewMocks.attachmentsMixed).environment(\.dynamicTypeSize, .accessibility3),
+            name: "30v-attachment-strip-large-text",
+            size: CGSize(width: 393, height: 520)
+        )
+    }
+
+    /// The document page with its strip on the Duo's displays: folded (a
+    /// phone), and open upright and on its side, where the strip has room
+    /// for every tile.
+    func testAttachmentStripDuo() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let page = NavigationStack {
+            DocumentDetailPreviewWrapper(
+                doc: PreviewMocks.documentDetailWithAttachments,
+                meta: "Chat · Conversation · 2h ago",
+                annotations: [],
+                attachments: PreviewMocks.attachmentsMixed
+            )
+        }
+        .environment(AppStore.preview())
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+        for (label, size) in [
+            ("outer", Self.duoOuter),
+            ("upright", Self.duoInnerUpright),
+            ("side", Self.duoInnerOnItsSide),
+        ] {
+            renderSized(page, name: "30w-attachment-strip-duo-\(label)", size: size)
+        }
+        renderSized(page, name: "30w-attachment-strip-duo-side-light", scheme: .light, size: Self.duoInnerOnItsSide)
+    }
+
+    func testDocumentDetailWithAttachments() {
+        PreviewMocks.primeDocumentPreviewImages()
+        let view = NavigationStack {
+            DocumentDetailPreviewWrapper(
+                doc: PreviewMocks.documentDetailWithAttachments,
+                meta: "Chat · Conversation · 2h ago",
+                annotations: [],
+                attachments: PreviewMocks.attachmentsMixed
+            )
+        }
+        .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
+        snapshot(view.environment(AppStore.preview()), name: "30x-document-detail-attachments", size: CGSize(width: 393, height: 760))
+    }
+
     // MARK: - Source recent items
 
     func testSourceRecentDocuments() {

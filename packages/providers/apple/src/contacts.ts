@@ -74,8 +74,17 @@ function formatAddress(a: RawContactAddress): string {
   return parts.join(", ");
 }
 
-/** Build a display name from contact fields. */
-function buildName(contact: RawContact): string {
+/** The name fields of an AddressBook record. */
+export type ContactNameFields = Pick<
+  RawContact,
+  "firstName" | "middleName" | "lastName" | "organization" | "nickname"
+>;
+
+/**
+ * The name a contact card shows: its given, middle and family names, else its
+ * organization, else its nickname. `undefined` for a card with none of them.
+ */
+export function contactDisplayName(contact: ContactNameFields): string | undefined {
   const parts: string[] = [];
   if (contact.firstName) parts.push(contact.firstName);
   if (contact.middleName) parts.push(contact.middleName);
@@ -83,7 +92,59 @@ function buildName(contact: RawContact): string {
   if (parts.length > 0) return parts.join(" ");
   if (contact.organization) return contact.organization;
   if (contact.nickname) return contact.nickname;
-  return "Unnamed Contact";
+  return undefined;
+}
+
+/** Build a display name from contact fields. */
+function buildName(contact: RawContact): string {
+  return contactDisplayName(contact) ?? "Unnamed Contact";
+}
+
+/**
+ * Normalize one AddressBook phone number to E.164. Apple's per-number country
+ * wins, then the country of the card's first postal address, then the
+ * collector's captured OS region. Explicit +/00 numbers remain
+ * self-describing and are handled before this hint chain.
+ */
+export function normalizeContactPhone(
+  fullNumber: string,
+  countryCode: unknown,
+  addressCountry: string | null | undefined,
+  phoneRegion: string | undefined,
+): string | null {
+  const hints: CountryCode[] = [];
+  const numberRegion = countryNameToISO2(typeof countryCode === "string" ? countryCode : undefined);
+  const addressRegion = countryNameToISO2(addressCountry ?? undefined);
+  const deviceRegion = countryNameToISO2(phoneRegion);
+  for (const region of [numberRegion, addressRegion, deviceRegion]) {
+    if (region && !hints.includes(region)) hints.push(region);
+  }
+  return normalizePhone(fullNumber, hints.length > 0 ? hints : undefined);
+}
+
+/**
+ * One address book's change signature:
+ * `<count>:<MAX(modificationDate)>:<MAX(pk)>:<SUM(modificationDate)>` over its
+ * person records.
+ *
+ * Count and newest-modification alone cannot tell "nothing happened" from
+ * "one contact joined and one left": deleting the most recently edited
+ * contact returns both to the values the last signature carried. `MAX(Z_PK)`
+ * catches a join — Core Data keys are monotone, so a row that ever existed
+ * raises it permanently — and the modification-date total catches an exchange
+ * that leaves the count alone. Same four terms, for the same reason, as the
+ * notes signature.
+ */
+export function addressBookSignature(db: import("better-sqlite3").Database): string {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as cnt, COALESCE(MAX(ZMODIFICATIONDATE), 0) as maxMod,
+              COALESCE(MAX(Z_PK), 0) as maxPk,
+              CAST(ROUND(COALESCE(TOTAL(ZMODIFICATIONDATE), 0)) AS INTEGER) as sumMod
+       FROM ZABCDRECORD WHERE Z_ENT = 22`,
+    )
+    .get() as { cnt: number; maxMod: number; maxPk: number; sumMod: number };
+  return `${row.cnt}:${row.maxMod}:${row.maxPk}:${row.sumMod}`;
 }
 
 /**
@@ -508,22 +569,11 @@ export class AppleContactsSource {
 
       // Build PersonMention with all emails and phones
       const normalizedEmails = contactEmails.map((e) => normalizeEmail(e.address)).filter(Boolean);
-      // Prefer Apple's per-number country, then the first postal address,
-      // then the collector's captured OS region. Explicit +/00 numbers remain
-      // self-describing and are handled before this hint chain.
-      const addressRegion = countryNameToISO2(contactAddresses[0]?.country ?? undefined);
-      const deviceRegion = countryNameToISO2(this.opts.phoneRegion);
+      const addressCountry = contactAddresses[0]?.country;
       const normalizedPhones = contactPhones
-        .map((p) => {
-          const hints: CountryCode[] = [];
-          const numberRegion = countryNameToISO2(
-            typeof p.countryCode === "string" ? p.countryCode : undefined,
-          );
-          for (const region of [numberRegion, addressRegion, deviceRegion]) {
-            if (region && !hints.includes(region)) hints.push(region);
-          }
-          return normalizePhone(p.fullNumber, hints.length > 0 ? hints : undefined);
-        })
+        .map((p) =>
+          normalizeContactPhone(p.fullNumber, p.countryCode, addressCountry, this.opts.phoneRegion),
+        )
         .filter((p): p is string => p !== null);
 
       const person: PersonMention = {
@@ -599,19 +649,9 @@ export class AppleContactsSource {
     const inBootstrap = startedAsBootstrap || (state?.bootstrapInProgress ?? false);
     // Snapshot reconciliation: only emit on the final page of the sync run,
     // and only when the snapshot actually changed since last cycle. The
-    // signature is one
-    // `<book>=<count>:<MAX(modificationDate)>:<MAX(pk)>:<SUM(modificationDate)>`
-    // term per readable address book, sorted so it does not depend on the
-    // order the books happened to open.
-    //
-    // Count and newest-modification alone cannot tell "nothing happened" from
-    // "one contact joined and one left": deleting the most recently edited
-    // contact returns both to the values the last published snapshot carried,
-    // and the deletion is then invisible until some unrelated contact changes.
-    // `MAX(Z_PK)` catches a join — Core Data keys are monotone, so a row that
-    // ever existed raises it permanently — and the modification-date total
-    // catches an exchange that leaves the count alone. Same four terms, for
-    // the same reason, as the notes signature.
+    // signature is one `<book>=<addressBookSignature>` term per readable
+    // address book, sorted so it does not depend on the order the books
+    // happened to open.
     //
     // The full ID enumeration is the costly bit (one SELECT per DB returning
     // every contact); skipping it on a no-op cycle is the dominant win for a
@@ -628,15 +668,7 @@ export class AppleContactsSource {
       const openStores = stores.flatMap((s) => (s.kind === "open" ? [s] : []));
       const sigParts: string[] = [];
       for (const store of openStores) {
-        const row = store.db
-          .prepare(
-            `SELECT COUNT(*) as cnt, COALESCE(MAX(ZMODIFICATIONDATE), 0) as maxMod,
-                    COALESCE(MAX(Z_PK), 0) as maxPk,
-                    CAST(ROUND(COALESCE(TOTAL(ZMODIFICATIONDATE), 0)) AS INTEGER) as sumMod
-             FROM ZABCDRECORD WHERE Z_ENT = 22`,
-          )
-          .get() as { cnt: number; maxMod: number; maxPk: number; sumMod: number };
-        sigParts.push(`${store.key}=${row.cnt}:${row.maxMod}:${row.maxPk}:${row.sumMod}`);
+        sigParts.push(`${store.key}=${addressBookSignature(store.db)}`);
       }
       const newSignature = sigParts.sort().join("|");
 

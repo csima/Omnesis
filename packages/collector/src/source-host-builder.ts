@@ -22,6 +22,7 @@ import type {
   SourceAnalyticsAccess,
   SourceHost,
 } from "@omnesis/source-sdk";
+import type { PreviewOutbox } from "./previews/preview-outbox.js";
 
 export interface HostInputs {
   /** Provider base id, e.g. `google` — not the account-suffixed provider id. */
@@ -72,7 +73,8 @@ export function buildProviderHost(input: HostInputs): ProviderHost {
  *
  * `analytics` is present only for a source that declares tables. A
  * documents-only source has none, so handing it a query facet would be the
- * same over-provisioning at a smaller scale.
+ * same over-provisioning at a smaller scale. `previews` likewise only for a
+ * source that declares `documentPreviews`.
  *
  * The state directory is created here rather than lazily, so a source can join
  * a filename to it and write immediately. Creating it is idempotent and
@@ -94,6 +96,11 @@ export function buildSourceHost(
     /** The gateway client, when this source declares analytics tables. */
     gateway?: GatewayClient;
     declaresAnalytics: boolean;
+    /** The id this source's documents carry as their `providerId`. */
+    providerId?: string;
+    /** Where previews wait for their pages; see `PreviewOutbox`. */
+    previewOutbox?: Pick<PreviewOutbox, "sinkFor">;
+    declaresPreviews?: boolean;
   },
 ): SourceHost {
   const base = buildProviderHost(input);
@@ -116,6 +123,16 @@ export function buildSourceHost(
     analytics:
       input.declaresAnalytics && input.gateway
         ? scopedAnalytics(input.gateway, input.sourceId)
+        : undefined,
+    // Only a source that declares previews is lent a sink, and the gateway
+    // keeps previews only for a type whose descriptor declares them: a sink
+    // handed to anything else would only collect refusals.
+    previews:
+      input.declaresPreviews && input.previewOutbox
+        ? input.previewOutbox.sinkFor({
+            sourceId: input.sourceId,
+            providerId: input.providerId ?? `${input.providerBaseId}:${input.accountId}`,
+          })
         : undefined,
   };
 }

@@ -6,10 +6,12 @@ import Database from "better-sqlite3";
 type Db = Database.Database;
 import { AudioUnreadableError, resolveAttachmentConfig } from "@omnesis/core";
 import { SourceId, ProviderId, SyncError } from "@omnesis/types";
+import { fakePreviewSink, type FakePreviewSink } from "@omnesis/source-sdk/testing";
 import { AppleProvider } from "./provider.js";
 import { AppleIMessageSource } from "./imessage.js";
+import { addContact, createAddressBook, renameContact } from "./testing/address-book-fixture.js";
 import type { AttachmentExtractFn, AudioTranscribeFn } from "@omnesis/core";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 
@@ -243,6 +245,8 @@ describe("AppleIMessageSource", () => {
       notesDbPath: join(tmpDir, "nonexistent.sqlite"),
       remindersDirPath: join(tmpDir, "nonexistent-dir"),
       imessageDbPath: dbPath,
+      // Never the Mac's real address book, whatever host runs the tests.
+      contactsDirPath: join(tmpDir, "nonexistent-address-book"),
       accountId: "test@icloud.com",
     });
     await provider.initialize();
@@ -392,6 +396,7 @@ describe("AppleIMessageSource", () => {
       notesDbPath: join(tmpDir, "nonexistent-notes-replica"),
       remindersDirPath: join(tmpDir, "nonexistent-reminders-replica"),
       imessageDbPath: replicaPath,
+      contactsDirPath: join(tmpDir, "nonexistent-address-book-replica"),
       accountId: "test@icloud.example",
     });
     const extractAttachment: AttachmentExtractFn = async () => ({
@@ -1430,6 +1435,166 @@ describe("AppleIMessageSource", () => {
       expect(morning.sourceUpdatedAt).toBe("2024-03-08T10:00:00.000Z");
     });
 
+    test("every photo and video is its own document linking to the message that sent it", async () => {
+      const photoPath = join(attTmpDir, "IMG_0001.HEIC");
+      const clipPath = join(attTmpDir, "IMG_0002.MOV");
+      const scanPath = join(attTmpDir, "receipt.png");
+      writeFileSync(photoPath, "photo bytes");
+      writeFileSync(clipPath, "video bytes");
+      writeFileSync(scanPath, "scan bytes");
+
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+        guid: "guid-photo",
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0001.HEIC",
+        totalBytes: 2048,
+      });
+      insertMessage(testDb, 2, 1, {
+        isFromMe: true,
+        date: DATE_2024_03_08_11AM,
+        hasAttachments: true,
+        guid: "guid-video",
+      });
+      insertAttachment(testDb, 2, 2, {
+        filename: clipPath,
+        mimeType: "video/quicktime",
+        transferName: "IMG_0002.MOV",
+        totalBytes: 4096,
+      });
+      insertAttachment(testDb, 3, 2, {
+        filename: scanPath,
+        mimeType: "image/png",
+        transferName: "receipt.png",
+        totalBytes: 512,
+      });
+
+      // The photo holds no text, the scan does; the video is never read.
+      mockExtract = vi.fn(async (data: Uint8Array) =>
+        Buffer.from(data).toString() === "scan bytes"
+          ? { text: "Invoice 4417 total 120.00 due 2026-08-30", truncated: false }
+          : { text: "", truncated: false, noText: true as const },
+      );
+      const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
+
+      expect(mockExtract).toHaveBeenCalledTimes(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const children = result.documents.filter((d) => d.metadata.documentType === "attachment");
+      expect(children).toHaveLength(3);
+      const byTitle = new Map(children.map((d) => [d.title, d]));
+
+      expect(byTitle.get("IMG_0001.HEIC")).toMatchObject({
+        content: "Photo sent by +14085550123 on 2024-03-08 at 10:00",
+        sourceCreatedAt: "2024-03-08T10:00:00.000Z",
+        metadata: { sourceUrl: "messages://open?message-guid=guid-photo", lowSignal: true },
+      });
+      expect(byTitle.get("IMG_0002.MOV")).toMatchObject({
+        content: "Video sent by you to +14085550123 on 2024-03-08 at 11:00",
+        sourceCreatedAt: "2024-03-08T11:00:00.000Z",
+        metadata: { sourceUrl: "messages://open?message-guid=guid-video", lowSignal: true },
+      });
+      // Extracted text keeps the text builder, and links to its own message
+      // rather than to the day's first one.
+      const scan = byTitle.get("receipt.png")!;
+      expect(scan.content).toBe("Invoice 4417 total 120.00 due 2026-08-30");
+      expect(scan.extractedContentHash).toBe(scan.contentHash);
+      expect(scan.metadata.lowSignal).toBeUndefined();
+      expect(scan.metadata.sourceUrl).toBe("messages://open?message-guid=guid-video");
+      expect(parent.metadata.sourceUrl).toBe("messages://open?message-guid=guid-photo");
+
+      // Every child is named by its marker, by id, and listed in the snapshot.
+      const infos = parent.metadata.extra?.attachments as Array<{
+        filename: string;
+        attachmentId?: string;
+      }>;
+      for (const child of children) {
+        const info = infos.find((i) => i.filename === child.title)!;
+        expect(child.externalId).toBe(`${parent.externalId}/att/${info.attachmentId}`);
+        expect(result.presentExternalIds).toContain(child.externalId);
+      }
+      expect(result.presentExternalIds).toHaveLength(4);
+    });
+
+    test("same-named photos keep their ids as the day grows", async () => {
+      const first = join(attTmpDir, "a", "image.jpg");
+      const second = join(attTmpDir, "b", "image.jpg");
+      mkdirSync(join(attTmpDir, "a"));
+      mkdirSync(join(attTmpDir, "b"));
+      writeFileSync(first, "same size");
+      writeFileSync(second, "same size");
+
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: first,
+        mimeType: "image/jpeg",
+        transferName: "image.jpg",
+        totalBytes: 9,
+        guid: "att-first",
+      });
+      insertMessage(testDb, 2, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_11AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 2, 2, {
+        filename: second,
+        mimeType: "image/jpeg",
+        transferName: "image.jpg",
+        totalBytes: 9,
+        guid: "att-second",
+      });
+
+      const noText = vi.fn(async () => ({ text: "", truncated: false, noText: true as const }));
+      const attSource = createAttSource(noText as AttachmentExtractFn);
+      const before = await attSource.sync(null);
+      const idsBefore = new Map(
+        before.documents
+          .filter((d) => d.metadata.documentType === "attachment")
+          .map((d) => [d.metadata.sourceUrl, d.externalId]),
+      );
+      expect(idsBefore.size).toBe(2);
+      expect(new Set(idsBefore.values()).size).toBe(2);
+
+      // A later message on the same day adds a video and a third copy.
+      const clip = join(attTmpDir, "clip.mp4");
+      writeFileSync(clip, "video");
+      insertMessage(testDb, 3, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_11AM + 60_000_000_000,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 3, 3, {
+        filename: clip,
+        mimeType: "video/mp4",
+        transferName: "clip.mp4",
+        totalBytes: 5,
+      });
+      insertAttachment(testDb, 4, 3, {
+        filename: second,
+        mimeType: "image/jpeg",
+        transferName: "image.jpg",
+        totalBytes: 9,
+        guid: "att-third",
+      });
+
+      const after = await attSource.sync(before.cursor);
+      const children = after.documents.filter((d) => d.metadata.documentType === "attachment");
+      expect(children).toHaveLength(4);
+      for (const [url, id] of idsBefore) {
+        expect(children.find((d) => d.metadata.sourceUrl === url)?.externalId).toBe(id);
+      }
+      for (const child of children) expect(after.presentExternalIds).toContain(child.externalId);
+    });
+
     test("snapshot reconciliation includes extracted attachment child documents", async () => {
       const pdfPath = join(attTmpDir, "brief.pdf");
       writeFileSync(pdfPath, "fake pdf content");
@@ -1480,11 +1645,14 @@ describe("AppleIMessageSource", () => {
       }));
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const first = await attSource.sync(null);
+      // Not on disk yet: a failed read emits no child, but its id is listed.
       expect(first.documents).toHaveLength(1);
       expect(mockExtract).not.toHaveBeenCalled();
-      expect(first.documents[0].metadata.extra?.attachments).toEqual([
-        expect.objectContaining({ filename: "late.pdf", reason: "download-failed" }),
-      ]);
+      const parent = first.documents[0];
+      const [info] = parent.metadata.extra?.attachments as Array<{ attachmentId: string }>;
+      expect(info).toMatchObject({ filename: "late.pdf", reason: "download-failed" });
+      const childId = `${parent.externalId}/att/${info.attachmentId}`;
+      expect(first.presentExternalIds).toContain(childId);
 
       writeFileSync(pdfPath, "now local");
 
@@ -1493,6 +1661,7 @@ describe("AppleIMessageSource", () => {
       expect(mockExtract).toHaveBeenCalledOnce();
       const attachmentDoc = second.documents.find((d) => d.metadata.documentType === "attachment");
       expect(attachmentDoc?.content).toBe("Late extracted text");
+      expect(attachmentDoc?.externalId).toBe(childId);
     });
 
     test("skips extraction when disabled (default config)", async () => {
@@ -1533,16 +1702,18 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
+      // The PDF is offloaded, not gone: nothing is written for it, and its id
+      // stays listed, so a child an earlier read left is kept.
       expect(result.documents).toHaveLength(1);
       const doc = result.documents[0];
       expect(doc.metadata.documentType).toBe("conversation");
       const atts = doc.metadata.extra?.attachments as any[];
-      expect(atts).toBeDefined();
       expect(atts[0].reason).toBe("download-failed");
       expect(mockExtract).not.toHaveBeenCalled();
+      expect(result.presentExternalIds).toContain(`${doc.externalId}/att/${atts[0].attachmentId}`);
     });
 
-    test("skips unsupported MIME types", async () => {
+    test("a video becomes a described child without being read", async () => {
       const clipPath = join(attTmpDir, "clip.mp4");
       writeFileSync(clipPath, "fake video");
 
@@ -1563,9 +1734,54 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
+      expect(atts[0].reason).toBe("type-excluded");
+      expect(atts[0].attachmentId).toBeDefined();
+      expect(mockExtract).not.toHaveBeenCalled();
+      const video = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(video).toMatchObject({
+        title: "clip.mp4",
+        content: "Video sent by +14085550123 on 2024-03-08 at 10:00",
+        sourceCreatedAt: "2024-03-08T10:00:00.000Z",
+        metadata: {
+          sourceUrl: "messages://open?message-guid=msg-1",
+          lowSignal: true,
+          extra: { parentExternalId: parent.externalId, mimeType: "video/mp4", sizeBytes: 5000 },
+        },
+      });
+      expect(video.extractedContentHash).toBeUndefined();
+      // The parent keeps its plain marker; the link lives on the child only.
+      expect(parent.content).toContain("[Video: clip.mp4]");
+      expect(parent.content).not.toContain("messages://");
+    });
+
+    test("skips unsupported MIME types", async () => {
+      const zipPath = join(attTmpDir, "bundle.zip");
+      writeFileSync(zipPath, "fake archive");
+
+      insertMessage(testDb, 1, 1, {
+        text: "Archive",
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: zipPath,
+        mimeType: "application/zip",
+        transferName: "bundle.zip",
+        totalBytes: 5000,
+      });
+
+      mockExtract = vi.fn(async () => ({ text: "text", pages: 1, truncated: false }));
+      const attSource = createAttSource(mockExtract as AttachmentExtractFn);
+      const result = await attSource.sync(null);
+
       expect(result.documents).toHaveLength(1);
       const atts = result.documents[0].metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("type-excluded");
+      expect(atts[0].attachmentId).toBeUndefined();
       expect(mockExtract).not.toHaveBeenCalled();
     });
 
@@ -1590,10 +1806,14 @@ describe("AppleIMessageSource", () => {
       const attSource = createAttSource(mockExtract as AttachmentExtractFn);
       const result = await attSource.sync(null);
 
-      expect(result.documents).toHaveLength(1);
-      const atts = result.documents[0].metadata.extra?.attachments as any[];
+      // Too large to read, but still a PDF someone sent: described, not read.
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("too-large");
       expect(mockExtract).not.toHaveBeenCalled();
+      const child = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(child.content).toBe("PDF sent by +14085550123 on 2024-03-08 at 10:00");
     });
 
     test("handles null mimeType", async () => {
@@ -1723,7 +1943,7 @@ describe("AppleIMessageSource", () => {
       expect(convDoc.content).toContain("1KB");
     });
 
-    test("extraction failure logged and skipped", async () => {
+    test("a failed extraction emits nothing and keeps the child's id", async () => {
       const pdfPath = join(attTmpDir, "bad.pdf");
       writeFileSync(pdfPath, "corrupt");
 
@@ -1745,13 +1965,140 @@ describe("AppleIMessageSource", () => {
       const result = await attSource.sync(null);
 
       expect(result.documents).toHaveLength(1);
-      expect(result.documents[0].metadata.documentType).toBe("conversation");
-      const atts = result.documents[0].metadata.extra?.attachments as any[];
+      const parent = result.documents[0];
+      const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0].reason).toBe("extraction-failed");
       expect(atts[0].extracted).toBe(false);
+      expect(result.presentExternalIds).toContain(
+        `${parent.externalId}/att/${atts[0].attachmentId}`,
+      );
     });
 
-    test("records successful OCR with no text without creating an attachment document", async () => {
+    test("an extracted child is kept, not overwritten, when its file goes missing", async () => {
+      const scanPath = join(attTmpDir, "receipt.png");
+      writeFileSync(scanPath, "scan bytes");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: scanPath,
+        mimeType: "image/png",
+        transferName: "receipt.png",
+        totalBytes: 10,
+      });
+
+      mockExtract = vi.fn(async () => ({ text: "Invoice 4417 total 120.00", truncated: false }));
+      const attSource = createAttSource(mockExtract as AttachmentExtractFn);
+      const first = await attSource.sync(null);
+      const textChild = first.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(textChild.content).toBe("Invoice 4417 total 120.00");
+
+      // Offloaded to iCloud: the day is rendered again because the file changed.
+      rmSync(scanPath);
+      const second = await attSource.sync(first.cursor);
+      expect(second.documents.map((d) => d.metadata.documentType)).toEqual(["conversation"]);
+      expect(second.presentExternalIds).toContain(textChild.externalId);
+      const [info] = second.documents[0].metadata.extra?.attachments as any[];
+      expect(info).toMatchObject({ reason: "download-failed", extracted: false });
+    });
+
+    test("an OCR failure emits nothing and keeps the child's id", async () => {
+      const photoPath = join(attTmpDir, "IMG_0001.HEIC");
+      const otherPath = join(attTmpDir, "IMG_0002.HEIC");
+      writeFileSync(photoPath, "photo one");
+      writeFileSync(otherPath, "photo two");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0001.HEIC",
+        totalBytes: 9,
+      });
+      insertAttachment(testDb, 2, 1, {
+        filename: otherPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0002.HEIC",
+        totalBytes: 9,
+      });
+
+      // The OCR backend is configured but unavailable: one read returns
+      // nothing, the other throws.
+      mockExtract = vi.fn(async (data: Uint8Array) => {
+        if (Buffer.from(data).toString() === "photo two") throw new Error("OCR backend error");
+        return null;
+      });
+      const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
+
+      expect(mockExtract).toHaveBeenCalledTimes(2);
+      expect(mockExtract.mock.calls[0][2]).toMatchObject({ reportUnconfigured: true });
+      expect(result.documents).toHaveLength(1);
+      const parent = result.documents[0];
+      const infos = parent.metadata.extra?.attachments as any[];
+      expect(infos.map((i) => i.reason)).toEqual(["extraction-failed", "extraction-failed"]);
+      for (const info of infos) {
+        expect(result.presentExternalIds).toContain(
+          `${parent.externalId}/att/${info.attachmentId}`,
+        );
+      }
+    });
+
+    test("a photo no configured OCR can read becomes a described child", async () => {
+      const photoPath = join(attTmpDir, "IMG_0003.HEIC");
+      writeFileSync(photoPath, "photo bytes");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0003.HEIC",
+        totalBytes: 11,
+      });
+
+      mockExtract = vi.fn(async () => ({
+        text: "",
+        truncated: false,
+        noExtractor: true as const,
+      }));
+      const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
+
+      expect(result.documents).toHaveLength(2);
+      const photo = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(photo.content).toBe("Photo sent by +14085550123 on 2024-03-08 at 10:00");
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      expect((parent.metadata.extra?.attachments as any[])[0].reason).toBe("extraction-failed");
+    });
+
+    test("with no extractor wired, a photo becomes a described child", async () => {
+      const photoPath = join(attTmpDir, "IMG_0004.HEIC");
+      writeFileSync(photoPath, "photo bytes");
+      insertMessage(testDb, 1, 1, {
+        handleId: 1,
+        date: DATE_2024_03_08_10AM,
+        hasAttachments: true,
+      });
+      insertAttachment(testDb, 1, 1, {
+        filename: photoPath,
+        mimeType: "image/heic",
+        transferName: "IMG_0004.HEIC",
+        totalBytes: 11,
+      });
+
+      const result = await createAttSource(undefined).sync(null);
+      const photo = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(photo.metadata.lowSignal).toBe(true);
+      expect(result.presentExternalIds).toContain(photo.externalId);
+    });
+
+    test("a photo whose OCR finds no text becomes a described child", async () => {
       const imagePath = join(attTmpDir, "blank.png");
       writeFileSync(imagePath, "image data");
       insertMessage(testDb, 1, 1, {
@@ -1772,13 +2119,220 @@ describe("AppleIMessageSource", () => {
       );
       const result = await createAttSource(mockExtract as AttachmentExtractFn).sync(null);
 
-      expect(result.documents).toHaveLength(1);
-      const atts = result.documents[0].metadata.extra?.attachments as any[];
+      expect(result.documents).toHaveLength(2);
+      const parent = result.documents.find((d) => d.metadata.documentType === "conversation")!;
+      const atts = parent.metadata.extra?.attachments as any[];
       expect(atts[0]).toMatchObject({
         filename: "blank.png",
         extracted: false,
         reason: "no-text",
       });
+      const photo = result.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(photo).toMatchObject({
+        title: "blank.png",
+        content: "Photo sent by +14085550123 on 2024-03-08 at 10:00",
+        externalId: `${parent.externalId}/att/${atts[0].attachmentId}`,
+        metadata: { sourceUrl: "messages://open?message-guid=msg-1", lowSignal: true },
+      });
+      expect(photo.extractedContentHash).toBeUndefined();
+    });
+  });
+
+  describe("thumbnails", () => {
+    let attTmpDir: string;
+    let sink: FakePreviewSink;
+    let renders: Array<{ path: string; mimeType: string }>;
+
+    const image = {
+      contentType: "image/jpeg" as const,
+      width: 512,
+      height: 384,
+      capturedAt: "2024-03-08T10:05:00.000Z",
+      bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+    };
+
+    beforeEach(() => {
+      attTmpDir = mkdtempSync(join(tmpdir(), "imessage-thumb-"));
+      sink = fakePreviewSink();
+      renders = [];
+    });
+
+    afterEach(() => {
+      rmSync(attTmpDir, { recursive: true, force: true });
+    });
+
+    function thumbSource() {
+      return new AppleIMessageSource(provider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+        attachmentConfig: resolveAttachmentConfig({ extractAttachments: true }),
+        previews: sink,
+        previewLedgerPath: join(tmpDir, "state", "imessage-previews.db"),
+        renderPreview: async (path, mimeType) => {
+          renders.push({ path, mimeType });
+          return image;
+        },
+      });
+    }
+
+    /** A photo message with its file on disk, unless `onDisk` is false. */
+    function photoMessage(rowId: number, date: number, opts: { onDisk?: boolean } = {}) {
+      const path = join(attTmpDir, `IMG_${rowId}.HEIC`);
+      if (opts.onDisk !== false) writeFileSync(path, `invented photo ${rowId}`);
+      insertMessage(testDb, rowId, 1, { handleId: 1, date, hasAttachments: true });
+      insertAttachment(testDb, rowId, rowId, {
+        filename: path,
+        mimeType: "image/heic",
+        transferName: `IMG_${rowId}.HEIC`,
+        totalBytes: 2048,
+      });
+      return path;
+    }
+
+    async function settle() {
+      await sink.settled();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    test("offers a photo's thumbnail once, for its own document, while the day is rewritten", async () => {
+      const path = photoMessage(1, DATE_2024_03_08_10AM);
+      const attSource = thumbSource();
+      const first = await attSource.sync(null);
+      await settle();
+      const photo = first.documents.find((d) => d.metadata.documentType === "attachment")!;
+      expect(sink.offers.map((o) => o.externalId)).toEqual([photo.externalId]);
+      expect(sink.offers[0]!.outcome).toBe("stored");
+      expect(renders).toEqual([{ path, mimeType: "image/heic" }]);
+
+      // A new message rewrites the day and its photo; the photo is not offered again.
+      insertMessage(testDb, 2, 1, { text: "Lovely", handleId: 1, date: DATE_2024_03_08_11AM });
+      const second = await attSource.sync(first.cursor);
+      await settle();
+      expect(second.documents.some((d) => d.externalId === photo.externalId)).toBe(true);
+      expect(sink.offers).toHaveLength(1);
+      attSource.dispose();
+    });
+
+    test("a resync forgets what was offered and offers it again", async () => {
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const attSource = thumbSource();
+      await attSource.sync(null);
+      await settle();
+      expect(sink.offers).toHaveLength(1);
+
+      await attSource.sync(null);
+      await settle();
+      expect(sink.offers).toHaveLength(2);
+      expect(sink.offers[1]!.externalId).toBe(sink.offers[0]!.externalId);
+      attSource.dispose();
+    });
+
+    test("a file not on disk gets no offer, and is offered once it arrives", async () => {
+      const path = photoMessage(1, DATE_2024_03_08_10AM, { onDisk: false });
+      const attSource = thumbSource();
+      const first = await attSource.sync(null);
+      await settle();
+      // The photo is described, so its document exists, but there is nothing to render.
+      expect(first.documents.some((d) => d.metadata.documentType === "attachment")).toBe(true);
+      expect(sink.offers).toHaveLength(0);
+
+      // The file arrives from iCloud: the day's signature changes and the day
+      // is written again with no new message, offering the thumbnail.
+      writeFileSync(path, "invented photo, downloaded");
+      const second = await attSource.sync(first.cursor);
+      await settle();
+      expect(second.documents.some((d) => d.metadata.documentType === "attachment")).toBe(true);
+      expect(sink.offers).toHaveLength(1);
+      expect(renders).toEqual([{ path, mimeType: "image/heic" }]);
+      attSource.dispose();
+    });
+
+    test("a refused thumbnail waits for the file to change; a deferred one is offered when due", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2024-03-08T12:00:00Z"));
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const refusedPath = photoMessage(2, DATE_2024_03_08_11AM);
+      const attSource = thumbSource();
+      // Offers go newest first, so the first is the later photo.
+      sink.answerWith((externalId) =>
+        externalId === sink.offers[0]?.externalId ? "refused" : "deferred",
+      );
+      const first = await attSource.sync(null);
+      await settle();
+      expect(sink.offers.map((o) => o.outcome).sort()).toEqual(["deferred", "refused"]);
+      const refusedId = sink.offers.find((o) => o.outcome === "refused")!.externalId;
+      const deferredId = sink.offers.find((o) => o.outcome === "deferred")!.externalId;
+      sink.answerWith("stored");
+
+      // Before the deferred one is due, a pass offers nothing.
+      vi.setSystemTime(new Date("2024-03-08T12:00:30Z"));
+      const second = await attSource.sync(first.cursor);
+      await settle();
+      expect(sink.offers).toHaveLength(2);
+
+      // Once due, the next pass that reaches the tail offers it again.
+      vi.setSystemTime(new Date("2024-03-08T12:02:00Z"));
+      const third = await attSource.sync(second.cursor);
+      await settle();
+      expect(sink.offers.slice(2).map((o) => o.externalId)).toEqual([deferredId]);
+
+      // The refused file is offered again only after it changes.
+      utimesSync(refusedPath, new Date("2024-03-08T12:03:00Z"), new Date("2024-03-08T12:03:00Z"));
+      await attSource.sync(third.cursor);
+      await settle();
+      expect(sink.offers.slice(3).map((o) => o.externalId)).toEqual([refusedId]);
+      attSource.dispose();
+    });
+
+    test("a document the gateway does not know is forgotten and offered with its day again", async () => {
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const attSource = thumbSource();
+      sink.answerWith("not-found");
+      const first = await attSource.sync(null);
+      await settle();
+      sink.answerWith("stored");
+      insertMessage(testDb, 2, 1, { text: "Again", handleId: 1, date: DATE_2024_03_08_11AM });
+      await attSource.sync(first.cursor);
+      await settle();
+      expect(sink.offers.map((o) => o.outcome)).toEqual(["not-found", "stored"]);
+      attSource.dispose();
+    });
+
+    test("offers at most 100 per pass, newest first, and the rest on later passes", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2024-03-08T12:00:00Z"));
+      for (let i = 1; i <= 103; i++) photoMessage(i, DATE_2024_03_08_10AM + i * 1_000_000_000);
+      const attSource = thumbSource();
+      const first = await attSource.sync(null);
+      await settle();
+      expect(sink.offers).toHaveLength(100);
+      const newest = renders.map((r) => r.path);
+      expect(newest[0]).toBe(join(attTmpDir, "IMG_103.HEIC"));
+      expect(newest).not.toContain(join(attTmpDir, "IMG_3.HEIC"));
+
+      vi.setSystemTime(new Date("2024-03-08T12:00:01Z"));
+      await attSource.sync(first.cursor);
+      await settle();
+      expect(sink.offers).toHaveLength(103);
+      expect(
+        renders
+          .slice(100)
+          .map((r) => r.path)
+          .sort(),
+      ).toEqual([1, 2, 3].map((i) => join(attTmpDir, `IMG_${i}.HEIC`)).sort());
+      attSource.dispose();
+    });
+
+    test("a source without a sink offers nothing and opens no ledger", async () => {
+      photoMessage(1, DATE_2024_03_08_10AM);
+      const plain = new AppleIMessageSource(provider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+        attachmentConfig: resolveAttachmentConfig({ extractAttachments: true }),
+        previewLedgerPath: join(tmpDir, "state", "imessage-previews.db"),
+      });
+      await plain.sync(null);
+      expect(existsSync(join(tmpDir, "state", "imessage-previews.db"))).toBe(false);
     });
   });
 
@@ -2124,6 +2678,189 @@ describe("AppleIMessageSource", () => {
         "+14085550123:2024-03-08",
         "+14085550123:2024-03-09",
       ]);
+    });
+  });
+
+  describe("contact names", () => {
+    const handle = "+15550100123";
+    let addressBook: Db;
+    let namedProvider: AppleProvider;
+    let named: AppleIMessageSource;
+
+    beforeEach(async () => {
+      const contactsDir = join(tmpDir, "AddressBook");
+      mkdirSync(contactsDir);
+      addressBook = createAddressBook(join(contactsDir, "AddressBook-v22.abcddb"));
+      insertHandle(testDb, 3, handle);
+      insertChat(testDb, 3, handle, { handleIds: [3] });
+      namedProvider = new AppleProvider({
+        notesDbPath: join(tmpDir, "nonexistent.sqlite"),
+        remindersDirPath: join(tmpDir, "nonexistent-dir"),
+        imessageDbPath: join(tmpDir, "chat.db"),
+        contactsDirPath: contactsDir,
+        accountId: "test@icloud.com",
+      });
+      await namedProvider.initialize();
+      named = new AppleIMessageSource(namedProvider, {
+        sourceId: "apple-imessage:test@icloud.com",
+        providerId: "apple:test@icloud.com",
+      });
+    });
+
+    afterEach(async () => {
+      addressBook.close();
+      await namedProvider.disconnect();
+    });
+
+    function dayNs(day: number, hour = 0, minute = 42): number {
+      return dateToImessageNs(new Date(Date.UTC(2026, 10, day, hour, minute)));
+    }
+
+    test("titles, transcript lines and the participant carry the contact's name", async () => {
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+1 555 010 0123"],
+      });
+      addContact(addressBook, 2, {
+        firstName: "Jamie",
+        lastName: "Lopez",
+        emails: ["friend@example.com"],
+      });
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(20) });
+      insertMessage(testDb, 2, 3, { text: "No problem", isFromMe: true, date: dayNs(20, 0, 43) });
+      insertMessage(testDb, 3, 2, { text: "Chapter four", handleId: 2, date: dayNs(20, 18, 5) });
+
+      const result = await named.sync(null);
+      const oneToOne = result.documents.find((d) => d.externalId === `${handle}:2026-11-20`)!;
+      expect(oneToOne.title).toBe("+15550100123 (Maya Reeves) — 2026-11-20");
+      expect(oneToOne.content).toContain("**00:42** +15550100123 (Maya Reeves): Running late");
+      expect(oneToOne.content).toContain("**00:43** You: No problem");
+      expect(oneToOne.metadata.people?.find((p) => !p.isSelf)?.name).toBe("Maya Reeves");
+
+      const group = result.documents.find((d) => d.externalId === "chat-group-1:2026-11-20")!;
+      expect(group.title).toBe("Family — 2026-11-20");
+      expect(group.content).toContain("**18:05** friend@example.com (Jamie Lopez): Chapter four");
+      expect(group.metadata.people?.find((p) => p.emails?.[0] === "friend@example.com")?.name).toBe(
+        "Jamie Lopez",
+      );
+    });
+
+    test("a day with no named handle keeps the signature it had before names existed", async () => {
+      addContact(addressBook, 1, {
+        firstName: "Jamie",
+        lastName: "Lopez",
+        phones: ["+15550100999"],
+      });
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(20) });
+      const plain = await source.sync(null);
+      const withBook = await named.sync(null);
+      expect(withBook.documents[0].title).toBe("+15550100123 — 2026-11-20");
+      expect(withBook.cursor).toEqual(plain.cursor);
+    });
+
+    test("a contact added or renamed later re-emits that chat's days on the next sync", async () => {
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(19) });
+      insertMessage(testDb, 2, 3, { text: "Here now", handleId: 3, date: dayNs(20) });
+      insertMessage(testDb, 3, 2, { text: "Unrelated", handleId: 2, date: dayNs(20) });
+
+      const first = await named.sync(null);
+      expect(first.documents.map((d) => d.title).sort()).toEqual([
+        "+15550100123 — 2026-11-19",
+        "+15550100123 — 2026-11-20",
+        "Family — 2026-11-20",
+      ]);
+
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      const added = await named.sync(first.cursor);
+      expect(added.documents.map((d) => d.title).sort()).toEqual([
+        "+15550100123 (Maya Reeves) — 2026-11-19",
+        "+15550100123 (Maya Reeves) — 2026-11-20",
+      ]);
+
+      const unchanged = await named.sync(added.cursor);
+      expect(unchanged.documents).toEqual([]);
+
+      renameContact(addressBook, 1, { firstName: "Sarah", lastName: "Mendez" });
+      const renamed = await named.sync(unchanged.cursor);
+      expect(renamed.documents.map((d) => d.title).sort()).toEqual([
+        "+15550100123 (Sarah Mendez) — 2026-11-19",
+        "+15550100123 (Sarah Mendez) — 2026-11-20",
+      ]);
+      expect(renamed.documents[0].content).toContain("+15550100123 (Sarah Mendez): ");
+    });
+
+    test("a handle two contacts claim shows no name", async () => {
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      addContact(addressBook, 2, {
+        firstName: "Jamie",
+        lastName: "Lopez",
+        phones: ["+15550100123"],
+      });
+      insertMessage(testDb, 1, 3, { text: "Running late", handleId: 3, date: dayNs(20) });
+
+      const result = await named.sync(null);
+      expect(result.documents[0].title).toBe("+15550100123 — 2026-11-20");
+      expect(result.documents[0].content).toContain("**00:42** +15550100123: Running late");
+    });
+
+    test("a mass rename re-renders a bounded share of days per run, newest first", async () => {
+      const days = 203;
+      for (let i = 0; i < days; i++) {
+        insertMessage(testDb, i + 1, 3, {
+          text: `Day ${i}`,
+          handleId: 3,
+          date: dateToImessageNs(new Date(Date.UTC(2026, 0, 1 + i, 9))),
+        });
+      }
+      const first = await named.sync(null);
+      expect(first.documents).toHaveLength(days);
+
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      const second = await named.sync(first.cursor);
+      expect(second.documents).toHaveLength(200);
+      expect(second.documents.every((d) => d.title.includes("(Maya Reeves)"))).toBe(true);
+      const renderedDates = second.documents.map((d) => d.externalId.slice(-10)).sort();
+      expect(renderedDates[0]).toBe("2026-01-04");
+
+      const third = await named.sync(second.cursor);
+      expect(third.documents.map((d) => d.externalId.slice(-10)).sort()).toEqual([
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03",
+      ]);
+      expect(third.documents.every((d) => d.title.includes("(Maya Reeves)"))).toBe(true);
+
+      const fourth = await named.sync(third.cursor);
+      expect(fourth.documents).toEqual([]);
+      expect(fourth.presentExternalIds).toBeUndefined();
+    });
+
+    test("message changes are not held back by the rename bound", async () => {
+      insertMessage(testDb, 1, 3, { text: "Draft", handleId: 3, date: dayNs(20) });
+      const first = await named.sync(null);
+
+      addContact(addressBook, 1, {
+        firstName: "Maya",
+        lastName: "Reeves",
+        phones: ["+15550100123"],
+      });
+      testDb.prepare("UPDATE message SET text = ? WHERE ROWID = 1").run("Edited");
+      const second = await named.sync(first.cursor);
+      expect(second.documents).toHaveLength(1);
+      expect(second.documents[0].content).toContain("+15550100123 (Maya Reeves): Edited");
     });
   });
 });

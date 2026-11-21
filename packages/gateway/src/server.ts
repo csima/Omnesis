@@ -118,6 +118,7 @@ import { mountWebCapturePolicyRoutes } from "./http/routes/web-capture-policy.js
 import { WebCapturePolicyService } from "./sources/web/capture-policy.js";
 import { registerWebPreviewAdmission } from "./sources/web/preview-admission.js";
 import { DocumentPreviewService, deletePreviewsSafely } from "./previews/service.js";
+import { createDeclaredPreviewAdmission } from "./previews/declared-admission.js";
 import { mountDocumentPreviewRoutes } from "./http/routes/document-previews.js";
 import { getOwnedWebDomains } from "./owned-web-domains.js";
 import { mountWatchV2Routes } from "./http/routes/watch.js";
@@ -1598,14 +1599,16 @@ export function createServer(
     watermarkService,
   });
 
-  // Document previews: stored and served generically; each source that keeps
-  // them registers its own admission rule.
+  // Document previews: stored and served generically. A gateway-hosted source
+  // that keeps them registers its own admission rule; a collector's source
+  // declares them in its descriptor.
   const previewService = previewStore
     ? new DocumentPreviewService({
         db,
         store: previewStore,
         gatePush: (sourceIds, auth) => sourceService.gatePush(sourceIds, auth),
         streamFor: (sourceId, auth) => sourceService.streamFor(sourceId, auth),
+        declared: createDeclaredPreviewAdmission({ db, descriptors: collectorDescriptors }),
       })
     : undefined;
 
@@ -1770,7 +1773,11 @@ export function createServer(
 
   // /documents/:id/refs + /links/stats — registered after search but
   // before people in the original.
-  mountDocumentRefsRoute(app, { db, documentService });
+  mountDocumentRefsRoute(app, {
+    db,
+    documentService,
+    ...(previewService ? { previews: previewService } : {}),
+  });
 
   // /documents/:id/graph — multi-edge-type subgraph for the portal's
   // graph-debug page. Registered before the /documents/:id catch-all so

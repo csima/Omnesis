@@ -38,6 +38,13 @@ export interface AttachmentInfo {
     | "unavailable"
     | "reference-only";
   url?: string;
+  /**
+   * The stable id of the child document this attachment is, or becomes once
+   * it is read: the child's externalId is `<parent externalId>/att/<attachmentId>`.
+   * Lets a client match a marker in the parent to the child without
+   * recomputing the id. Absent when the source makes no child of it.
+   */
+  attachmentId?: string;
 }
 
 /**
@@ -64,6 +71,14 @@ export interface ExtractionResult {
   truncated: boolean;
   /** Extraction completed successfully, but the attachment contained no text. */
   noText?: true;
+  /**
+   * Nothing read the attachment because the backend its type needs is not
+   * configured — no OCR model assigned for an image or a scanned PDF. Unlike
+   * `null`, which says reading was attempted and failed, this is a settled
+   * answer until the configuration changes. Returned only to a caller that
+   * asks with `reportUnconfigured`; any other caller gets `null`, as before.
+   */
+  noExtractor?: true;
   extra?: Record<string, unknown> & {
     /** Native PDF text was preserved, but one or more sparse pages still need OCR. */
     ocrIncomplete?: true;
@@ -295,11 +310,15 @@ export function fileKindName(mimeType: string, overrides?: Record<string, string
 /**
  * Attachment extraction function signature.
  * Implemented in collector (wraps unpdf), injected into sources.
+ *
+ * `null` means no text could be read. A caller that must tell a failed read
+ * (retry later, keep what it has) from one no configured backend could make
+ * passes `reportUnconfigured` and gets `{ noExtractor: true }` for the latter.
  */
 export type AttachmentExtractFn = (
   data: Uint8Array,
   mimeType: string,
-  opts?: { maxTextLength?: number },
+  opts?: { maxTextLength?: number; reportUnconfigured?: boolean },
 ) => Promise<ExtractionResult | null>;
 
 /** An inline image at or below this size, shown by the HTML body, is decoration. */
@@ -538,6 +557,27 @@ export function isTrivialExtraction(text: string): boolean {
   return (tokens?.length ?? 0) < MIN_CONTENT_TOKENS;
 }
 
+/** What every attachment child records about the file that carried it. */
+export interface AttachmentChildMeta {
+  mimeType: string;
+  sizeBytes: number | null;
+  seq?: number;
+  /**
+   * ISO instant this attachment was actually sent, overriding the parent's
+   * timestamps. Both `sourceCreatedAt` and `sourceUpdatedAt` take it: a sent
+   * file is not edited afterwards, so its two timestamps are the same
+   * instant, and pinning the update time stops every attachment in a chat
+   * day from being rewritten each time a later message extends that day.
+   */
+  occurredAt?: string;
+  /**
+   * Link that opens this attachment where it was sent, overriding the
+   * parent's. For the same reason as `occurredAt`: a parent that aggregates
+   * many items links to one of them, which is not where this file is.
+   */
+  sourceUrl?: string;
+}
+
 /**
  * Build a DocumentInput for an extracted attachment.
  *
@@ -550,37 +590,93 @@ export function isTrivialExtraction(text: string): boolean {
  * carries the generic `lowSignal` marker, so shared consumers can skip it
  * without branching on a source name or a MIME type.
  *
- * Timestamps default to the parent's, which is right when the parent is a
- * single dated item — one email carries one send time, and its attachments
- * were sent with it. It is wrong when the parent aggregates many dated items:
- * a chat day-document spans a whole day, and inheriting its bounds collapses
- * every attachment sent that day onto the day's first message. Sources whose
- * parent is an aggregate pass `occurredAt` — the time of the individual
- * message that carried this file — so ordering within the day survives.
+ * Timestamps and the link default to the parent's, which is right when the
+ * parent is a single dated item — one email carries one send time, and its
+ * attachments were sent with it. It is wrong when the parent aggregates many
+ * dated items: a chat day-document spans a whole day, and inheriting its
+ * bounds collapses every attachment sent that day onto the day's first
+ * message. Sources whose parent is an aggregate pass `occurredAt` — the time
+ * of the individual message that carried this file — so ordering within the
+ * day survives, and `sourceUrl` for a link to that message.
  */
 export function buildAttachmentDocument(
   parentDoc: DocumentInput,
   filename: string,
   extractionResult: ExtractionResult,
-  meta: {
-    mimeType: string;
-    sizeBytes: number | null;
-    seq?: number;
-    /**
-     * ISO instant this attachment was actually sent, overriding the parent's
-     * timestamps. Both `sourceCreatedAt` and `sourceUpdatedAt` take it: a sent
-     * file is not edited afterwards, so its two timestamps are the same
-     * instant, and pinning the update time stops every attachment in a chat
-     * day from being rewritten each time a later message extends that day.
-     */
-    occurredAt?: string;
-  },
+  meta: AttachmentChildMeta,
 ): DocumentInput {
   const content = extractionResult.text;
   const contentHash = computeContentHash(content);
-  const stableId = deriveAttachmentStableId(filename, meta.sizeBytes, meta.mimeType, meta.seq ?? 0);
+  return buildAttachmentChild(parentDoc, filename, meta, {
+    content,
+    contentHash,
+    // For attachment docs `content` IS the raw extracted text — no wrapping
+    // — so the rendered hash and the cross-source dedup hash are equal.
+    // Drive/Notion/etc. wrap, so this projection lets the dedup link work
+    // across sources regardless of per-provider rendering choices.
+    extractedContentHash: contentHash,
+    mentionsFrom: content,
+    // Omitted rather than `false` when the extraction has content, matching
+    // the marker's contract.
+    lowSignal: isTrivialExtraction(content),
+    // Extractor-emitted extras (e.g. iCalUIDs from the ICS extractor) go
+    // first; the standard keys override on collision so an extractor can't
+    // accidentally clobber parentExternalId etc.
+    extraBefore: extractionResult.extra ?? {},
+    extraAfter: { pages: extractionResult.pages, truncated: extractionResult.truncated },
+  });
+}
 
-  const people = derivePeopleForAttachment(parentDoc, content);
+/**
+ * Build a DocumentInput for an attachment that has no extracted text — a
+ * photo, a video, a scan nothing has read yet, a file not on disk — so the
+ * file is still a document of its own that search, the trail and the parent
+ * can point at.
+ *
+ * Its content is `description`, a line the source writes about the file (what
+ * it is, who sent it, when). The externalId is the one
+ * {@link buildAttachmentDocument} gives the same file, so a later extraction
+ * replaces this document in place rather than adding a second one.
+ *
+ * It never carries an `extractedContentHash`: nothing was extracted, and two
+ * descriptions that happen to read the same say nothing about whether the
+ * files are the same, so they must not earn a duplicate-content link. It is
+ * always `lowSignal` — a description is not content worth a reasoning run or
+ * a place in a capped neighbourhood ahead of real documents.
+ */
+export function buildMediaAttachmentDocument(
+  parentDoc: DocumentInput,
+  filename: string,
+  meta: AttachmentChildMeta & { description: string },
+): DocumentInput {
+  const { description, ...childMeta } = meta;
+  return buildAttachmentChild(parentDoc, filename, childMeta, {
+    content: description,
+    contentHash: computeContentHash(description),
+    // The description restates the parent's people; mentions come only from
+    // a file's own text.
+    mentionsFrom: "",
+    lowSignal: true,
+  });
+}
+
+/** The shared shape of every attachment child, extracted or not. */
+function buildAttachmentChild(
+  parentDoc: DocumentInput,
+  filename: string,
+  meta: AttachmentChildMeta,
+  body: {
+    content: string;
+    contentHash: string;
+    extractedContentHash?: string;
+    mentionsFrom: string;
+    lowSignal: boolean;
+    extraBefore?: Record<string, unknown>;
+    extraAfter?: Record<string, unknown>;
+  },
+): DocumentInput {
+  const stableId = deriveAttachmentStableId(filename, meta.sizeBytes, meta.mimeType, meta.seq ?? 0);
+  const people = derivePeopleForAttachment(parentDoc, body.mentionsFrom);
 
   return {
     providerId: parentDoc.providerId,
@@ -592,32 +688,24 @@ export function buildAttachmentDocument(
     // that carried them, instead of stranding them in a partition nobody names.
     partitionKey: parentDoc.partitionKey,
     title: filename,
-    content,
-    contentHash,
-    // For attachment docs `content` IS the raw extracted text — no wrapping
-    // — so the rendered hash and the cross-source dedup hash are equal.
-    // Drive/Notion/etc. wrap, so this projection lets the dedup link work
-    // across sources regardless of per-provider rendering choices.
-    extractedContentHash: contentHash,
+    content: body.content,
+    contentHash: body.contentHash,
+    ...(body.extractedContentHash !== undefined
+      ? { extractedContentHash: body.extractedContentHash }
+      : {}),
     metadata: {
-      sourceUrl: parentDoc.metadata.sourceUrl,
+      sourceUrl: meta.sourceUrl ?? parentDoc.metadata.sourceUrl,
       appUrl: parentDoc.metadata.appUrl,
       documentType: "attachment",
       people,
-      // Omitted rather than `false` when the extraction has content, matching
-      // the marker's contract.
-      ...(isTrivialExtraction(content) ? { lowSignal: true } : {}),
+      ...(body.lowSignal ? { lowSignal: true } : {}),
       extra: {
-        // Extractor-emitted extras first (e.g. iCalUIDs from the ICS
-        // extractor); standard keys below override on collision so an
-        // extractor can't accidentally clobber parentExternalId etc.
-        ...(extractionResult.extra ?? {}),
+        ...body.extraBefore,
         parentExternalId: parentDoc.externalId,
         originalFilename: filename,
         mimeType: meta.mimeType,
         sizeBytes: meta.sizeBytes,
-        pages: extractionResult.pages,
-        truncated: extractionResult.truncated,
+        ...body.extraAfter,
       },
     },
     sourceCreatedAt: meta.occurredAt ?? parentDoc.sourceCreatedAt,

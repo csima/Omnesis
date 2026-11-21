@@ -114,6 +114,7 @@ interface DocRow {
   document_type: string | null;
   mime_type: string | null;
   app_url: string | null;
+  low_signal: number | null;
 }
 
 interface PersonRow {
@@ -499,7 +500,8 @@ function loadDocRow(db: Db, id: string): DocRow | null {
               json_extract(metadata, '$.sourceUrl') AS source_url,
               json_extract(metadata, '$.documentType') AS document_type,
               json_extract(metadata, '$.extra.mimeType') AS mime_type,
-              json_extract(metadata, '$.appUrl') AS app_url
+              json_extract(metadata, '$.appUrl') AS app_url,
+              json_extract(metadata, '$.lowSignal') AS low_signal
        FROM documents
        WHERE id = ?`,
     )
@@ -534,6 +536,7 @@ function vertexFromDoc(row: DocRow, depth: number): GraphVertex {
     sourceCreatedAt: row.source_created_at,
     documentType: row.document_type ?? undefined,
     mimeType: row.mime_type ?? undefined,
+    ...(row.low_signal === 1 ? { lowSignal: true as const } : {}),
   };
 }
 
@@ -579,7 +582,10 @@ function prepare(db: Db) {
     // 200-message thread, a doc cited dozens of times — it keeps the most
     // RECENT members rather than the earliest-ingested ones. This matters for
     // "what's the latest" questions: the cap must not drop the newest reply in
-    // favour of the oldest. `dl.id` breaks ties deterministically.
+    // favour of the oldest. `dl.id` breaks ties deterministically. Low-signal
+    // neighbours (`metadata.lowSignal`: a photo described but not read, a
+    // logo) sort after every other, so a day of chat with forty photos still
+    // keeps its substantive neighbours under the cap.
     outboundLinks: db.prepare(
       `SELECT dl.id, dl.link_type, dl.target_doc_id, dl.provenance_kind,
               d.source_id AS other_source_id,
@@ -588,7 +594,7 @@ function prepare(db: Db) {
        JOIN documents d ON d.id = dl.target_doc_id
        WHERE dl.source_doc_id = ?
          AND dl.target_doc_id IS NOT NULL${hubFilterSql}
-       ORDER BY d.source_created_at DESC, dl.id`,
+       ORDER BY COALESCE(json_extract(d.metadata, '$.lowSignal'), 0), d.source_created_at DESC, dl.id`,
     ),
     inboundLinks: db.prepare(
       `SELECT dl.source_doc_id, dl.link_type, dl.provenance_kind,
@@ -597,7 +603,7 @@ function prepare(db: Db) {
        FROM document_links dl
        JOIN documents d ON d.id = dl.source_doc_id
        WHERE dl.target_doc_id = ?${hubFilterSql}
-       ORDER BY d.source_created_at DESC, dl.id`,
+       ORDER BY COALESCE(json_extract(d.metadata, '$.lowSignal'), 0), d.source_created_at DESC, dl.id`,
     ),
     nearDup: db.prepare(
       // Pick the "other" endpoint of every near-dup edge involving the
@@ -791,8 +797,10 @@ export function expandOneHop(
   }
 
   const neighbors: OneHopNeighbor[] = [];
+  const lowSignal = new Set<string>();
   for (const { vid, type, direction } of byNeighbor.values()) {
     const v = vertexById.get(vid)!;
+    if (v.lowSignal) lowSignal.add(v.documentId!);
     neighbors.push({
       documentId: v.documentId!,
       edgeType: type,
@@ -809,7 +817,11 @@ export function expandOneHop(
 
   // Rank most-structural-first; break ties by recency (newer ISO first) so a
   // same-type cluster surfaces its latest member and the order is stable.
+  // Low-signal neighbours go after all the others whatever their edge, so a
+  // seed's photos never crowd a reply or an event out of the fanout.
   neighbors.sort((a, b) => {
+    const quiet = Number(lowSignal.has(a.documentId)) - Number(lowSignal.has(b.documentId));
+    if (quiet !== 0) return quiet;
     const r = edgeTypeRank(a.edgeType) - edgeTypeRank(b.edgeType);
     if (r !== 0) return r;
     const ta = a.sourceCreatedAt ?? "";

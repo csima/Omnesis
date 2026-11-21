@@ -263,3 +263,57 @@ describe("a provider context", () => {
     expect(source.stateDir).toBe(provider.stateDir);
   });
 });
+
+describe("document previews", () => {
+  function outboxSpy() {
+    const sinks: Array<{ sourceId: string; providerId: string }> = [];
+    const outbox = {
+      sinkFor: (source: { sourceId: string; providerId: string }) => {
+        sinks.push(source);
+        return { offer: () => Promise.resolve("deferred" as const) };
+      },
+    };
+    return { outbox, sinks };
+  }
+
+  it("lends a sink, bound to the source, only to a source that declares previews", () => {
+    const { outbox, sinks } = outboxSpy();
+    const declared = buildSourceHost({
+      ...inputs("/cfg"),
+      sourceId: "acme-photos:person@example.com",
+      sourceType: "acme-photos",
+      declaresAnalytics: false,
+      providerId: "acme:person@example.com",
+      previewOutbox: outbox,
+      declaresPreviews: true,
+    });
+    expect(declared.previews).toBeDefined();
+    expect(sinks).toEqual([
+      { sourceId: "acme-photos:person@example.com", providerId: "acme:person@example.com" },
+    ]);
+
+    const undeclared = buildSourceHost({
+      ...inputs("/cfg"),
+      sourceId: "acme-mail:person@example.com",
+      sourceType: "acme-mail",
+      declaresAnalytics: false,
+      previewOutbox: outbox,
+      declaresPreviews: false,
+    });
+    expect(undeclared.previews).toBeUndefined();
+    expect(sinks).toHaveLength(1);
+  });
+
+  it("is absent without an outbox, and never offered to a provider context", () => {
+    const host = buildSourceHost({
+      ...inputs("/cfg"),
+      sourceId: "acme-photos:person@example.com",
+      sourceType: "acme-photos",
+      declaresAnalytics: false,
+      declaresPreviews: true,
+    });
+    expect(host.previews).toBeUndefined();
+    const provider = buildProviderHost(inputs("/cfg"));
+    expect((provider as unknown as Record<string, unknown>).previews).toBeUndefined();
+  });
+});

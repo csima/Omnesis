@@ -11,6 +11,8 @@ import {
   isTapbackRemoval,
   buildChatTitle,
   buildIMessageSourceUrl,
+  describeMediaAttachment,
+  mediaAttachmentNoun,
   normalizeDayChat,
 } from "./imessage-normalizer.js";
 import { appleIMessageDocumentProfile } from "./document-profiles.js";
@@ -138,6 +140,54 @@ describe("buildIMessageSourceUrl", () => {
   test("emits no link without a message to anchor on", () => {
     expect(buildIMessageSourceUrl(undefined)).toBeUndefined();
     expect(buildIMessageSourceUrl("")).toBeUndefined();
+  });
+});
+
+describe("describeMediaAttachment", () => {
+  const sent = makeMsg({
+    sender: "+15550100142",
+    contactId: "+15550100142",
+    senderName: "Maya Reeves",
+    date: new Date("2026-03-04T08:12:40Z"),
+  });
+
+  test("names the sender with their contact name, and when it was sent", () => {
+    const chat = { ...oneToOneChat, chatIdentifier: "+15550100142" };
+    expect(describeMediaAttachment(sent, "image/heic", chat)).toBe(
+      "Photo sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+    expect(describeMediaAttachment(sent, "video/quicktime", chat)).toBe(
+      "Video sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+    expect(describeMediaAttachment(sent, "application/pdf", chat)).toBe(
+      "PDF sent by +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+  });
+
+  test("names the group a file was sent to", () => {
+    expect(describeMediaAttachment(sent, "image/jpeg", groupChat)).toBe(
+      "Photo sent by +15550100142 (Maya Reeves) in Family on 2026-03-04 at 08:12",
+    );
+  });
+
+  test("names the conversation a file the user sent went to", () => {
+    const mine = makeMsg({ isFromMe: true, sender: "You", date: sent.date });
+    const chat: IMessageChatInfo = {
+      ...oneToOneChat,
+      chatIdentifier: "+15550100142",
+      handleNames: { "+15550100142": "Maya Reeves" },
+    };
+    expect(describeMediaAttachment(mine, "image/png", chat)).toBe(
+      "Photo sent by you to +15550100142 (Maya Reeves) on 2026-03-04 at 08:12",
+    );
+  });
+
+  test("only photos, videos and PDFs are media", () => {
+    expect(mediaAttachmentNoun("image/png; charset=binary")).toBe("Photo");
+    expect(mediaAttachmentNoun("VIDEO/MP4")).toBe("Video");
+    expect(mediaAttachmentNoun("application/pdf")).toBe("PDF");
+    expect(mediaAttachmentNoun("audio/x-m4a")).toBeUndefined();
+    expect(mediaAttachmentNoun("application/zip")).toBeUndefined();
   });
 });
 
@@ -871,6 +921,118 @@ describe("self-authored vocabulary evidence", () => {
     expect(enabled.contentHash).toBe(disabled.contentHash);
     expect(enabled.metadata.selfAuthoredText).toEqual([
       { text: "Lanternshift", recordedAt: "2024-03-08T10:30:00.000Z", origin: "written" },
+    ]);
+  });
+});
+
+describe("contact names from the Mac's Contacts", () => {
+  const handle = "+14155550123";
+  const namedChat: IMessageChatInfo = {
+    chatIdentifier: handle,
+    displayName: null,
+    isGroup: false,
+    service: "iMessage",
+    handleNames: { [handle]: "Maya Reeves" },
+  };
+
+  function render(messages: ParsedIMessage[], chat: IMessageChatInfo) {
+    return normalizeDayChat(
+      "2026-11-20",
+      messages,
+      chat,
+      ProviderId("apple:test"),
+      SourceId("apple-imessage:test"),
+    );
+  }
+
+  const day = (named: boolean): ParsedIMessage[] => [
+    makeMsg({
+      guid: "m1",
+      text: "Running late",
+      date: new Date("2026-11-20T00:42:00Z"),
+      sender: handle,
+      contactId: handle,
+      senderName: named ? "Maya Reeves" : undefined,
+    }),
+    makeMsg({
+      guid: "m2",
+      text: "No problem",
+      date: new Date("2026-11-20T00:43:00Z"),
+      sender: "You",
+      isFromMe: true,
+    }),
+    makeMsg({
+      guid: "m3",
+      text: "",
+      date: new Date("2026-11-20T00:44:00Z"),
+      sender: handle,
+      contactId: handle,
+      senderName: named ? "Maya Reeves" : undefined,
+      tapback: { type: "Loved", targetGuid: "m2", action: "add" },
+    }),
+  ];
+
+  test("a 1:1 title shows the contact name beside the handle", () => {
+    expect(buildChatTitle(namedChat)).toBe("+14155550123 (Maya Reeves)");
+    const doc = render(day(true), namedChat);
+    expect(doc.title).toBe("+14155550123 (Maya Reeves) — 2026-11-20");
+    expect(doc.content.split("\n")[0]).toBe("# +14155550123 (Maya Reeves) — 2026-11-20");
+  });
+
+  test("transcript and tapback lines show the name; the owner's lines are unchanged", () => {
+    const doc = render(day(true), namedChat);
+    expect(doc.content).toContain("**00:42** +14155550123 (Maya Reeves): Running late");
+    expect(doc.content).toContain("**00:43** You: No problem");
+    expect(doc.content).toContain("  → +14155550123 (Maya Reeves) Loved");
+  });
+
+  test("without a contact name nothing changes", () => {
+    const doc = render(day(false), { ...namedChat, handleNames: undefined });
+    expect(doc.title).toBe("+14155550123 — 2026-11-20");
+    expect(doc.content).toContain("**00:42** +14155550123: Running late");
+    expect(doc.content).toContain("  → +14155550123 Loved");
+    expect(doc.content).not.toContain("(");
+  });
+
+  test("the participant carries the contact name and the phone, never the combined label", () => {
+    const doc = render(day(true), namedChat);
+    const other = doc.metadata.people?.find((p) => !p.isSelf);
+    expect(other).toEqual({ role: "participant", name: "Maya Reeves", phones: [handle] });
+    expect(doc.metadata.people?.filter((p) => !p.isSelf)).toHaveLength(1);
+    expect(doc.metadata.extra?.participants).toEqual(expect.arrayContaining([handle, "You"]));
+  });
+
+  test("a group keeps its title while senders and roster members get their names", () => {
+    const group: IMessageChatInfo = {
+      chatIdentifier: "chat-group-7",
+      displayName: "Book club",
+      isGroup: true,
+      service: "iMessage",
+      participantHandles: [handle, "jamie@example.com", "+14155550188"],
+      handleNames: { [handle]: "Maya Reeves", "jamie@example.com": "Jamie Lopez" },
+    };
+    const doc = render(
+      [
+        makeMsg({
+          guid: "g1",
+          text: "Chapter four tonight",
+          date: new Date("2026-11-20T18:05:00Z"),
+          sender: "jamie@example.com",
+          contactId: "jamie@example.com",
+          senderName: "Jamie Lopez",
+        }),
+      ],
+      group,
+    );
+    expect(doc.title).toBe("Book club — 2026-11-20");
+    expect(doc.content).toContain(
+      "**18:05** jamie@example.com (Jamie Lopez): Chapter four tonight",
+    );
+    const people = doc.metadata.people?.filter((p) => !p.isSelf) ?? [];
+    expect(people).toEqual([
+      { role: "participant", name: "Maya Reeves", phones: [handle] },
+      { role: "participant", name: "Jamie Lopez", emails: ["jamie@example.com"] },
+      { role: "participant", name: undefined, phones: ["+14155550188"] },
     ]);
   });
 });

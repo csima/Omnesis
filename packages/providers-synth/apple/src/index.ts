@@ -31,6 +31,7 @@ import {
   mapCallLogRecords,
   mapVoicemail,
 } from "./fixtures.js";
+import { chatPreviewOfferer } from "./imessage-previews.js";
 import type { StructuredSyncResult } from "@omnesis/source-sdk";
 
 const { type: _type, ...rest } = realApple;
@@ -194,15 +195,24 @@ export default defineProvider<Record<string, never>>({
       // The double drives its own cursor; the real source's decoder does not
       // know it. Inheriting the declaration refuses that cursor on the next tick.
       contract: undefined,
-      async create({ sourceId, providerId }) {
+      async create({ sourceId, providerId, host }) {
         const w = wiring[s.id];
         if (!w) throw new Error(`No synth wiring for apple source: ${s.id}`);
         const entries = w.load();
+        // Only a source that declares previews is lent a sink; the chat
+        // fixtures are the ones that name preview images.
+        const offerPreviews =
+          s.id === "apple-imessage" ? chatPreviewOfferer(loadChats(), host?.previews) : () => {};
         return {
           async sync(cursor) {
-            return syncFromFixture(entries, cursor, (e) => w.map(e, { sourceId, providerId }), {
-              sourceId,
-            });
+            const page = syncFromFixture(
+              entries,
+              cursor,
+              (e) => w.map(e, { sourceId, providerId }),
+              { sourceId },
+            );
+            offerPreviews(page.documents);
+            return page;
           },
         };
       },

@@ -91,6 +91,12 @@ export interface GraphVertex {
    * file-type iconography; absent for sources that don't publish one.
    */
   mimeType?: string;
+  /**
+   * The document's `metadata.lowSignal` marker — a photo described but not
+   * read, a logo. Present only when set, so a neighbourhood can put such
+   * documents after the ones with content.
+   */
+  lowSignal?: true;
 
   // Person-only fields (present iff kind === "person").
   personId?: string;

@@ -34,7 +34,12 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function seedDoc(id: string, body: string, documentType = "email"): void {
+function seedDoc(
+  id: string,
+  body: string,
+  documentType = "email",
+  extraMetadata: Record<string, unknown> = {},
+): void {
   db.prepare(
     `INSERT INTO documents (id, provider_id, source_id, external_id, title, content,
         content_hash, metadata, source_created_at, source_updated_at, ingested_at, updated_at)
@@ -47,7 +52,7 @@ function seedDoc(id: string, body: string, documentType = "email"): void {
     "title-" + id,
     body,
     "ch-" + id,
-    JSON.stringify({ documentType }),
+    JSON.stringify({ documentType, ...extraMetadata }),
     "2025-01-01T00:00:00Z",
     "2025-01-01T00:00:00Z",
     "2025-01-01T00:00:00Z",
@@ -120,6 +125,17 @@ describe("computeNearDupBatch", () => {
     // signature is emitted under the active algo.
     expect(batch.signatures).toHaveLength(0);
     expect(batch.bucketRows).toHaveLength(0);
+  });
+
+  test("low-signal documents are wiped + skipped like an ineligible type", () => {
+    seedDoc("photo", "Photo sent by +15550100142 on 2026-03-04 at 08:12", "attachment", {
+      lowSignal: true,
+    });
+    enqueueNearDupInbox(db, ["photo"], "insert");
+    const batch = computeNearDupBatch(db, DEFAULT_NEAR_DUP_CONFIG);
+    expect(batch.processedInboxIds).toHaveLength(1);
+    expect(batch.signatures).toHaveLength(0);
+    expect(batch.signatureDeletes).toContain("photo");
   });
 
   test("docs with no tokens (whitespace-only) are wiped + skipped", () => {

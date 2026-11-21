@@ -394,14 +394,15 @@ export default defineSource({
         </div>
         <p>
           Use the injected <code>SourceHost</code> for logging, <code>now()</code>, attachment
-          extraction, optional audio transcription, and scoped analytics reads. Its
-          <code>analytics.query()</code> is read-only and restricted to the source's declared
-          tables; writes belong on a sync page. A table written by several accounts answers a query
-          with every account's rows, so a read that picks rows to act on filters on this account's
-          value of the table's <code>sharedDiscriminatorColumn</code>. <code>stateDir</code> is
-          scoped to the provider account and shared by its sibling sources, so use distinct
-          filenames; <code>host.configDir</code> remains available for credential layouts that
-          already use it.
+          extraction, optional audio transcription, scoped analytics reads, and, for a source that
+          declares <code>documentPreviews</code>, preview images (<code>host.previews</code>, see
+          <a href="#document-previews">Preview images</a>). Its <code>analytics.query()</code> is
+          read-only and restricted to the source's declared tables; writes belong on a sync page. A
+          table written by several accounts answers a query with every account's rows, so a read
+          that picks rows to act on filters on this account's value of the table's
+          <code>sharedDiscriminatorColumn</code>. <code>stateDir</code> is scoped to the provider
+          account and shared by its sibling sources, so use distinct filenames;
+          <code>host.configDir</code> remains available for credential layouts that already use it.
         </p>
         <p>
           The host interface is not a sandbox for in-process provider code, nor a promise of access
@@ -763,6 +764,31 @@ export default defineSource({
           fine. Both are optional; omit them when no reliable destination exists.
         </p>
 
+        <h3 id="document-previews">Preview images</h3>
+        <p>
+          A source that can show what a document looks like — a thumbnail of a photo, the first
+          frame of a video, the first page of a PDF — declares
+          <code>documentPreviews: true</code> and is lent <code>host.previews</code>. It offers one
+          image per document with <code>host.previews.offer({ externalId, render })</code>, where
+          <code>render</code>
+          resolves a JPEG of at most 512 KB and 4096 pixels a side, with its width, height and
+          <code>capturedAt</code>, or <code>null</code> when the file has none to give.
+        </p>
+        <p>
+          The collector holds an offer until the page that carries its document has been written,
+          then renders and uploads it in the background, two at a time across the host, so an offer
+          on a page that is never written costs no rendering. The offer resolves to
+          <code>stored</code>, <code>refused</code> (the gateway will not keep it, or
+          <code>render</code> gave none; offering the same file again ends the same way),
+          <code>not-found</code> (the gateway has no such document) or <code>deferred</code>
+          (nothing was decided; offer it again later). It settles after the sync that made it has
+          returned, so a source records the outcome when it arrives rather than awaiting it inside
+          <code>sync()</code>, and keeps its own record of what it offered so an unchanged file is
+          not rendered on every sync. The gateway keeps previews from a collector only for a source
+          type whose descriptor declares them, stores them in its preview store and serves them at
+          <code>GET /documents/:id/preview</code>; a document's preview is deleted with it.
+        </p>
+
         <h3 id="analytics-rows">Analytics rows</h3>
         <p>
           Analytics rows are typed tables in the analytics database (DuckDB), declared in
@@ -940,7 +966,7 @@ src/
           contract — its declared capabilities, its configuration, and its state, given sample saved
           states to decode — and <code>formatConformanceReport</code> prints the result.
           <code>fakeSourceHost</code> and <code>fakeProviderHost</code> stand in for the host in
-          unit tests.
+          unit tests, and <code>fakePreviewSink</code> for <code>host.previews</code>.
         </p>
         <p>
           Also exercise installed cursors through the real state decorator, including pending pages,

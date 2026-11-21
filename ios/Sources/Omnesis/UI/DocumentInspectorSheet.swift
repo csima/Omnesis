@@ -705,28 +705,19 @@ private struct AttachmentGraphRow: View {
         } label: { content() }.buttonStyle(.plain)
     }
 
+    /// The thumbnail sits on the trailing side, as on search rows, so
+    /// every row's icon and filename line up. With no preview, or one that
+    /// cannot load, it shows the document strip's file-type placeholder,
+    /// never an empty box.
     var body: some View {
         wrap {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    FileTypeIcon(mimeType: att.mimeType, filename: att.title, size: 14)
-                    Text(att.title.isEmpty ? att.attachmentId : att.title)
-                        .scaledFont(size: 13, weight: .medium)
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.textMuted)
-                }
-                let parts = metaParts
-                if !parts.isEmpty {
-                    Text(parts.joined(separator: " · "))
-                        .scaledFont(size: 10)
-                        .foregroundStyle(Theme.textMuted)
-                        .padding(.leading, 22)
-                }
+            HStack(alignment: .center, spacing: 10) {
+                details
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                AttachmentThumbnail(graphRow: att)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.textMuted)
             }
             .padding(.vertical, 8)
             .overlay(alignment: .bottom) {
@@ -736,11 +727,31 @@ private struct AttachmentGraphRow: View {
         }
     }
 
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                FileTypeIcon(mimeType: att.mimeType, filename: att.title, size: 14)
+                Text(att.title.isEmpty ? att.attachmentId : att.title)
+                    .scaledFont(size: 13, weight: .medium)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            let parts = metaParts
+            if !parts.isEmpty {
+                Text(parts.joined(separator: " · "))
+                    .scaledFont(size: 10)
+                    .foregroundStyle(Theme.textMuted)
+                    .padding(.leading, 22)
+            }
+        }
+    }
+
     private var metaParts: [String] {
         var parts: [String] = []
         if let mime = att.mimeType, !mime.isEmpty { parts.append(mime) }
         if let size = att.sizeBytes, size > 0 { parts.append(formatBytes(size)) }
-        if let pages = att.pages, pages > 0 { parts.append("\(pages) pages") }
+        if let pages = att.pages, pages > 0 { parts.append(pages == 1 ? "1 page" : "\(pages) pages") }
         if att.truncated == true { parts.append("truncated") }
         return parts
     }
@@ -1026,6 +1037,19 @@ private struct ExternalLinkGraphRow: View {
         initialTab: .graph
     )
     .environment(AppStore.preview())
+}
+
+@available(iOS 17.0, *)
+#Preview("Document inspector — attachments with previews") {
+    DocumentInspectorSheet(
+        doc: PreviewMocks.documentDetailWithAttachments,
+        people: [],
+        refs: nil,
+        attachments: PreviewMocks.attachmentsMixed,
+        initialTab: .graph
+    )
+    .environment(AppStore.preview())
+    .environment(\.documentPreviewSource, PreviewMocks.documentPreviewSource)
 }
 
 @available(iOS 17.0, *)
