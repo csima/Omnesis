@@ -48,6 +48,7 @@ final class StoreSubmissionConfigurationTests: XCTestCase {
             "Resources/AppPrivacy/PrivacyInfo.xcprivacy",
             "Sources/OmnesisNotificationService/PrivacyInfo.xcprivacy",
             "Sources/OmnesisWidgets/PrivacyInfo.xcprivacy",
+            "Sources/OmnesisSafariExtension/PrivacyInfo.xcprivacy",
             "Sources/OmnesisWatch/PrivacyInfo.xcprivacy",
         ]
         for path in paths {
@@ -66,6 +67,7 @@ final class StoreSubmissionConfigurationTests: XCTestCase {
         let extensionManifests = [
             "OmnesisNotificationService": "Sources/OmnesisNotificationService/PrivacyInfo.xcprivacy",
             "OmnesisWidgets": "Sources/OmnesisWidgets/PrivacyInfo.xcprivacy",
+            "OmnesisSafariExtension": "Sources/OmnesisSafariExtension/PrivacyInfo.xcprivacy",
             // Both watch apps are built from this template.
             "WatchApp": "Sources/OmnesisWatch/PrivacyInfo.xcprivacy",
         ]

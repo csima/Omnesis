@@ -8,7 +8,7 @@ import Foundation
 /// reads the Keychain. Absent from release builds.
 ///
 /// - `DEMO_RESET_PAIRING=1` clears the stored pairing and the notification
-///   claim credential, so a journey can start unpaired. The simulator keeps
+///   claim and Safari capture credentials, so a journey can start unpaired. The simulator keeps
 ///   Keychain items across launches and reinstalls.
 /// - `DEMO_PAIRING_JSON`, or the `-pairingFile` / `-pairingFileName` launch
 ///   arguments, seed a pairing so automation can start paired without scanning
@@ -20,6 +20,9 @@ enum AutomationPairing {
         if ProcessInfo.processInfo.environment["DEMO_RESET_PAIRING"] == "1" {
             try? Keychain().deleteAll()
             NotificationClaimCredentials.clear()
+            if let safariStore = SafariCaptureCredentials.sharedKeychain() {
+                SafariCaptureCredentials.clear(keychain: safariStore)
+            }
         }
         guard let data = suppliedPairing(),
               let config = try? JSONDecoder().decode(AutomationPairingConfig.self, from: data)

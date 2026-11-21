@@ -33,6 +33,7 @@ expect(
 for name, suffix in (
     ("OmnesisNotificationService", "notification-service"),
     ("OmnesisWidgets", "widgets"),
+    ("OmnesisSafariExtension", "safari-extension"),
 ):
     extension = app / "PlugIns" / f"{name}.appex"
     expect(read_plist(extension)["CFBundleIdentifier"], f"{base}.{suffix}", name)
@@ -54,5 +55,16 @@ extension_group = read_plist(app / "PlugIns" / "OmnesisNotificationService.appex
 expect(extension_group, app_group, "app and notification extension Keychain group")
 if not app_group.endswith(f"{base}.notifications"):
     raise SystemExit(f"Keychain group does not end in {base}.notifications: {app_group!r}")
+
+safari_group = info["OmnesisSafariAccessGroup"]
+expect(
+    read_plist(app / "PlugIns" / "OmnesisSafariExtension.appex")["OmnesisSafariAccessGroup"],
+    safari_group,
+    "app and Safari extension Keychain group",
+)
+if not safari_group.endswith(f"{base}.safari"):
+    raise SystemExit(f"Keychain group does not end in {base}.safari: {safari_group!r}")
+if not (app / "PlugIns" / "OmnesisSafariExtension.appex" / "manifest.json").is_file():
+    raise SystemExit("Safari extension bundle has no manifest.json at its root")
 
 print(f"Verified processed app, extension, widget and Watch identities for {base}")
