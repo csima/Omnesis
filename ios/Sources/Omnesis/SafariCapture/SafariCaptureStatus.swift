@@ -14,16 +14,23 @@ public enum SafariCaptureStatus: Equatable, Sendable {
 
     public static func current(pairing: Pairing?) -> SafariCaptureStatus {
         guard let keychain = SafariCaptureCredentials.sharedKeychain() else { return .unavailable }
-        return resolve(pairing: pairing, stored: try? SafariCaptureCredentials.stored(keychain: keychain))
+        let stored = try? SafariCaptureCredentials.stored(keychain: keychain)
+        return resolve(
+            pairing: pairing,
+            stored: stored,
+            rejected: stored.map { SafariCaptureCredentials.isRejected($0, keychain: keychain) } ?? false
+        )
     }
 
     static func resolve(
         pairing: Pairing?,
-        stored: SafariCaptureCredentials.StoredCredential?
+        stored: SafariCaptureCredentials.StoredCredential?,
+        rejected: Bool
     )
         -> SafariCaptureStatus {
         guard let pairing else { return .unpaired }
         guard let stored,
+              !rejected,
               stored.baseURL != nil,
               stored.url == pairing.url.absoluteString,
               stored.deviceId == pairing.deviceId,

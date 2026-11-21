@@ -25,7 +25,10 @@ export type SafariStatus =
       pausedUntil?: number;
       excludedDomains: string[];
       queued: number;
-      healthy: boolean;
+      /** The gateway refused the app's capture credential. */
+      refused: boolean;
+      /** False once the last attempt could not reach the gateway. */
+      reachable: boolean;
       lastCapturedAt?: number;
     };
 

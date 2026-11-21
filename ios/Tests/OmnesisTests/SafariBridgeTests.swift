@@ -111,6 +111,7 @@ final class SafariBridgeTests: XCTestCase {
 
         let message: [String: Any] = [
             "type": "request",
+            "deviceId": "device_1",
             "method": "POST",
             "path": "/documents",
             "body": #"{"documents":[]}"#,
@@ -122,6 +123,7 @@ final class SafariBridgeTests: XCTestCase {
         XCTAssertEqual(reply["status"] as? Int, 200)
         XCTAssertEqual(reply["body"] as? String, #"{"ingested":1}"#)
         XCTAssertEqual(reply["retryAfter"] as? String, "30")
+        XCTAssertEqual(Set(reply.keys), ["ok", "status", "body", "retryAfter"])
         let request = try XCTUnwrap(sent.requests.first)
         XCTAssertEqual(sent.requests.count, 1)
         XCTAssertEqual(request.url?.absoluteString, "https://gateway.example.test:17600/documents")
@@ -139,7 +141,7 @@ final class SafariBridgeTests: XCTestCase {
             return try Self.reply(to: request, status: 200, body: "{}")
         }
         let reply = await bridge.respond(to: [
-            "type": "request", "method": "GET", "path": "/web-capture-policy",
+            "type": "request", "deviceId": "device_1", "method": "GET", "path": "/web-capture-policy",
         ])
         XCTAssertEqual(reply["ok"] as? Bool, true)
         XCTAssertNil(reply["retryAfter"])
@@ -155,15 +157,21 @@ final class SafariBridgeTests: XCTestCase {
         }
         let oversized = String(repeating: "x", count: SafariBridge.maxBodyBytes + 1)
         let structuredBody: [String: Any] = [
-            "type": "request", "method": "POST", "path": "/documents", "body": ["documents": [String]()],
+            "type": "request",
+            "deviceId": "device_1",
+            "method": "POST",
+            "path": "/documents",
+            "body": ["documents": [String]()],
         ]
+        let device = ["type": "request", "deviceId": "device_1"]
         let requests: [[String: String]] = [
             ["type": "open-url"],
-            ["type": "request", "method": "POST"],
-            ["type": "request", "method": "POST", "path": "/admin/tokens", "body": "{}"],
-            ["type": "request", "method": "GET", "path": "/search?q=budget"],
-            ["type": "request", "method": "POST", "path": "//attacker.example/documents"],
-            ["type": "request", "method": "POST", "path": "/documents", "body": oversized],
+            device.merging(["method": "POST"]) { _, new in new },
+            device.merging(["method": "POST", "path": "/admin/tokens", "body": "{}"]) { _, new in new },
+            device.merging(["method": "GET", "path": "/search?q=budget"]) { _, new in new },
+            device.merging(["method": "POST", "path": "//attacker.example/documents"]) { _, new in new },
+            device.merging(["method": "POST", "path": "/documents", "body": oversized]) { _, new in new },
+            device.merging(["method": "GET", "path": "/web-capture-policy", "body": "{}"]) { _, new in new },
         ]
         let messages: [Any?] = [nil, "status", structuredBody] + requests.map { $0 as Any? }
         for message in messages {
@@ -181,7 +189,7 @@ final class SafariBridgeTests: XCTestCase {
             return try Self.reply(to: request, status: 200, body: "{}")
         }
         let reply = await bridge.respond(to: [
-            "type": "request", "method": "GET", "path": "/web-capture-policy",
+            "type": "request", "deviceId": "device_1", "method": "GET", "path": "/web-capture-policy",
         ])
         XCTAssertEqual(reply["ok"] as? Bool, false)
         XCTAssertEqual(reply["reason"] as? String, "unpaired")
@@ -193,25 +201,57 @@ final class SafariBridgeTests: XCTestCase {
             throw URLError(.timedOut)
         }
         let reply = await bridge.respond(to: [
-            "type": "request", "method": "GET", "path": "/web-capture-policy",
+            "type": "request", "deviceId": "device_1", "method": "GET", "path": "/web-capture-policy",
         ])
         XCTAssertEqual(reply["ok"] as? Bool, false)
         XCTAssertEqual(reply["reason"] as? String, "network")
     }
 
-    func testARefusedCredentialIsDroppedSoTheAppMintsAnother() async throws {
+    func testARequestForAnotherPairingIsNotSent() async throws {
+        let sent = Recorder()
+        let bridge = try SafariBridge(store: store(holding: credential())) { request, stored in
+            sent.record(request, stored)
+            return try Self.reply(to: request, status: 200, body: "{}")
+        }
+        let queuedElsewhere: [[String: String]] = [
+            ["type": "request", "deviceId": "device_0", "method": "POST", "path": "/documents", "body": "{}"],
+            ["type": "request", "method": "POST", "path": "/documents", "body": "{}"],
+        ]
+        for message in queuedElsewhere {
+            let reply = await bridge.respond(to: message)
+            XCTAssertEqual(reply["ok"] as? Bool, false)
+            XCTAssertEqual(reply["reason"] as? String, "unpaired")
+        }
+        XCTAssertTrue(sent.requests.isEmpty)
+    }
+
+    func testAnUnreadableKeychainIsNeitherPairedNorUnpaired() async throws {
+        let bridge = SafariBridge(store: UnreadableStore()) { _, _ in throw URLError(.badURL) }
+        let status = await bridge.respond(to: ["type": "status"])
+        XCTAssertNil(status["paired"], "the extension drops its queue on an unpaired answer")
+        XCTAssertEqual(status["ok"] as? Bool, false)
+        let reply = await bridge.respond(to: [
+            "type": "request", "deviceId": "device_1", "method": "GET", "path": "/web-capture-policy",
+        ])
+        XCTAssertEqual(reply["reason"] as? String, "network")
+    }
+
+    func testARefusedCredentialIsKeptAndMarkedForTheAppToReplace() async throws {
         let keychain = try store(holding: credential())
         let bridge = SafariBridge(store: keychain) { request, _ in
             try Self.reply(to: request, status: 401, body: #"{"error":"unauthorized"}"#)
         }
         let reply = await bridge.respond(to: [
-            "type": "request", "method": "POST", "path": "/documents", "body": "{}",
+            "type": "request", "deviceId": "device_1", "method": "POST", "path": "/documents", "body": "{}",
         ])
         XCTAssertEqual(reply["status"] as? Int, 401)
-        XCTAssertNil(try SafariCaptureCredentials.stored(keychain: keychain))
+        let stored = try XCTUnwrap(SafariCaptureCredentials.stored(keychain: keychain))
+        XCTAssertTrue(SafariCaptureCredentials.isRejected(stored, keychain: keychain))
+        let status = await bridge.respond(to: ["type": "status"])
+        XCTAssertEqual(status["paired"] as? Bool, true, "its waiting pages still belong to this pairing")
     }
 
-    func testACredentialMintedMeanwhileSurvivesAnOlderRefusal() async throws {
+    func testACredentialMintedMeanwhileIsNotMarkedByAnOlderRefusal() async throws {
         let keychain = try store(holding: credential(token: "omn_old"))
         let renewed = credential(token: "omn_new")
         let bridge = SafariBridge(store: keychain) { request, _ in
@@ -219,9 +259,10 @@ final class SafariBridgeTests: XCTestCase {
             return try Self.reply(to: request, status: 401, body: "")
         }
         _ = await bridge.respond(to: [
-            "type": "request", "method": "POST", "path": "/documents", "body": "{}",
+            "type": "request", "deviceId": "device_1", "method": "POST", "path": "/documents", "body": "{}",
         ])
         XCTAssertEqual(try SafariCaptureCredentials.stored(keychain: keychain), renewed)
+        XCTAssertFalse(SafariCaptureCredentials.isRejected(renewed, keychain: keychain))
     }
 
     func testOtherGatewayVerdictsKeepTheCredential() async throws {
@@ -230,10 +271,11 @@ final class SafariBridgeTests: XCTestCase {
             try Self.reply(to: request, status: 403, body: "")
         }
         let reply = await bridge.respond(to: [
-            "type": "request", "method": "POST", "path": "/documents", "body": "{}",
+            "type": "request", "deviceId": "device_1", "method": "POST", "path": "/documents", "body": "{}",
         ])
         XCTAssertEqual(reply["status"] as? Int, 403)
-        XCTAssertNotNil(try SafariCaptureCredentials.stored(keychain: keychain))
+        let stored = try XCTUnwrap(SafariCaptureCredentials.stored(keychain: keychain))
+        XCTAssertFalse(SafariCaptureCredentials.isRejected(stored, keychain: keychain))
     }
 
     private static func reply(
@@ -252,6 +294,18 @@ final class SafariBridgeTests: XCTestCase {
         ))
         return (Data(body.utf8), response)
     }
+}
+
+private struct UnreadableStore: PairingStore {
+    struct Locked: Error {}
+
+    func set(_: String, forKey _: String) throws { throw Locked() }
+    func get(_: String) throws -> String? { throw Locked() }
+    func getLegacySynchronizable(_: String) throws -> String? { throw Locked() }
+    func hasLegacySynchronizableValues() throws -> Bool { throw Locked() }
+    func deleteLegacySynchronizableValues() throws { throw Locked() }
+    func delete(_: String) throws { throw Locked() }
+    func deleteAll() throws { throw Locked() }
 }
 
 private final class Recorder: @unchecked Sendable {

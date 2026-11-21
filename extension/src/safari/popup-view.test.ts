@@ -17,7 +17,8 @@ const paired: Extract<SafariStatus, { paired: true }> = {
   paused: false,
   excludedDomains: [],
   queued: 0,
-  healthy: true,
+  refused: false,
+  reachable: true,
 };
 
 describe("siteOf", () => {
@@ -74,9 +75,44 @@ describe("popupModel", () => {
   it("explains a gateway that has not sent its settings or does not answer", () => {
     const noPolicy = popupModel({ ...paired, policyKnown: false }, "https://example.org/", NOW);
     expect(noPolicy).toMatchObject({ state: "waiting", site: null, showPause: false });
-    const unreachable = popupModel({ ...paired, healthy: false, queued: 3 }, undefined, NOW);
+    const unreachable = popupModel({ ...paired, reachable: false, queued: 3 }, undefined, NOW);
     expect(unreachable.headline).toBe("Can't reach your gateway");
     expect(unreachable.footnote).toBe("3 pages are waiting to be sent.");
+  });
+
+  it("sends the reader to the app when the gateway refuses Safari's credential", () => {
+    const refused = popupModel({ ...paired, refused: true, queued: 2 }, undefined, NOW);
+    expect(refused).toMatchObject({
+      state: "waiting",
+      headline: "Open the Omnesis app",
+      showPause: false,
+    });
+    expect(refused.detail).toContain("kept on this device");
+  });
+
+  it("says so when Safari has not let the extension onto the open site", () => {
+    const blocked = popupModel(paired, "https://news.example.org/story", NOW, "absent");
+    expect(blocked).toMatchObject({
+      state: "blocked",
+      headline: "Not allowed on this site yet",
+      site: { domain: "news.example.org", excluded: false },
+    });
+    expect(popupModel(paired, "https://news.example.org/story", NOW, "unknown").state).toBe(
+      "capturing",
+    );
+    expect(popupModel(paired, undefined, NOW, "absent").headline).toBe("Saving pages you read");
+  });
+
+  it("explains a page its own script will not read", () => {
+    const signIn = popupModel(paired, "https://shop.example.org/checkout", NOW, {
+      state: "excluded",
+      reason: "sensitive-field",
+    });
+    expect(signIn.headline).toBe("This page is not captured");
+    expect(signIn.detail).toContain("sign-in");
+    expect(
+      popupModel(paired, "https://news.example.org/story", NOW, { state: "watching" }).headline,
+    ).toBe("Saving pages you read");
   });
 
   it("counts one waiting page in the singular and names a recent save", () => {
@@ -114,6 +150,7 @@ describe("startPopup", () => {
         );
       },
       activePageUrl: () => Promise.resolve(pageUrl),
+      pageCapture: () => Promise.resolve({ state: "watching" }),
       now: () => NOW,
     });
     const el = (id: string) => document.getElementById(id) as unknown as HTMLButtonElement;

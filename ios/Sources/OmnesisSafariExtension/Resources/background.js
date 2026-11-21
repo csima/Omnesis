@@ -999,6 +999,9 @@
     const sameSession = previous.sessionId === sessionId && sessionId.length > 0;
     return sameSession && previousGeneration > generation || (!sameSession || previousGeneration === generation) && isFiniteTimestamp(previous.at) && previous.at > at;
   }
+  async function clearPushServerState(store) {
+    await store.set(PUSH_SERVER_STATE_KEY, "");
+  }
   async function clearPushObservability(store) {
     await store.set(PUSH_RECENT_KEY, "");
     await store.set(PUSH_CONNECTIVITY_KEY, "");
@@ -1010,6 +1013,11 @@
     await store.set(PUSH_FAILURE_KEY, "");
     await store.set(QUEUE_CORRUPTION_KEY, "");
     await store.set(QUEUE_OVERFLOW_KEY, "");
+  }
+  async function clearPushHealth(store) {
+    await store.set(PUSH_HEALTH_KEY, "");
+    await store.set(PUSH_CONNECTIVITY_KEY, "");
+    await store.set(PUSH_CHECKED_KEY, "");
   }
   function isFiniteTimestamp(value) {
     return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -1906,16 +1914,19 @@
       text: () => Promise.resolve(body)
     };
   }
-  function createNativeFetch(send, options = {}) {
+  function createNativeFetch(send, options) {
     const timeoutMs = options.timeoutMs ?? NATIVE_MESSAGE_TIMEOUT_MS;
     return async (input, init) => {
       const url = new URL(input);
       const path = `${url.pathname}${url.search}`;
       if (!isAllowedNativeRequest(init.method, path)) return response(400, "");
+      const deviceId = await options.deviceId();
+      if (!deviceId) return response(401, "");
       const hasBody = init.method !== "GET" && init.method !== "HEAD" && init.body !== "";
       const raw = await withDeadline(
         send({
           type: "request",
+          deviceId,
           method: init.method,
           path,
           ...hasBody ? { body: init.body } : {}
@@ -1973,7 +1984,9 @@
   var SAFARI_DRAIN_ALARM = "omnesis.safari.drain";
   var SAFARI_RETRY_ALARM = "omnesis.safari.retry-drain";
   var DRAIN_PERIOD_MINUTES = 1;
+  var SAFARI_PAIRING_SYNCED_KEY = "omnesis.safari.pairingSyncedAt.v1";
   var PAIRING_SYNC_INTERVAL_MS = 6e4;
+  var UNPAIRED_SYNC_INTERVAL_MS = 5e3;
   var NATIVE_CREDENTIAL_PLACEHOLDER = "native";
   function isObjectWithType(message, type) {
     return typeof message === "object" && message !== null && message.type === type;
@@ -1993,7 +2006,6 @@
     };
     const sessionId = crypto.randomUUID();
     let clientGeneration = 0;
-    let lastPairingSyncAt = 0;
     let pairingSync = null;
     let policyRefresh = null;
     let queueWork = Promise.resolve();
@@ -2005,15 +2017,16 @@
       );
       return result;
     }
-    const nativeFetch = createNativeFetch(sendNative, {
-      ...deps.nativeTimeoutMs !== void 0 ? { timeoutMs: deps.nativeTimeoutMs } : {},
-      // The app lost its pairing between two requests; stop the pages now
-      // instead of at the next periodic sync.
-      onUnpaired: () => void syncPairing(true)
-    });
     async function loadPairing() {
       return parsePairing((await storage.get(PAIRING_KEY))[PAIRING_KEY]);
     }
+    const nativeFetch = createNativeFetch(sendNative, {
+      deviceId: async () => (await loadPairing())?.deviceId ?? null,
+      ...deps.nativeTimeoutMs !== void 0 ? { timeoutMs: deps.nativeTimeoutMs } : {},
+      // The app is unpaired, or paired as another device; stop the pages now
+      // instead of at the next sync.
+      onUnpaired: () => void syncPairing(true).catch(() => void 0)
+    });
     async function loadGatewayHost() {
       const host = (await storage.get(SAFARI_GATEWAY_HOST_KEY))[SAFARI_GATEWAY_HOST_KEY];
       return typeof host === "string" ? host : "";
@@ -2022,57 +2035,61 @@
       await clearPendingHandoffs(handoffs);
       await clearPushQueue(store);
       await clearPushObservability(store);
+      await clearPushHealth(store);
+      await clearPushServerState(store);
       await clearCachedPolicy(store);
     }
     function syncPairing(force = false) {
-      if (pairingSync) return pairingSync;
-      const work = serializeQueueWork(async () => {
-        const current = await loadPairing();
-        if (!force && current && now() - lastPairingSyncAt < PAIRING_SYNC_INTERVAL_MS) {
-          return current;
+      if (pairingSync) {
+        if (!force || pairingSync.forced) return pairingSync.promise;
+        const again = () => syncPairing(true);
+        return pairingSync.promise.then(again, again);
+      }
+      const promise = serializeQueueWork(() => syncPairingWork(force));
+      const entry = { promise, forced: force };
+      pairingSync = entry;
+      const done = () => {
+        if (pairingSync === entry) pairingSync = null;
+      };
+      promise.then(done, done);
+      return promise;
+    }
+    async function syncPairingWork(force) {
+      const current = await loadPairing();
+      if (!force) {
+        const syncedAt = (await storage.get(SAFARI_PAIRING_SYNCED_KEY))[SAFARI_PAIRING_SYNCED_KEY];
+        const interval = current ? PAIRING_SYNC_INTERVAL_MS : UNPAIRED_SYNC_INTERVAL_MS;
+        if (typeof syncedAt === "number" && Math.abs(now() - syncedAt) < interval) return current;
+      }
+      const status = await readNativeStatus(sendNative, deps.nativeTimeoutMs);
+      if (!status) return current;
+      await storage.set({ [SAFARI_PAIRING_SYNCED_KEY]: now() });
+      if (!status.paired) {
+        if (current) {
+          await forgetPairingState();
+          await storage.remove([PAIRING_KEY, SAFARI_GATEWAY_HOST_KEY]);
         }
-        const status = await readNativeStatus(sendNative, deps.nativeTimeoutMs);
-        if (!status) return current;
-        lastPairingSyncAt = now();
-        if (!status.paired) {
-          if (current) {
-            await storage.remove([PAIRING_KEY, SAFARI_GATEWAY_HOST_KEY]);
-            await storage.set({ [CAPTURE_PERMISSION_STATE_KEY]: false });
-            await forgetPairingState();
-          }
-          return null;
-        }
-        const sameDevice = current?.deviceId === status.deviceId;
-        if (!sameDevice) {
-          if (current) await forgetPairingState();
-          const pairing = {
-            gatewayUrl: SAFARI_GATEWAY_ORIGIN,
-            scopes: [REQUIRED_WEB_SCOPE],
-            deviceId: status.deviceId,
-            pairedAt: now()
-          };
-          await storage.set({
-            [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost,
-            [CAPTURE_PERMISSION_STATE_KEY]: true,
-            [PAIRING_KEY]: JSON.stringify(pairing)
-          });
-          return pairing;
-        }
-        if (await loadGatewayHost() !== status.gatewayHost) {
-          await storage.set({ [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost });
-        }
-        return current;
-      });
-      pairingSync = work;
-      void work.then(
-        () => {
-          if (pairingSync === work) pairingSync = null;
-        },
-        () => {
-          if (pairingSync === work) pairingSync = null;
-        }
-      );
-      return work;
+        return null;
+      }
+      if (current?.deviceId !== status.deviceId) {
+        await forgetPairingState();
+        const pairing = {
+          gatewayUrl: SAFARI_GATEWAY_ORIGIN,
+          scopes: [REQUIRED_WEB_SCOPE],
+          deviceId: status.deviceId,
+          pairedAt: now()
+        };
+        await storage.set({
+          [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost,
+          [CAPTURE_PERMISSION_STATE_KEY]: true,
+          [PAIRING_KEY]: JSON.stringify(pairing)
+        });
+        return pairing;
+      }
+      if (await loadGatewayHost() !== status.gatewayHost) {
+        await storage.set({ [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost });
+      }
+      return current;
     }
     async function buildClient() {
       if (!await loadPairing()) return null;
@@ -2217,10 +2234,18 @@
         await storage.set({ [CAPTURE_HANDOFF_FAILURE_KEY]: "" });
       }
     }
+    function keepDrainAlarm(waiting) {
+      if (waiting) deps.alarms?.create(SAFARI_DRAIN_ALARM, { periodInMinutes: DRAIN_PERIOD_MINUTES });
+      else void Promise.resolve(deps.alarms?.clear(SAFARI_DRAIN_ALARM)).catch(() => void 0);
+    }
     async function drainWork() {
       const client = await buildClient();
-      if (!client || await client.queueDepth() === 0) return false;
+      if (!client || await client.queueDepth() === 0) {
+        keepDrainAlarm(false);
+        return false;
+      }
       const result = await client.drain();
+      keepDrainAlarm(await client.queueDepth() > 0);
       const readyAgain = result.nextEligibleAt !== null && result.nextEligibleAt <= now();
       if (result.nextEligibleAt !== null && !readyAgain) {
         const delayMs = Math.max(0, result.nextEligibleAt - now());
@@ -2244,10 +2269,11 @@
       if (!pairing) return { paired: false };
       const policy = await currentPolicy({ refresh: opts.fresh });
       const client = await buildClient();
-      const [gatewayHost, queued, health, recent] = await Promise.all([
+      const [gatewayHost, queued, health, connectivity, recent] = await Promise.all([
         loadGatewayHost(),
         client ? client.queueDepth() : 0,
         client ? client.getHealth() : null,
+        client ? client.getConnectivity() : null,
         client ? client.getRecentDeliveries() : []
       ]);
       const pausedUntil = policy?.pause ? policy.pause.until : void 0;
@@ -2260,7 +2286,8 @@
         ...paused && typeof pausedUntil === "number" ? { pausedUntil } : {},
         excludedDomains: policy?.excludedDomains ?? [],
         queued,
-        healthy: health?.ok !== false,
+        refused: health?.ok === false,
+        reachable: connectivity?.reachable !== false,
         ...recent[0] ? { lastCapturedAt: recent[0].at } : {}
       };
     }
@@ -2289,10 +2316,13 @@
     }
     return {
       async start() {
-        deps.alarms?.create(SAFARI_DRAIN_ALARM, { periodInMinutes: DRAIN_PERIOD_MINUTES });
-        if (await syncPairing(true)) await currentPolicy();
-        await recoverPendingHandoffs();
-        await drain();
+        try {
+          if (await syncPairing()) await currentPolicy();
+          await recoverPendingHandoffs();
+        } catch {
+        } finally {
+          await drain();
+        }
       },
       handleMessage(message, sender, sendResponse) {
         if (sender.id !== runtimeId) return false;
@@ -2324,7 +2354,7 @@
           );
           return true;
         }
-        if (sender.tab === void 0 && isSafariPopupMessage(message)) {
+        if (sender.tab === void 0 && sender.url?.startsWith(deps.popupUrl) === true && isSafariPopupMessage(message)) {
           respond(
             handlePopupMessage(message),
             sendResponse,
@@ -2352,11 +2382,12 @@
     // that contains this extension.
     sendNative: (message) => runtime.sendNativeMessage("application.id", message),
     alarms: api.alarms,
-    runtimeId: runtime.id ?? ""
+    runtimeId: runtime.id ?? "",
+    popupUrl: runtime.getURL("popup.html")
   });
   runtime.onMessage.addListener(
     (message, sender, sendResponse) => background.handleMessage(message, sender, sendResponse)
   );
   api.alarms.onAlarm.addListener((alarm) => background.handleAlarm(alarm.name));
-  void background.start();
+  void background.start().catch(() => void 0);
 })();

@@ -46,19 +46,38 @@ public struct SafariBridge: Sendable {
         }
     }
 
-    private func credential() -> (SafariCaptureCredentials.StoredCredential, URL)? {
-        guard let store,
-              let stored = try? SafariCaptureCredentials.stored(keychain: store),
-              let base = stored.baseURL
-        else { return nil }
-        return (stored, base)
+    private enum Lookup {
+        /// The app is not paired, or has not yet stored a credential.
+        case absent
+        /// The Keychain could not be read just now; nothing is known.
+        case unreadable
+        case found(SafariCaptureCredentials.StoredCredential, URL)
     }
 
-    private func status() -> [String: Any] {
-        guard let (stored, base) = credential(), let host = base.host else {
-            return ["paired": false]
+    private func lookup() -> Lookup {
+        guard let store else { return .absent }
+        do {
+            guard let stored = try SafariCaptureCredentials.stored(keychain: store),
+                  let base = stored.baseURL
+            else { return .absent }
+            return .found(stored, base)
+        } catch {
+            return .unreadable
         }
-        return ["paired": true, "deviceId": stored.deviceId, "gatewayHost": host]
+    }
+
+    /// "Not paired" makes the extension drop the pages it holds for the
+    /// pairing, so it is said only when the Keychain was read and held none.
+    private func status() -> [String: Any] {
+        switch lookup() {
+        case .absent:
+            return ["paired": false]
+        case .unreadable:
+            return Self.failure("unavailable")
+        case .found(let stored, let base):
+            guard let host = base.host else { return ["paired": false] }
+            return ["paired": true, "deviceId": stored.deviceId, "gatewayHost": host]
+        }
     }
 
     private func request(_ message: [String: Any]) async -> [String: Any] {
@@ -68,8 +87,24 @@ public struct SafariBridge: Sendable {
         else { return Self.failure("refused") }
         let body = message["body"] as? String
         if message["body"] != nil, body == nil { return Self.failure("refused") }
+        if body != nil, method == "GET" || method == "DELETE" { return Self.failure("refused") }
         if let body, body.utf8.count > Self.maxBodyBytes { return Self.failure("refused") }
-        guard let (stored, base) = credential() else { return Self.failure("unpaired") }
+        let stored: SafariCaptureCredentials.StoredCredential
+        let base: URL
+        switch lookup() {
+        case .absent:
+            return Self.failure("unpaired")
+        case .unreadable:
+            return Self.failure("network")
+        case .found(let credential, let url):
+            stored = credential
+            base = url
+        }
+        // The extension names the device it queued its pages for. Another
+        // pairing since then must not receive them.
+        guard message["deviceId"] as? String == stored.deviceId else {
+            return Self.failure("unpaired")
+        }
         guard let url = URL(string: path, relativeTo: base)?.absoluteURL,
               url.scheme?.lowercased() == "https",
               url.host == base.host,
@@ -96,9 +131,7 @@ public struct SafariBridge: Sendable {
             return Self.failure("network")
         }
         if response.statusCode == 401, let store {
-            // The gateway no longer accepts this credential. Dropping it lets
-            // the app mint a new one the next time it runs.
-            SafariCaptureCredentials.discard(stored, keychain: store)
+            SafariCaptureCredentials.markRejected(stored, keychain: store)
         }
         var reply: [String: Any] = [
             "ok": true,

@@ -170,31 +170,92 @@ final class SafariCaptureCredentialTests: XCTestCase {
         XCTAssertNil(try SafariCaptureCredentials.stored(keychain: store))
     }
 
-    func testDiscardRemovesOnlyTheCredentialItWasGiven() throws {
+    func testACredentialTheGatewayRefusedIsMintedAgain() async throws {
         let store = InMemoryStore()
-        let old = stored(token: "omn_old", tlsMode: "system", fingerprint: nil)
-        let new = stored(token: "omn_new", tlsMode: "system", fingerprint: nil)
-        try SafariCaptureCredentials.commit(new, keychain: store)
-        SafariCaptureCredentials.discard(old, keychain: store)
-        XCTAssertEqual(try SafariCaptureCredentials.stored(keychain: store), new)
-        SafariCaptureCredentials.discard(new, keychain: store)
+        let http = ScriptedHTTP([
+            (200, minted),
+            (200, #"{"deviceId":"device_1","scopes":["write:web"],"token":"omn_web_2"}"#),
+        ])
+        let provisioner = SafariCaptureCredentialProvisioner(
+            pairing: pairing(), store: store, request: http.perform
+        )
+        try await provisioner.ensure()
+        let first = try XCTUnwrap(SafariCaptureCredentials.stored(keychain: store))
+        SafariCaptureCredentials.markRejected(first, keychain: store)
+
+        try await provisioner.ensure()
+        try await provisioner.ensure()
+
+        XCTAssertEqual(http.requests.count, 2)
+        let second = try XCTUnwrap(SafariCaptureCredentials.stored(keychain: store))
+        XCTAssertEqual(second.token, "omn_web_2")
+        XCTAssertFalse(SafariCaptureCredentials.isRejected(second, keychain: store))
+    }
+
+    func testAChangedAddressOrTrustRuleKeepsTheToken() async throws {
+        let store = InMemoryStore()
+        let http = ScriptedHTTP([(200, minted)])
+        try await SafariCaptureCredentialProvisioner(
+            pairing: pairing(), store: store, request: http.perform
+        ).ensure()
+        let moved = try XCTUnwrap(URL(string: "https://home.example.test"))
+        try await SafariCaptureCredentialProvisioner(
+            pairing: pairing(fingerprint: nil, tlsMode: .system, url: moved),
+            store: store,
+            request: http.perform
+        ).ensure()
+
+        XCTAssertEqual(http.requests.count, 1)
+        let stored = try XCTUnwrap(SafariCaptureCredentials.stored(keychain: store))
+        XCTAssertEqual(stored.token, "omn_web")
+        XCTAssertEqual(stored.url, "https://home.example.test")
+        XCTAssertEqual(stored.tlsMode, "system")
+        XCTAssertNil(stored.fingerprint)
+    }
+
+    func testACredentialForAPairingThatEndedMeanwhileIsNotStored() async throws {
+        let store = InMemoryStore()
+        try await SafariCaptureCredentialProvisioner(
+            pairing: pairing(), store: store, request: ScriptedHTTP([(200, minted)]).perform
+        ).ensure { false }
         XCTAssertNil(try SafariCaptureCredentials.stored(keychain: store))
+    }
+
+    func testClearingRemovesTheCredentialAndItsRefusal() throws {
+        let store = InMemoryStore()
+        let credential = stored(token: "omn_web")
+        try SafariCaptureCredentials.commit(credential, keychain: store)
+        SafariCaptureCredentials.markRejected(credential, keychain: store)
+        SafariCaptureCredentials.clear(keychain: store)
+        XCTAssertNil(try SafariCaptureCredentials.stored(keychain: store))
+        XCTAssertFalse(SafariCaptureCredentials.isRejected(credential, keychain: store))
     }
 
     func testStatusFollowsThePairingAndItsCredential() throws {
         let current = pairing()
         let matching = stored(token: "omn_web")
-        XCTAssertEqual(SafariCaptureStatus.resolve(pairing: nil, stored: matching), .unpaired)
-        XCTAssertEqual(SafariCaptureStatus.resolve(pairing: current, stored: nil), .preparing)
-        XCTAssertEqual(SafariCaptureStatus.resolve(pairing: current, stored: matching), .ready)
+        XCTAssertEqual(SafariCaptureStatus.resolve(pairing: nil, stored: matching, rejected: false), .unpaired)
+        XCTAssertEqual(SafariCaptureStatus.resolve(pairing: current, stored: nil, rejected: false), .preparing)
+        XCTAssertEqual(SafariCaptureStatus.resolve(pairing: current, stored: matching, rejected: false), .ready)
         XCTAssertEqual(
-            SafariCaptureStatus.resolve(pairing: pairing(generation: "tok_2"), stored: matching),
+            SafariCaptureStatus.resolve(pairing: current, stored: matching, rejected: true),
+            .preparing,
+            "a credential the gateway refused is waiting to be replaced"
+        )
+        XCTAssertEqual(
+            SafariCaptureStatus.resolve(
+                pairing: pairing(generation: "tok_2"),
+                stored: matching,
+                rejected: false
+            ),
             .preparing,
             "a credential minted for an earlier pairing is not this pairing's"
         )
         XCTAssertEqual(
             try SafariCaptureStatus.resolve(
-                pairing: pairing(url: XCTUnwrap(URL(string: "https://other.example.test"))), stored: matching
+                pairing: pairing(url: XCTUnwrap(URL(string: "https://other.example.test"))),
+                stored: matching,
+                rejected: false
             ),
             .preparing
         )

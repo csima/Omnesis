@@ -2,11 +2,18 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import { normalizeCaptureDomain } from "@omnesis/provider-web/capture-policy";
+import type { CaptureContentStatus } from "../chrome/messages.js";
 import type { SafariPopupAck, SafariPopupMessage, SafariStatus } from "./messages.js";
 
 export const PAUSE_ONE_HOUR_MS = 60 * 60 * 1000;
 
-export type PopupState = "loading" | "unpaired" | "capturing" | "paused" | "waiting";
+export type PopupState = "loading" | "unpaired" | "capturing" | "paused" | "waiting" | "blocked";
+
+/**
+ * What the open page's own script says about itself: `absent` when Safari has
+ * not let the extension onto the page, so no script is there to answer.
+ */
+export type PageCapture = CaptureContentStatus | "absent" | "unknown";
 
 export interface PopupModel {
   state: PopupState;
@@ -42,6 +49,7 @@ export function popupModel(
   status: SafariStatus | null,
   pageUrl: string | undefined,
   now: number,
+  page: PageCapture = "unknown",
 ): PopupModel {
   const none = { site: null, showPause: false, showResume: false };
   if (!status) {
@@ -94,7 +102,19 @@ export function popupModel(
       showResume: true,
     };
   }
-  if (!status.healthy) {
+  if (status.refused) {
+    return {
+      state: "waiting",
+      headline: "Open the Omnesis app",
+      detail:
+        "Your gateway refused Safari's connection. Opening the app reconnects it; pages already read are kept on this device.",
+      footnote,
+      site,
+      showPause: false,
+      showResume: false,
+    };
+  }
+  if (!status.reachable) {
     return {
       state: "waiting",
       headline: "Can't reach your gateway",
@@ -105,14 +125,40 @@ export function popupModel(
       showResume: false,
     };
   }
+  const capturing = { footnote, site, showPause: true, showResume: false };
+  if (site?.excluded) {
+    return {
+      state: "capturing",
+      headline: "This site is not captured",
+      detail: `Connected to ${status.gatewayHost}.`,
+      ...capturing,
+    };
+  }
+  if (site && page === "absent") {
+    return {
+      state: "blocked",
+      headline: "Not allowed on this site yet",
+      detail:
+        "Allow Omnesis for this website in Safari's page menu, then reload the page. Until then nothing here is read.",
+      ...capturing,
+    };
+  }
+  if (site && page !== "unknown" && page !== "absent" && page.state === "excluded") {
+    return {
+      state: "capturing",
+      headline: "This page is not captured",
+      detail:
+        page.reason === "sensitive-field"
+          ? "Pages with sign-in, verification or payment fields are never read."
+          : `Connected to ${status.gatewayHost}.`,
+      ...capturing,
+    };
+  }
   return {
     state: "capturing",
-    headline: site?.excluded ? "This site is not captured" : "Saving pages you read",
+    headline: "Saving pages you read",
     detail: `Connected to ${status.gatewayHost}.`,
-    footnote,
-    site,
-    showPause: true,
-    showResume: false,
+    ...capturing,
   };
 }
 
@@ -120,6 +166,8 @@ export interface PopupDeps {
   document: Document;
   send: (message: SafariPopupMessage) => Promise<SafariPopupAck | undefined>;
   activePageUrl: () => Promise<string | undefined>;
+  /** Ask the open page's script for its capture state; rejects when no script is there. */
+  pageCapture: () => Promise<CaptureContentStatus | undefined>;
   now: () => number;
 }
 
@@ -145,10 +193,14 @@ export async function startPopup(deps: PopupDeps): Promise<void> {
   const buttons = [siteToggle, pauseHour, pauseOpen, resume];
 
   const pageUrl = await deps.activePageUrl().catch(() => undefined);
-  let model = popupModel(null, pageUrl, deps.now());
+  const page: PageCapture = await deps.pageCapture().then(
+    (answer) => answer ?? "absent",
+    () => "absent" as const,
+  );
+  let model = popupModel(null, pageUrl, deps.now(), page);
 
   function render(status: SafariStatus | null): void {
-    model = popupModel(status, pageUrl, deps.now());
+    model = popupModel(status, pageUrl, deps.now(), page);
     doc.body.dataset["state"] = model.state;
     headline.textContent = model.headline;
     detail.textContent = model.detail;

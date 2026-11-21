@@ -26,7 +26,13 @@ import {
 } from "../chrome/messages.js";
 import { PAIRING_KEY, parsePairing, type BrowserPairing } from "../chrome/pairing-record.js";
 import { CapturePolicyClient } from "../push/capture-policy.js";
-import { clearPushObservability, clearPushQueue, PushClient } from "../push/client.js";
+import {
+  clearPushHealth,
+  clearPushObservability,
+  clearPushQueue,
+  clearPushServerState,
+  PushClient,
+} from "../push/client.js";
 import { buildPageVisit, buildWebPageDocument } from "../push/documents.js";
 import { REQUIRED_WEB_SCOPE } from "../push/pairing.js";
 import {
@@ -55,8 +61,12 @@ export const SAFARI_DRAIN_ALARM = "omnesis.safari.drain";
 export const SAFARI_RETRY_ALARM = "omnesis.safari.retry-drain";
 const DRAIN_PERIOD_MINUTES = 1;
 
-/** A page asking to sync re-reads the app's pairing at most this often while paired. */
+/** When the app's pairing was last read; kept in storage because the background is not. */
+export const SAFARI_PAIRING_SYNCED_KEY = "omnesis.safari.pairingSyncedAt.v1";
+
+/** The app's pairing is re-read at most this often while paired, and while not. */
 const PAIRING_SYNC_INTERVAL_MS = 60_000;
+const UNPAIRED_SYNC_INTERVAL_MS = 5_000;
 
 /** The push client requires a token; the app attaches the real one. */
 const NATIVE_CREDENTIAL_PLACEHOLDER = "native";
@@ -70,14 +80,19 @@ export interface SafariMessageSender {
 export interface SafariBackgroundDeps {
   storage: SafariStorageArea;
   sendNative: SendNativeMessage;
-  alarms?: { create(name: string, info: { when?: number; periodInMinutes?: number }): void };
+  alarms?: {
+    create(name: string, info: { when?: number; periodInMinutes?: number }): void;
+    clear(name: string): unknown;
+  };
   runtimeId: string;
+  /** The popup page's address; only it may change the capture settings. */
+  popupUrl: string;
   now?: () => number;
   nativeTimeoutMs?: number;
 }
 
 export interface SafariBackground {
-  /** Run once per background wake: adopt the app's pairing, replay staged captures, drain. */
+  /** Run once per background wake: check the app's pairing, replay staged captures, drain. */
   start(): Promise<void>;
   handleMessage(
     message: unknown,
@@ -108,8 +123,7 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
   };
   const sessionId = crypto.randomUUID();
   let clientGeneration = 0;
-  let lastPairingSyncAt = 0;
-  let pairingSync: Promise<BrowserPairing | null> | null = null;
+  let pairingSync: { promise: Promise<BrowserPairing | null>; forced: boolean } | null = null;
   let policyRefresh: { pairing: string; promise: Promise<WebCapturePolicy | null> } | null = null;
 
   let queueWork: Promise<unknown> = Promise.resolve();
@@ -122,16 +136,17 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
     return result;
   }
 
-  const nativeFetch = createNativeFetch(sendNative, {
-    ...(deps.nativeTimeoutMs !== undefined ? { timeoutMs: deps.nativeTimeoutMs } : {}),
-    // The app lost its pairing between two requests; stop the pages now
-    // instead of at the next periodic sync.
-    onUnpaired: () => void syncPairing(true),
-  });
-
   async function loadPairing(): Promise<BrowserPairing | null> {
     return parsePairing((await storage.get(PAIRING_KEY))[PAIRING_KEY]);
   }
+
+  const nativeFetch = createNativeFetch(sendNative, {
+    deviceId: async () => (await loadPairing())?.deviceId ?? null,
+    ...(deps.nativeTimeoutMs !== undefined ? { timeoutMs: deps.nativeTimeoutMs } : {}),
+    // The app is unpaired, or paired as another device; stop the pages now
+    // instead of at the next sync.
+    onUnpaired: () => void syncPairing(true).catch(() => undefined),
+  });
 
   async function loadGatewayHost(): Promise<string> {
     const host = (await storage.get(SAFARI_GATEWAY_HOST_KEY))[SAFARI_GATEWAY_HOST_KEY];
@@ -143,63 +158,73 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
     await clearPendingHandoffs(handoffs);
     await clearPushQueue(store);
     await clearPushObservability(store);
+    await clearPushHealth(store);
+    await clearPushServerState(store);
     await clearCachedPolicy(store);
   }
 
   /**
    * Mirror the app's pairing into storage, where the page scripts read it.
    * The app is the only place a pairing is made or removed; a status the app
-   * could not give leaves the last known state in force.
+   * could not give leaves the last known state in force. A forced call always
+   * asks the app, even when an unforced one is already under way.
    */
   function syncPairing(force = false): Promise<BrowserPairing | null> {
-    if (pairingSync) return pairingSync;
-    const work = serializeQueueWork(async () => {
-      const current = await loadPairing();
-      if (!force && current && now() - lastPairingSyncAt < PAIRING_SYNC_INTERVAL_MS) {
-        return current;
+    if (pairingSync) {
+      if (!force || pairingSync.forced) return pairingSync.promise;
+      const again = (): Promise<BrowserPairing | null> => syncPairing(true);
+      return pairingSync.promise.then(again, again);
+    }
+    const promise = serializeQueueWork(() => syncPairingWork(force));
+    const entry = { promise, forced: force };
+    pairingSync = entry;
+    const done = (): void => {
+      if (pairingSync === entry) pairingSync = null;
+    };
+    promise.then(done, done);
+    return promise;
+  }
+
+  async function syncPairingWork(force: boolean): Promise<BrowserPairing | null> {
+    const current = await loadPairing();
+    if (!force) {
+      const syncedAt = (await storage.get(SAFARI_PAIRING_SYNCED_KEY))[SAFARI_PAIRING_SYNCED_KEY];
+      const interval = current ? PAIRING_SYNC_INTERVAL_MS : UNPAIRED_SYNC_INTERVAL_MS;
+      if (typeof syncedAt === "number" && Math.abs(now() - syncedAt) < interval) return current;
+    }
+    const status = await readNativeStatus(sendNative, deps.nativeTimeoutMs);
+    if (!status) return current;
+    await storage.set({ [SAFARI_PAIRING_SYNCED_KEY]: now() });
+    if (!status.paired) {
+      if (current) {
+        // State first: a background stopped between the two steps leaves a
+        // pairing with nothing behind it, never pages with no pairing.
+        await forgetPairingState();
+        await storage.remove([PAIRING_KEY, SAFARI_GATEWAY_HOST_KEY]);
       }
-      const status = await readNativeStatus(sendNative, deps.nativeTimeoutMs);
-      if (!status) return current;
-      lastPairingSyncAt = now();
-      if (!status.paired) {
-        if (current) {
-          await storage.remove([PAIRING_KEY, SAFARI_GATEWAY_HOST_KEY]);
-          await storage.set({ [CAPTURE_PERMISSION_STATE_KEY]: false });
-          await forgetPairingState();
-        }
-        return null;
-      }
-      const sameDevice = current?.deviceId === status.deviceId;
-      if (!sameDevice) {
-        if (current) await forgetPairingState();
-        const pairing: BrowserPairing = {
-          gatewayUrl: SAFARI_GATEWAY_ORIGIN,
-          scopes: [REQUIRED_WEB_SCOPE],
-          deviceId: status.deviceId,
-          pairedAt: now(),
-        };
-        await storage.set({
-          [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost,
-          [CAPTURE_PERMISSION_STATE_KEY]: true,
-          [PAIRING_KEY]: JSON.stringify(pairing),
-        });
-        return pairing;
-      }
-      if ((await loadGatewayHost()) !== status.gatewayHost) {
-        await storage.set({ [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost });
-      }
-      return current;
-    });
-    pairingSync = work;
-    void work.then(
-      () => {
-        if (pairingSync === work) pairingSync = null;
-      },
-      () => {
-        if (pairingSync === work) pairingSync = null;
-      },
-    );
-    return work;
+      return null;
+    }
+    if (current?.deviceId !== status.deviceId) {
+      await forgetPairingState();
+      const pairing: BrowserPairing = {
+        gatewayUrl: SAFARI_GATEWAY_ORIGIN,
+        scopes: [REQUIRED_WEB_SCOPE],
+        deviceId: status.deviceId,
+        pairedAt: now(),
+      };
+      // Safari injects the page script only where the person allowed it, so
+      // host access is always held wherever that script runs.
+      await storage.set({
+        [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost,
+        [CAPTURE_PERMISSION_STATE_KEY]: true,
+        [PAIRING_KEY]: JSON.stringify(pairing),
+      });
+      return pairing;
+    }
+    if ((await loadGatewayHost()) !== status.gatewayHost) {
+      await storage.set({ [SAFARI_GATEWAY_HOST_KEY]: status.gatewayHost });
+    }
+    return current;
   }
 
   async function buildClient(): Promise<PushClient | null> {
@@ -367,10 +392,20 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
     }
   }
 
+  /** A periodic wake only while pages wait; an idle extension asks the app nothing. */
+  function keepDrainAlarm(waiting: boolean): void {
+    if (waiting) deps.alarms?.create(SAFARI_DRAIN_ALARM, { periodInMinutes: DRAIN_PERIOD_MINUTES });
+    else void Promise.resolve(deps.alarms?.clear(SAFARI_DRAIN_ALARM)).catch(() => undefined);
+  }
+
   async function drainWork(): Promise<boolean> {
     const client = await buildClient();
-    if (!client || (await client.queueDepth()) === 0) return false;
+    if (!client || (await client.queueDepth()) === 0) {
+      keepDrainAlarm(false);
+      return false;
+    }
     const result = await client.drain();
+    keepDrainAlarm((await client.queueDepth()) > 0);
     const readyAgain = result.nextEligibleAt !== null && result.nextEligibleAt <= now();
     if (result.nextEligibleAt !== null && !readyAgain) {
       const delayMs = Math.max(0, result.nextEligibleAt - now());
@@ -396,10 +431,11 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
     if (!pairing) return { paired: false };
     const policy = await currentPolicy({ refresh: opts.fresh });
     const client = await buildClient();
-    const [gatewayHost, queued, health, recent] = await Promise.all([
+    const [gatewayHost, queued, health, connectivity, recent] = await Promise.all([
       loadGatewayHost(),
       client ? client.queueDepth() : 0,
       client ? client.getHealth() : null,
+      client ? client.getConnectivity() : null,
       client ? client.getRecentDeliveries() : [],
     ]);
     const pausedUntil = policy?.pause ? policy.pause.until : undefined;
@@ -415,7 +451,8 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
       ...(paused && typeof pausedUntil === "number" ? { pausedUntil } : {}),
       excludedDomains: policy?.excludedDomains ?? [],
       queued,
-      healthy: health?.ok !== false,
+      refused: health?.ok === false,
+      reachable: connectivity?.reachable !== false,
       ...(recent[0] ? { lastCapturedAt: recent[0].at } : {}),
     };
   }
@@ -453,12 +490,16 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
 
   return {
     async start() {
-      deps.alarms?.create(SAFARI_DRAIN_ALARM, { periodInMinutes: DRAIN_PERIOD_MINUTES });
-      // Read the capture settings now, so the first page of this wake is not
-      // refused for want of them.
-      if (await syncPairing(true)) await currentPolicy();
-      await recoverPendingHandoffs();
-      await drain();
+      try {
+        // Read the capture settings now, so the first page of this wake is
+        // not refused for want of them.
+        if (await syncPairing()) await currentPolicy();
+        await recoverPendingHandoffs();
+      } catch {
+        // Storage that cannot be read now is read again on the next wake.
+      } finally {
+        await drain();
+      }
     },
 
     handleMessage(message, sender, sendResponse) {
@@ -496,7 +537,11 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
         );
         return true;
       }
-      if (sender.tab === undefined && isSafariPopupMessage(message)) {
+      if (
+        sender.tab === undefined &&
+        sender.url?.startsWith(deps.popupUrl) === true &&
+        isSafariPopupMessage(message)
+      ) {
         respond(
           handlePopupMessage(message),
           sendResponse,
