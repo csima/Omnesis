@@ -10,6 +10,7 @@ import {
   Scope,
   TokenId,
   DEVICE_KINDS,
+  DEVICE_HOSTED_SOURCE_TYPES,
   isDeviceKind,
   SCOPE_READ,
   SCOPE_READ_BULK,
@@ -320,6 +321,28 @@ test("a separate browser read credential never acquires capture writes during re
   expect(missingHostedWriteScopes([SCOPE_READ], "browser")).toEqual([]);
   expect(missingHostedWriteScopes([SCOPE_READ, writeScope(SourceType("web"))], "browser")).toEqual(
     [],
+  );
+});
+
+test("a phone's web-only credential is never widened to the phone's own sources", () => {
+  const web = writeScope(SourceType("web"));
+  const photos = writeScope(SourceType("photos"));
+  expect(missingHostedWriteScopes([web], "ios")).toEqual([]);
+  expect(missingHostedWriteScopes([web], "android")).toEqual([]);
+  expect(
+    missingHostedWriteScopes([photos], "ios"),
+    "a trimmed grant of the kind's own sources is still repaired",
+  ).not.toEqual([]);
+  expect(missingHostedWriteScopes([web, photos], "ios")).not.toEqual([]);
+  expect(
+    missingHostedWriteScopes([writeScope(SourceType("retired-capture"))], "browser"),
+    "a scope no kind hosts any more is still repaired",
+  ).toEqual([web]);
+  expect(missingHostedWriteScopes([SCOPE_ADMIN, SCOPE_READ], "ios")).toEqual(
+    DEVICE_HOSTED_SOURCE_TYPES.ios.map(writeScope),
+  );
+  expect(missingHostedWriteScopes([], "ios")).toEqual(
+    DEVICE_HOSTED_SOURCE_TYPES.ios.map(writeScope),
   );
 });
 
