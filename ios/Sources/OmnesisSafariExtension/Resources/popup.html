@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Omnesis</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body data-state="loading">
+    <header class="brand">
+      <img class="brand-logo" src="icon-128.png" alt="" />
+      <div>
+        <div class="brand-title">Omnesis</div>
+        <div class="brand-sub">Safari capture</div>
+      </div>
+    </header>
+
+    <section class="card" aria-live="polite">
+      <div id="headline" class="headline">Checking…</div>
+      <p id="detail" class="detail"></p>
+    </section>
+
+    <section id="site" class="card" hidden>
+      <div class="label">This site</div>
+      <div id="site-domain" class="site-domain"></div>
+      <button id="site-toggle" class="button" type="button"></button>
+    </section>
+
+    <section id="pause" class="card" hidden>
+      <div class="label">All sites</div>
+      <div class="actions">
+        <button id="pause-hour" class="button" type="button">Pause for an hour</button>
+        <button id="pause-open" class="button" type="button">Pause until I resume</button>
+        <button id="resume" class="button primary" type="button">Resume capture</button>
+      </div>
+    </section>
+
+    <p id="error" class="error" role="alert" hidden></p>
+    <p id="footnote" class="footnote"></p>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -5,3 +5,6 @@ evals/universes/sacha-bellamy/assets/*.pdf binary
 
 # Upstream notices retain their original whitespace.
 ios/Resources/ThirdParty/** -whitespace
+
+# Built by `npm run build:safari -w extension`; review the sources instead.
+ios/Sources/OmnesisSafariExtension/Resources/*.js linguist-generated=true
