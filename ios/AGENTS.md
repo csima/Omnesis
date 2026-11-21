@@ -234,7 +234,7 @@ When the user is away from the macOS build host, `devicectl install` doesn't wor
 | Keychain access group | `dev.omnesis.ios` plus shared `dev.omnesis.ios.notifications` | `dev.omnesis.ios.demo`                         |
 | APS environment       | Debug `development`, Release `production`                     | Debug `development`, Release `production`      |
 | Apple Watch app       | `OmnesisWatch` + `OmnesisWatchWidgets`                        | `OmnesisDemoWatch` + `OmnesisDemoWatchWidgets` |
-| Extensions            | Control Center control, notification service                  | none                                           |
+| Extensions            | Control Center control, notification service, Safari capture  | none                                           |
 | Realtime voice        | not included (no WebRTC)                                      | included (`OMNESIS_REALTIME_VOICE`, WebRTC)    |
 
 Both apps install side-by-side on the same device. Because the keychain access groups differ, each app keeps its own paired gateway URL + token — pair the production app to your live gateway, pair the demo app to whatever the synth/replay demo gateway is serving (`scripts/start-demo-gateway.sh`), and flip between them by tapping the home-screen icon. **No more re-pairing your live setup just to demo.** Each app embeds its own watch app, built from the `WatchApp` / `WatchWidgets` templates in `project.yml`, so the demo app's complications reach the demo app's gateway.
@@ -262,6 +262,18 @@ OMNESIS_CONFIG_DIR=/tmp/omnesis-agent-demo cli devices pair --kind ios
 ```
 
 Scan the printed QR from the Omnesis Demo app. Production app stays paired to your live gateway, untouched.
+
+## Safari capture extension
+
+`OmnesisSafariExtension` ships the browser extension's capture code to Safari. Its
+`Resources/` directory is build output: change `extension/src/safari` (or anything
+it imports), run `npm run build:safari -w extension`, and commit the result;
+`extension/src/safari/bundle.test.ts` compares the two byte for byte. The script
+reaches the gateway only through `SafariWebExtensionHandler`; the requests it may
+ask for are listed twice, in `SafariBridgeRequest.swift` and
+`extension/src/safari/native-contract.ts`, and both are tested against
+`Tests/OmnesisTests/Fixtures/safari-bridge-requests.json`. Change all three
+together. See [README.md](README.md) § "Safari capture".
 
 ## SwiftUI previews + visual feedback loop — mandatory
 

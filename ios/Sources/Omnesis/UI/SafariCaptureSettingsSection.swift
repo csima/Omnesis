@@ -38,7 +38,7 @@ struct SafariCaptureSettingsSection: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Turn it on in Safari").font(.subheadline)
                         Text(
-                            "Open the Settings app, then Apps, Safari, Extensions and Omnesis. "
+                            "In the Settings app, open Safari's Extensions and choose Omnesis. "
                                 + "Allow the extension, then choose the websites it may read."
                         )
                         .font(.footnote)
