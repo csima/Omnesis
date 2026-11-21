@@ -180,6 +180,10 @@ targets:
       # over the gateway's pinned connection.
       - target: OmnesisNotificationService
         embed: true
+      # Captures the pages read in Safari, through the paired gateway
+      # connection the app provisions for it.
+      - target: OmnesisSafariExtension
+        embed: true
       # No WebRTC: realtime voice ships in OmnesisDemo only, so this app
       # carries no non-Apple encryption (see TESTFLIGHT.md § Export compliance).
       - package: SwiftDraw
@@ -333,6 +337,51 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
           PROVISIONING_PROFILE_SPECIFIER: Omnesis Widgets App Store
+
+  # OmnesisSafariExtension — the Safari Web Extension embedded in the
+  # production Omnesis app. Its JavaScript reads the pages the person stays on
+  # and holds no gateway address or credential: every upload is a message to
+  # SafariWebExtensionHandler, which sends an allow-listed request to the
+  # paired gateway with a web-capture-only token. Resources/ is built from
+  # extension/src/safari by `npm run build:safari -w extension` and committed.
+  OmnesisSafariExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/OmnesisSafariExtension
+        excludes:
+          - PrivacyInfo.xcprivacy
+          - Resources
+      - path: Sources/OmnesisSafariExtension/PrivacyInfo.xcprivacy
+      # Flat on purpose: every file lands in the root of the extension bundle,
+      # where Safari reads manifest.json and resolves the paths it names.
+      - path: Sources/OmnesisSafariExtension/Resources
+        buildPhase: resources
+      # Dual-target members: the bridge, its request allow-list and the
+      # credential it reads, with the pairing's own Keychain and trust rule.
+      - path: Sources/Omnesis/SafariCapture/SafariBridge.swift
+      - path: Sources/Omnesis/SafariCapture/SafariBridgeRequest.swift
+      - path: Sources/Omnesis/SafariCapture/SafariCaptureCredentials.swift
+      - path: Sources/Omnesis/Pairing/GatewayTrustPolicy.swift
+      - path: Sources/Omnesis/Pairing/Keychain.swift
+      - path: Sources/Omnesis/Pairing/PairingTlsMode.swift
+      - path: Sources/Omnesis/Pairing/PinnedSession.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(OMNESIS_BUNDLE_ID).safari-extension
+        PRODUCT_NAME: OmnesisSafariExtension
+        INFOPLIST_FILE: Sources/OmnesisSafariExtension/Info.plist
+        # Dedicated shared Keychain group for the web-capture credential.
+        CODE_SIGN_ENTITLEMENTS: OmnesisSafariExtension.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: Omnesis Safari Extension App Store
 
   # OmnesisWatch — the Apple Watch companion app (single-target SwiftUI
   # watchOS app, WKApplication). It holds no gateway pairing: its

@@ -75,6 +75,7 @@ describe("iOS build identities", () => {
       "OmnesisDemo",
       "OmnesisNotificationService",
       "OmnesisWidgets",
+      "OmnesisSafariExtension",
       "OmnesisWatch",
       "OmnesisWatchWidgets",
       "OmnesisDemoWatch",
@@ -88,6 +89,7 @@ describe("iOS build identities", () => {
       OmnesisDemo: `${base}.demo`,
       OmnesisNotificationService: `${base}.notification-service`,
       OmnesisWidgets: `${base}.widgets`,
+      OmnesisSafariExtension: `${base}.safari-extension`,
       OmnesisWatch: `${base}.watchkitapp`,
       OmnesisWatchWidgets: `${base}.watchkitapp.widgets`,
       OmnesisDemoWatch: `${base}.demo.watchkitapp`,
@@ -115,22 +117,34 @@ describe("iOS build identities", () => {
   });
 
   it.each(["dev.omnesis.ios", "com.example.myomnesis"])(
-    "isolates notification and task-widget Keychain groups for %s",
+    "isolates notification, task-widget and web-capture Keychain groups for %s",
     (base) => {
       const shared = `${base}.notifications`;
       const widgetShared = `${base}.task-widgets`;
+      const safariShared = `${base}.safari`;
       const production = read("ios/Omnesis.entitlements");
       const demo = read("ios/Omnesis-Demo.entitlements");
       const service = read("ios/OmnesisNotificationService.entitlements");
       const widgets = read("ios/OmnesisWidgets.entitlements");
+      const safari = read("ios/OmnesisSafariExtension.entitlements");
       const group = (xml) =>
         [...xml.matchAll(/<string>\$\(AppIdentifierPrefix\)([^<]+)<\/string>/g)].map((match) =>
           expanded(match[1], base),
         );
-      expect(group(production)).toEqual([base, shared, widgetShared]);
+      expect(group(production)).toEqual([base, shared, widgetShared, safariShared]);
       expect(group(demo)).toEqual([`${base}.demo`]);
       expect(group(service)).toEqual([shared]);
       expect(group(widgets)).toEqual([widgetShared]);
+      expect(group(safari)).toEqual([safariShared]);
+      expect(targetSetting("OmnesisSafariExtension", "CODE_SIGN_ENTITLEMENTS")).toBe(
+        "OmnesisSafariExtension.entitlements",
+      );
+      for (const path of ["ios/Info.plist", "ios/Sources/OmnesisSafariExtension/Info.plist"]) {
+        expect(expanded(plistValue(path, "OmnesisSafariAccessGroup"), base)).toBe(
+          `$(AppIdentifierPrefix)${safariShared}`,
+        );
+      }
+      expect(read("ios/Info-Demo.plist")).not.toContain("OmnesisSafariAccessGroup");
       expect(targetSetting("OmnesisWidgets", "CODE_SIGN_ENTITLEMENTS")).toBe(
         "OmnesisWidgets.entitlements",
       );

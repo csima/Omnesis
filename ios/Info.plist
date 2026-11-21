@@ -45,6 +45,8 @@
 	<string>17.0</string>
 	<key>OmnesisKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)$(OMNESIS_BUNDLE_ID).notifications</string>
+	<key>OmnesisSafariAccessGroup</key>
+	<string>$(AppIdentifierPrefix)$(OMNESIS_BUNDLE_ID).safari</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Omnesis uses the camera only to scan the gateway pairing QR code during setup.</string>
 	<key>NSHealthShareUsageDescription</key>
