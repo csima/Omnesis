@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 import { normalizeCaptureDomain } from "@omnesis/provider-web/capture-policy";
-import type { CaptureContentStatus } from "../chrome/messages.js";
+import type { CaptureContentStatus, CaptureExclusionReason } from "../chrome/messages.js";
 import type { SafariPopupAck, SafariPopupMessage, SafariStatus } from "./messages.js";
 
 export const PAUSE_ONE_HOUR_MS = 60 * 60 * 1000;
@@ -36,6 +36,17 @@ export function siteOf(pageUrl: string | undefined): string {
     return "";
   }
 }
+
+/**
+ * Reasons a page gives that the gateway's own state already answers. The page
+ * learns of a change after the popup does, so its copy of these is not shown.
+ */
+const GATEWAY_STATE_REASONS: ReadonlySet<CaptureExclusionReason> = new Set([
+  "paused",
+  "excluded-domain",
+  "unpaired",
+  "no-policy",
+]);
 
 function coveredBy(domain: string, excluded: readonly string[]): string | null {
   return excluded.find((entry) => domain === entry || domain.endsWith(`.${entry}`)) ?? null;
@@ -143,7 +154,13 @@ export function popupModel(
       ...capturing,
     };
   }
-  if (site && page !== "unknown" && page !== "absent" && page.state === "excluded") {
+  if (
+    site &&
+    page !== "unknown" &&
+    page !== "absent" &&
+    page.state === "excluded" &&
+    !(page.reason && GATEWAY_STATE_REASONS.has(page.reason))
+  ) {
     return {
       state: "capturing",
       headline: "This page is not captured",

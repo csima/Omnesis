@@ -67,6 +67,8 @@ export const SAFARI_PAIRING_SYNCED_KEY = "omnesis.safari.pairingSyncedAt.v1";
 /** The app's pairing is re-read at most this often while paired, and while not. */
 const PAIRING_SYNC_INTERVAL_MS = 60_000;
 const UNPAIRED_SYNC_INTERVAL_MS = 5_000;
+/** The least time between two checks of a credential the gateway refused. */
+const REFUSED_RECHECK_INTERVAL_MS = 15_000;
 
 /** The push client requires a token; the app attaches the real one. */
 const NATIVE_CREDENTIAL_PLACEHOLDER = "native";
@@ -426,9 +428,36 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
     );
   }
 
+  /**
+   * The app replaces a credential the gateway refused, and has no way to say
+   * so. A wake therefore asks the gateway again, and an answer that accepts
+   * the credential releases the pages held since the refusal.
+   */
+  async function recheckRefusedWork(force: boolean): Promise<boolean> {
+    const client = await buildClient();
+    if (!client) return false;
+    const health = await client.getHealth();
+    if (!health || health.ok) return false;
+    if (!force && Math.abs(now() - health.at) < REFUSED_RECHECK_INTERVAL_MS) return false;
+    if ((await client.probeAuth()).auth !== "ok") return false;
+    await clearPushHealth(store);
+    await client.resetBackoff();
+    return true;
+  }
+
+  function recheckRefused(force = false): Promise<void> {
+    return serializeQueueWork(() => recheckRefusedWork(force)).then(
+      (released) => {
+        if (released) void drain();
+      },
+      () => undefined,
+    );
+  }
+
   async function readStatus(opts: { fresh: boolean }): Promise<SafariStatus> {
     const pairing = opts.fresh ? await syncPairing(true) : await loadPairing();
     if (!pairing) return { paired: false };
+    if (opts.fresh) await recheckRefused(true);
     const policy = await currentPolicy({ refresh: opts.fresh });
     const client = await buildClient();
     const [gatewayHost, queued, health, connectivity, recent] = await Promise.all([
@@ -494,6 +523,7 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
         // Read the capture settings now, so the first page of this wake is
         // not refused for want of them.
         if (await syncPairing()) await currentPolicy();
+        await recheckRefused();
         await recoverPendingHandoffs();
       } catch {
         // Storage that cannot be read now is read again on the next wake.
@@ -531,7 +561,10 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
       }
       if (fromPage && isObjectWithType(message, SAFARI_SYNC_MESSAGE_TYPE)) {
         respond(
-          syncPairing().then((pairing) => ({ paired: pairing !== null })),
+          syncPairing().then((pairing) => {
+            if (pairing) void recheckRefused();
+            return { paired: pairing !== null };
+          }),
           sendResponse,
           () => ({ paired: false }),
         );

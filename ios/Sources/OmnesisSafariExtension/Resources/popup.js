@@ -53,6 +53,12 @@
       return "";
     }
   }
+  var GATEWAY_STATE_REASONS = /* @__PURE__ */ new Set([
+    "paused",
+    "excluded-domain",
+    "unpaired",
+    "no-policy"
+  ]);
   function coveredBy(domain, excluded) {
     return excluded.find((entry) => domain === entry || domain.endsWith(`.${entry}`)) ?? null;
   }
@@ -140,7 +146,7 @@
         ...capturing
       };
     }
-    if (site && page !== "unknown" && page !== "absent" && page.state === "excluded") {
+    if (site && page !== "unknown" && page !== "absent" && page.state === "excluded" && !(page.reason && GATEWAY_STATE_REASONS.has(page.reason))) {
       return {
         state: "capturing",
         headline: "This page is not captured",
