@@ -25,9 +25,12 @@ public struct SafariCaptureCredentialProvisioner: Sendable {
         self.request = request
     }
 
-    /// Idempotent for one pairing. Another gateway, device, pairing or trust
-    /// rule mints a new credential in place of the stored one.
-    public func ensure() async throws {
+    /// Idempotent for one pairing. A credential the gateway refused, or one
+    /// minted for another device or an earlier pairing of this one, is
+    /// replaced by a new one; a changed address or trust rule keeps the token.
+    /// `isCurrent` is asked once the gateway has answered, so a credential for
+    /// a pairing that ended meanwhile is never stored.
+    public func ensure(isCurrent: @Sendable () async -> Bool = { true }) async throws {
         guard pairing.url.scheme?.lowercased() == "https" else {
             throw SafariCaptureCredentialError.insecurePairing
         }
@@ -45,12 +48,19 @@ public struct SafariCaptureCredentialProvisioner: Sendable {
             throw SafariCaptureCredentialError.insecurePairing
         }
         if let stored = try SafariCaptureCredentials.stored(keychain: store),
-           stored.url == pairing.url.absoluteString,
            stored.deviceId == pairing.deviceId,
            stored.generation == pairing.pairingGeneration,
-           stored.tlsMode == pairing.tlsMode.rawValue,
-           stored.fingerprint == fingerprint,
-           !stored.token.isEmpty {
+           !stored.token.isEmpty,
+           !SafariCaptureCredentials.isRejected(stored, keychain: store) {
+            let current = SafariCaptureCredentials.StoredCredential(
+                url: pairing.url.absoluteString,
+                token: stored.token,
+                deviceId: stored.deviceId,
+                generation: stored.generation,
+                tlsMode: pairing.tlsMode.rawValue,
+                fingerprint: fingerprint
+            )
+            if current != stored { try SafariCaptureCredentials.commit(current, keychain: store) }
             return
         }
 
@@ -86,6 +96,7 @@ public struct SafariCaptureCredentialProvisioner: Sendable {
         else {
             throw SafariCaptureCredentialError.invalidResponse
         }
+        guard await isCurrent() else { return }
 
         try SafariCaptureCredentials.commit(
             .init(

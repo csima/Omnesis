@@ -10,6 +10,7 @@ import Foundation
 /// cannot read.
 public enum SafariCaptureCredentials {
     static let credentialKey = "safari.credential.v1"
+    static let rejectedKey = "safari.credential.rejected.v1"
 
     /// Info.plist key naming the shared Keychain group. A build without the
     /// Safari extension has no such key and never publishes a credential.
@@ -66,11 +67,20 @@ public enum SafariCaptureCredentials {
         }
     }
 
-    public static func sharedKeychain() -> Keychain? {
+    /// Whether this build carries the Safari extension at all.
+    public static var isAvailable: Bool {
+        accessGroup != nil
+    }
+
+    private static var accessGroup: String? {
         guard let group = Bundle.main.object(forInfoDictionaryKey: accessGroupInfoKey) as? String,
               !group.isEmpty
         else { return nil }
-        return Keychain(service: "dev.omnesis.ios.safari", accessGroup: group)
+        return group
+    }
+
+    public static func sharedKeychain() -> Keychain? {
+        accessGroup.map { Keychain(service: "dev.omnesis.ios.safari", accessGroup: $0) }
     }
 
     public static func stored(keychain: PairingStore) throws -> StoredCredential? {
@@ -88,17 +98,25 @@ public enum SafariCaptureCredentials {
             throw SafariCaptureCredentialError.invalidResponse
         }
         try keychain.set(raw, forKey: credentialKey)
+        if (try? keychain.get(rejectedKey)) != credential.token {
+            try? keychain.delete(rejectedKey)
+        }
     }
 
     public static func clear(keychain: PairingStore) {
         try? keychain.delete(credentialKey)
+        try? keychain.delete(rejectedKey)
     }
 
-    /// Remove `credential` if it is still the stored one. The gateway refused
-    /// it, and a credential minted since must not be lost to that verdict.
-    public static func discard(_ credential: StoredCredential, keychain: PairingStore) {
-        guard let current = try? stored(keychain: keychain), current == credential else { return }
-        clear(keychain: keychain)
+    /// Record that the gateway refused `credential`. The credential stays, so
+    /// Safari still knows which pairing its waiting pages belong to; the app
+    /// mints another the next time it runs.
+    public static func markRejected(_ credential: StoredCredential, keychain: PairingStore) {
+        try? keychain.set(credential.token, forKey: rejectedKey)
+    }
+
+    public static func isRejected(_ credential: StoredCredential, keychain: PairingStore) -> Bool {
+        (try? keychain.get(rejectedKey)) == credential.token
     }
 }
 

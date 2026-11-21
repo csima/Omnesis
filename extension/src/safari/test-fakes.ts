@@ -66,7 +66,9 @@ export class FakeNativeApp {
       this.statusReads += 1;
       return Promise.resolve(this.pairing ? { paired: true, ...this.pairing } : { paired: false });
     }
-    if (!this.pairing) return Promise.resolve({ ok: false, reason: "unpaired" });
+    if (!this.pairing || message.deviceId !== this.pairing.deviceId) {
+      return Promise.resolve({ ok: false, reason: "unpaired" });
+    }
     if (!this.online) return Promise.resolve({ ok: false, reason: "network" });
     const body = message.body === undefined ? undefined : (JSON.parse(message.body) as unknown);
     this.requests.push({ method: message.method, path: message.path, body });

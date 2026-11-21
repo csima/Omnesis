@@ -1,5 +1,25 @@
 "use strict";
 (() => {
+  // src/chrome/message-timeout.ts
+  function messageWithTimeout(work, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("extension message timed out")), timeoutMs);
+      void work.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  // src/chrome/messages.ts
+  var CAPTURE_STATUS_MESSAGE = { type: "capture-status" };
+
   // ../packages/providers/web/src/capture-policy.ts
   var MAX_CAPTURE_DOMAIN_CHARS = 253;
   function normalizeCaptureDomain(input) {
@@ -39,7 +59,7 @@
   function timeOfDay(at) {
     return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
-  function popupModel(status, pageUrl, now) {
+  function popupModel(status, pageUrl, now, page = "unknown") {
     const none = { site: null, showPause: false, showResume: false };
     if (!status) {
       return { state: "loading", headline: "Checking…", detail: "", footnote: "", ...none };
@@ -81,7 +101,18 @@
         showResume: true
       };
     }
-    if (!status.healthy) {
+    if (status.refused) {
+      return {
+        state: "waiting",
+        headline: "Open the Omnesis app",
+        detail: "Your gateway refused Safari's connection. Opening the app reconnects it; pages already read are kept on this device.",
+        footnote,
+        site,
+        showPause: false,
+        showResume: false
+      };
+    }
+    if (!status.reachable) {
       return {
         state: "waiting",
         headline: "Can't reach your gateway",
@@ -92,14 +123,36 @@
         showResume: false
       };
     }
+    const capturing = { footnote, site, showPause: true, showResume: false };
+    if (site?.excluded) {
+      return {
+        state: "capturing",
+        headline: "This site is not captured",
+        detail: `Connected to ${status.gatewayHost}.`,
+        ...capturing
+      };
+    }
+    if (site && page === "absent") {
+      return {
+        state: "blocked",
+        headline: "Not allowed on this site yet",
+        detail: "Allow Omnesis for this website in Safari's page menu, then reload the page. Until then nothing here is read.",
+        ...capturing
+      };
+    }
+    if (site && page !== "unknown" && page !== "absent" && page.state === "excluded") {
+      return {
+        state: "capturing",
+        headline: "This page is not captured",
+        detail: page.reason === "sensitive-field" ? "Pages with sign-in, verification or payment fields are never read." : `Connected to ${status.gatewayHost}.`,
+        ...capturing
+      };
+    }
     return {
       state: "capturing",
-      headline: site?.excluded ? "This site is not captured" : "Saving pages you read",
+      headline: "Saving pages you read",
       detail: `Connected to ${status.gatewayHost}.`,
-      footnote,
-      site,
-      showPause: true,
-      showResume: false
+      ...capturing
     };
   }
   async function startPopup(deps) {
@@ -122,9 +175,13 @@
     const resume = byId("resume");
     const buttons = [siteToggle, pauseHour, pauseOpen, resume];
     const pageUrl = await deps.activePageUrl().catch(() => void 0);
-    let model = popupModel(null, pageUrl, deps.now());
+    const page = await deps.pageCapture().then(
+      (answer) => answer ?? "absent",
+      () => "absent"
+    );
+    let model = popupModel(null, pageUrl, deps.now(), page);
     function render(status) {
-      model = popupModel(status, pageUrl, deps.now());
+      model = popupModel(status, pageUrl, deps.now(), page);
       doc.body.dataset["state"] = model.state;
       headline.textContent = model.headline;
       detail.textContent = model.detail;
@@ -178,10 +235,22 @@
 
   // src/safari/popup.ts
   var api = globalThis.browser ?? chrome;
+  var PAGE_ANSWER_TIMEOUT_MS = 1500;
+  async function activeTab() {
+    return (await api.tabs.query({ active: true, currentWindow: true }))[0];
+  }
   void startPopup({
     document,
     send: (message) => api.runtime.sendMessage(message),
-    activePageUrl: async () => (await api.tabs.query({ active: true, currentWindow: true }))[0]?.url,
+    activePageUrl: async () => (await activeTab())?.url,
+    pageCapture: async () => {
+      const tabId = (await activeTab())?.id;
+      if (tabId === void 0) return void 0;
+      return messageWithTimeout(
+        api.tabs.sendMessage(tabId, CAPTURE_STATUS_MESSAGE),
+        PAGE_ANSWER_TIMEOUT_MS
+      );
+    },
     now: () => Date.now()
   });
 })();

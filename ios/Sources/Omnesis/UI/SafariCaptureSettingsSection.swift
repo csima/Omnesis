@@ -13,11 +13,17 @@ struct SafariCaptureSettingsSection: View {
     @State private var status: SafariCaptureStatus
     @State private var showsWhatsSent: Bool
 
-    /// `status` pins the section for previews; the app reads it from the Keychain.
+    /// `status` pins the section for previews. The app starts from what it
+    /// knows without the Keychain and reads the credential once on screen.
     init(pairing: Pairing?, status: SafariCaptureStatus? = nil, showsWhatsSent: Bool = false) {
         self.pairing = pairing
         fixed = status
-        _status = State(initialValue: status ?? SafariCaptureStatus.current(pairing: pairing))
+        let initial: SafariCaptureStatus = if !SafariCaptureCredentials.isAvailable {
+            .unavailable
+        } else {
+            pairing == nil ? .unpaired : .preparing
+        }
+        _status = State(initialValue: status ?? initial)
         _showsWhatsSent = State(initialValue: showsWhatsSent)
     }
 
@@ -34,6 +40,7 @@ struct SafariCaptureSettingsSection: View {
                 } icon: {
                     Image(systemName: symbol).foregroundStyle(tint)
                 }
+                .task(id: pairing) { await refresh() }
                 if status == .ready {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Turn it on in Safari").font(.subheadline)
@@ -59,7 +66,6 @@ struct SafariCaptureSettingsSection: View {
                 Text("Pause capture or exclude a site from the Omnesis button in Safari's page menu.")
             }
             .listRowBackground(Theme.bgSecondary)
-            .task(id: pairing) { await refresh() }
         }
     }
 
@@ -98,15 +104,17 @@ struct SafariCaptureSettingsSection: View {
         }
     }
 
-    /// The credential is minted in the background after pairing, so a section
-    /// opened right then waits for it a short while.
+    /// The credential is minted after pairing and can be refused later, so
+    /// the section keeps reading it while it is on screen: often while it
+    /// waits for one, seldom once it has one.
     private func refresh() async {
         guard fixed == nil else { return }
-        for _ in 0 ..< 10 {
-            status = SafariCaptureStatus.current(pairing: pairing)
-            guard status == .preparing else { return }
-            try? await Task.sleep(for: .seconds(2))
+        while !Task.isCancelled {
+            let pairing = pairing
+            let latest = await Task.detached { SafariCaptureStatus.current(pairing: pairing) }.value
             if Task.isCancelled { return }
+            status = latest
+            try? await Task.sleep(for: .seconds(latest == .preparing ? 2 : 20))
         }
     }
 }

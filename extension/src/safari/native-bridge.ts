@@ -11,7 +11,8 @@ import type { FetchLike, FetchLikeResponse } from "../push/types.js";
  * path on the paired gateway and the handler decides whether to send it.
  */
 export type NativeMessage =
-  { type: "status" } | { type: "request"; method: string; path: string; body?: string };
+  | { type: "status" }
+  | { type: "request"; deviceId: string; method: string; path: string; body?: string };
 
 export type NativeStatus =
   { paired: true; deviceId: string; gatewayHost: string } | { paired: false };
@@ -137,13 +138,20 @@ function response(status: number, body: string, retryAfter?: string): FetchLikeR
 /**
  * A `FetchLike` that reaches the gateway through the app. The caller's
  * authorization header and origin are dropped here and again by the handler:
- * the app attaches its own credential to its own gateway. An app with no
- * pairing reads as an unauthorized gateway, which the push client keeps its
- * queue for; an unreachable app or gateway reads as a network failure.
+ * the app attaches its own credential to its own gateway. Each request names
+ * the device this extension believes the app is paired as, and the app
+ * refuses it when it is paired as another, so a queue filled for one gateway
+ * is never sent to the next. An app with no pairing, or another one, reads as
+ * an unauthorized gateway, which the push client keeps its queue for; an
+ * unreachable app or gateway reads as a network failure.
  */
 export function createNativeFetch(
   send: SendNativeMessage,
-  options: { timeoutMs?: number; onUnpaired?: () => void } = {},
+  options: {
+    deviceId: () => Promise<string | null>;
+    timeoutMs?: number;
+    onUnpaired?: () => void;
+  },
 ): FetchLike {
   const timeoutMs = options.timeoutMs ?? NATIVE_MESSAGE_TIMEOUT_MS;
   return async (input, init) => {
@@ -151,10 +159,13 @@ export function createNativeFetch(
     const path = `${url.pathname}${url.search}`;
     // The app refuses anything outside the contract; do not ask it to.
     if (!isAllowedNativeRequest(init.method, path)) return response(400, "");
+    const deviceId = await options.deviceId();
+    if (!deviceId) return response(401, "");
     const hasBody = init.method !== "GET" && init.method !== "HEAD" && init.body !== "";
     const raw = await withDeadline(
       send({
         type: "request",
+        deviceId,
         method: init.method,
         path,
         ...(hasBody ? { body: init.body } : {}),

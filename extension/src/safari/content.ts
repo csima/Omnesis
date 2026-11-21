@@ -3,6 +3,7 @@
 
 import "../chrome/chrome-api.js";
 import { startContentScript } from "../chrome/content-script.js";
+import { createLocationWatcher } from "./location-watcher.js";
 import { SAFARI_SYNC_MESSAGE_TYPE } from "./messages.js";
 import { safariHandoffStorage } from "./storage.js";
 
@@ -13,9 +14,23 @@ import { safariHandoffStorage } from "./storage.js";
  */
 const api = (globalThis as { browser?: typeof chrome }).browser ?? chrome;
 
+// Private Browsing is never read. Only an explicit "this is not a private
+// tab" from Safari lets capture start; an API that cannot say is treated as
+// a private tab.
+const inPrivateBrowsing = api.extension?.inIncognitoContext !== false;
+
+type PageWindow = Window & { navigation?: EventTarget };
+const page = window as PageWindow;
+
 startContentScript({
   document,
-  window,
+  window: {
+    addEventListener: page.addEventListener.bind(page),
+    removeEventListener: page.removeEventListener.bind(page),
+    navigation:
+      page.navigation ??
+      createLocationWatcher({ location, setInterval: (fn, delayMs) => setInterval(fn, delayMs) }),
+  },
   location,
   chrome: {
     storage: {
@@ -23,7 +38,7 @@ startContentScript({
       onChanged: api.storage.onChanged,
     },
     runtime: api.runtime,
-    extension: api.extension,
+    extension: { inIncognitoContext: inPrivateBrowsing },
   },
   MutationObserver,
   setTimeout: (fn, delayMs) => setTimeout(fn, delayMs) as unknown as number,
@@ -32,5 +47,8 @@ startContentScript({
 });
 
 // The pairing lives in the app. Asking wakes the background, which mirrors it
-// into storage; the glue above starts or stops on that storage change.
-void api.runtime.sendMessage({ type: SAFARI_SYNC_MESSAGE_TYPE }).catch(() => undefined);
+// into storage; the glue above starts when a pairing appears there and stops
+// when it goes.
+if (!inPrivateBrowsing) {
+  void api.runtime.sendMessage({ type: SAFARI_SYNC_MESSAGE_TYPE }).catch(() => undefined);
+}

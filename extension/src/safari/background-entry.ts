@@ -24,10 +24,11 @@ const background = createSafariBackground({
   sendNative: (message) => runtime.sendNativeMessage("application.id", message),
   alarms: api.alarms,
   runtimeId: runtime.id ?? "",
+  popupUrl: runtime.getURL("popup.html"),
 });
 
 runtime.onMessage.addListener((message, sender, sendResponse) =>
   background.handleMessage(message, sender, sendResponse),
 );
 api.alarms.onAlarm.addListener((alarm) => background.handleAlarm(alarm.name));
-void background.start();
+void background.start().catch(() => undefined);

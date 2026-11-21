@@ -12,8 +12,14 @@ details.
 - Every upload uses a strictly increasing integer build number. Confirm App
   Store Connect has no equal or higher build before uploading.
 - iOS and iPadOS 17 or later; iPhone and iPad device families.
-- Embedded targets: notification service, Control Center widget, and Apple Watch
-  companion with its complications extension.
+- Embedded targets: notification service, Control Center widget, Safari
+  extension, and Apple Watch companion with its complications extension.
+- The Safari extension (`OmnesisSafariExtension`, bundle id
+  `<base>.safari-extension`) signs a Release archive with the profile
+  `Omnesis Safari Extension App Store`. Its App ID, that profile and the export
+  options' mapping from the bundle id to it must exist before the first
+  archive that contains it; the App ID needs Keychain sharing for the
+  `<base>.safari` group, which the app's own App ID must list too.
 - Every mobile gateway URL is HTTPS. The app has no ATS arbitrary-load exception.
 - HealthKit is read-only and optional.
 
@@ -31,8 +37,9 @@ details.
    - `PrivacyInfo.xcprivacy` in the app and every embedded executable bundle;
    - no `NSAllowsArbitraryLoads` key;
    - no `WebRTC.framework` in the production app or any bundle it embeds;
-   - HealthKit, notification, widget, and Watch entitlements expected for their
-     respective targets;
+   - HealthKit, notification, widget, Safari extension, and Watch entitlements
+     expected for their respective targets;
+   - `manifest.json` at the root of `PlugIns/OmnesisSafariExtension.appex`;
    - the intended product version and build number.
 7. Compare App Store privacy answers with the bundled privacy manifest, the
    shipping behavior, and `website/mobile-privacy-policy.html`.
@@ -49,6 +56,10 @@ candidate build from TestFlight:
 - tap the Omnesis Watch complication, record, and test Ask, Tell, and automatic Send;
 - verify answers, manual playback, audio-only follow-ups, and Cancel returning to the watch face;
 - receive a content-free APNs wake and retrieve its content from the gateway;
+- turn on the Omnesis extension in Safari's settings, allow it on a website,
+  read a page for half a minute and find it on the gateway; open a Private
+  Browsing tab and confirm nothing from it arrives; pause from the Omnesis
+  button in Safari's page menu and confirm the next page is not saved;
 - enable selected HealthKit categories, sync, and confirm buffer drain;
 - deny HealthKit, Camera, Location, Photos, Motion, Microphone, Speech, and
   Notifications individually and confirm the rest of the app remains usable;

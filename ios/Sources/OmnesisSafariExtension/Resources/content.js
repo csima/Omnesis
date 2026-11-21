@@ -10546,10 +10546,10 @@ ${code}
     }
     return false;
   }
-  function checkScreenshot(page, request) {
-    const { document: document2 } = page;
-    if (page.location.href !== request.url) return { ok: false, reason: "navigated" };
-    if (page.lastEmittedHash !== request.contentHash) return { ok: false, reason: "other-capture" };
+  function checkScreenshot(page2, request) {
+    const { document: document2 } = page2;
+    if (page2.location.href !== request.url) return { ok: false, reason: "navigated" };
+    if (page2.lastEmittedHash !== request.contentHash) return { ok: false, reason: "other-capture" };
     if (document2.visibilityState !== "visible" || !document2.hasFocus()) {
       return { ok: false, reason: "not-focused" };
     }
@@ -10860,6 +10860,20 @@ ${code}
     }
   }
 
+  // src/safari/location-watcher.ts
+  var LOCATION_POLL_MS = 1e3;
+  function createLocationWatcher(deps) {
+    const target = new EventTarget();
+    let last = deps.location.href;
+    deps.setInterval(() => {
+      const current = deps.location.href;
+      if (current === last) return;
+      last = current;
+      target.dispatchEvent(new Event("currententrychange"));
+    }, deps.pollMs ?? LOCATION_POLL_MS);
+    return target;
+  }
+
   // src/safari/messages.ts
   var SAFARI_SYNC_MESSAGE_TYPE = "safari-sync";
 
@@ -10875,9 +10889,15 @@ ${code}
 
   // src/safari/content.ts
   var api = globalThis.browser ?? chrome;
+  var inPrivateBrowsing = api.extension?.inIncognitoContext !== false;
+  var page = window;
   startContentScript({
     document,
-    window,
+    window: {
+      addEventListener: page.addEventListener.bind(page),
+      removeEventListener: page.removeEventListener.bind(page),
+      navigation: page.navigation ?? createLocationWatcher({ location, setInterval: (fn, delayMs) => setInterval(fn, delayMs) })
+    },
     location,
     chrome: {
       storage: {
@@ -10885,12 +10905,14 @@ ${code}
         onChanged: api.storage.onChanged
       },
       runtime: api.runtime,
-      extension: api.extension
+      extension: { inIncognitoContext: inPrivateBrowsing }
     },
     MutationObserver,
     setTimeout: (fn, delayMs) => setTimeout(fn, delayMs),
     clearTimeout: (handle) => clearTimeout(handle),
     now: () => Date.now()
   });
-  void api.runtime.sendMessage({ type: SAFARI_SYNC_MESSAGE_TYPE }).catch(() => void 0);
+  if (!inPrivateBrowsing) {
+    void api.runtime.sendMessage({ type: SAFARI_SYNC_MESSAGE_TYPE }).catch(() => void 0);
+  }
 })();

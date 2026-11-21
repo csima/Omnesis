@@ -106,11 +106,14 @@ async function sha256(text: string): Promise<string> {
 
 const RUNTIME_ID = "safari-extension-e2e";
 const page: SafariMessageSender = { id: RUNTIME_ID, tab: { id: 1, incognito: false } };
-const popup: SafariMessageSender = { id: RUNTIME_ID };
+const POPUP_URL = "safari-web-extension://e2e/popup.html";
+const popup: SafariMessageSender = { id: RUNTIME_ID, url: POPUP_URL };
 
 describe("Safari capture through the iPhone app (spawned gateway)", () => {
   let harness: SyntheticE2EHarness;
   let gatewayUrl: string;
+  /** The gateway address the app holds; the extension never sees it. */
+  let appGateway: string;
   let phone: { id: string; token: string };
   let safariToken: string;
   let appPaired = true;
@@ -125,16 +128,21 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
         ? { paired: true, deviceId: phone.id, gatewayHost: new URL(gatewayUrl).hostname }
         : { paired: false };
     }
-    if (!appPaired) return { ok: false, reason: "unpaired" };
+    if (!appPaired || message.deviceId !== phone.id) return { ok: false, reason: "unpaired" };
     if (!isAllowedNativeRequest(message.method, message.path)) {
       refusedByApp.push(`${message.method} ${message.path}`);
       return { ok: false, reason: "refused" };
     }
-    const res = await nodeFetch(`${gatewayUrl}${message.path}`, {
-      method: message.method,
-      headers: { "content-type": "application/json", authorization: `Bearer ${safariToken}` },
-      body: message.body ?? "",
-    });
+    let res: Awaited<ReturnType<FetchLike>>;
+    try {
+      res = await nodeFetch(`${appGateway}${message.path}`, {
+        method: message.method,
+        headers: { "content-type": "application/json", authorization: `Bearer ${safariToken}` },
+        body: message.body ?? "",
+      });
+    } catch {
+      return { ok: false, reason: "network" };
+    }
     const retryAfter = res.headers.get("retry-after");
     return {
       ok: true,
@@ -197,6 +205,7 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
     harness = new SyntheticE2EHarness({ gatewayMode: "stable" });
     await harness.start();
     gatewayUrl = harness.gatewayUrl;
+    appGateway = gatewayUrl;
     gatewayLogPath = harness.getGatewayLogPath();
 
     const minted = (await harness.gatewayJson("/admin/devices/pair", {
@@ -220,7 +229,12 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
     phone = { id: body.device.id, token: body.token };
 
     storage = new MemoryStorage();
-    background = createSafariBackground({ storage, sendNative, runtimeId: RUNTIME_ID });
+    background = createSafariBackground({
+      storage,
+      sendNative,
+      runtimeId: RUNTIME_ID,
+      popupUrl: POPUP_URL,
+    });
   }, 180000);
 
   afterAll(async () => {
@@ -378,12 +392,26 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
   });
 
   test("(6) unpairing in the app leaves Safari with no pairing and nothing queued", async () => {
+    // A page read while the gateway cannot be reached waits in Safari's queue.
+    appGateway = "https://127.0.0.1:9";
+    await expect(
+      read("https://trails.example.org/waiting", "Waiting", "Read while the gateway is away."),
+    ).resolves.toEqual({ accepted: true });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(String(storage.data.get("omnesis.push.queue.v1"))).toContain(
+      "trails.example.org/waiting",
+    );
+    appGateway = gatewayUrl;
+
     appPaired = false;
     expect(await ask<SafariPopupAck>({ type: "safari-status" }, popup)).toEqual({
       ok: true,
       status: { paired: false },
     });
     expect(storage.data.has("omnesis.pairing.v1")).toBe(false);
+    expect(String(storage.data.get("omnesis.push.queue.v1") ?? "")).not.toContain(
+      "trails.example.org/waiting",
+    );
     const before = await webDocCount();
     await expect(
       read("https://trails.example.org/summit", "Summit", "Read after unpairing."),
