@@ -1,0 +1,166 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Copyright (c) 2026 Adrien Conrath */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --bg-card: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-secondary: #59636e;
+  --accent: #0969da;
+  --on-accent: #ffffff;
+  --success: #1a7f37;
+  --danger: #cf222e;
+  --warning: #9a6700;
+  --radius: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent: #58a6ff;
+    --on-accent: #0d1117;
+    --success: #3fb950;
+    --danger: #f85149;
+    --warning: #d29922;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  min-width: 300px;
+  font: -apple-system-body;
+  font-family: -apple-system, system-ui, "Helvetica Neue", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+
+.brand-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.brand-sub,
+.label,
+.detail,
+.footnote {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.headline {
+  font-weight: 600;
+}
+
+body[data-state="capturing"] .headline {
+  color: var(--success);
+}
+
+body[data-state="paused"] .headline,
+body[data-state="waiting"] .headline {
+  color: var(--warning);
+}
+
+body[data-state="unpaired"] .headline {
+  color: var(--text);
+}
+
+.detail {
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+.detail:empty {
+  display: none;
+}
+
+.label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  margin-bottom: 6px;
+}
+
+.site-domain {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  margin-bottom: 10px;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.button {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.button:disabled {
+  opacity: 0.5;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin: 0 0 10px;
+}
+
+.footnote {
+  margin: 0;
+  text-align: center;
+}
+
+.footnote:empty {
+  display: none;
+}
+
+[hidden] {
+  display: none !important;
+}

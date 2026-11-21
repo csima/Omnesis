@@ -9,10 +9,12 @@
   "exports": {
     ".": "./src/push/index.ts",
     "./capture/lifecycle": "./src/capture/lifecycle.ts",
+    "./safari": "./src/safari/index.ts",
     "./scripts/test-manifest": "./scripts/test-manifest.mjs"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:safari": "node scripts/build-safari.mjs",
     "generate:icons": "node scripts/generate-icons.mjs",
     "generate:store-assets": "node scripts/generate-store-assets.mjs",
     "package:store": "node scripts/package-store.mjs",

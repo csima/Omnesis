@@ -22,6 +22,10 @@ ios/DerivedData/
 wire-fixtures/*.json
 ios/Tests/OmnesisTests/wire-fixtures/*.json
 
+# The Safari extension's resources are built by `npm run build:safari -w
+# extension`; `extension/src/safari/bundle.test.ts` compares them byte for byte.
+ios/Sources/OmnesisSafariExtension/Resources/
+
 # Portal is standalone vanilla JS/CSS served as static files; keep it as-is
 packages/gateway/portal/
 
