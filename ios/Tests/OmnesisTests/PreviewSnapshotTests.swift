@@ -7886,11 +7886,12 @@ final class PreviewSnapshotTests: XCTestCase {
         struct SafariCase {
             let status: SafariCaptureStatus
             var expanded = false
+            var height: CGFloat = 620
             let name: String
         }
         let cases = [
             SafariCase(status: .ready, name: "ready"),
-            SafariCase(status: .ready, expanded: true, name: "whats-sent"),
+            SafariCase(status: .ready, expanded: true, height: 860, name: "whats-sent"),
             SafariCase(status: .preparing, name: "connecting"),
             SafariCase(status: .unpaired, name: "unpaired"),
         ]
@@ -7905,7 +7906,7 @@ final class PreviewSnapshotTests: XCTestCase {
             snapshot(
                 form,
                 name: "safari-capture-settings-\(safariCase.name)",
-                size: CGSize(width: 393, height: 620)
+                size: CGSize(width: 393, height: safariCase.height)
             )
         }
     }
