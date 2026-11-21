@@ -1175,6 +1175,40 @@ omnesis.example.com {
           <a href="search#beyond-search">Deleting documents</a>.
         </p>
 
+        <h3 id="safari-iphone">Safari on iPhone and iPad</h3>
+        <p>
+          The Omnesis app for iPhone and iPad contains a Safari extension that captures the pages
+          you read in Safari into the same Web Pages source, by the same rules: the page is read
+          after a few seconds in view, the same sites and pages are skipped, and the capture
+          settings above apply to it as they do to every paired browser. It needs no pairing of its
+          own and no certificate Safari trusts. The extension holds no gateway address and no
+          credential; it hands each page to the app, which sends it over the phone's own gateway
+          connection with a credential that can only add web pages. Pages read while the gateway is
+          out of reach wait on the phone and are sent when it answers.
+        </p>
+        <ol>
+          <li>Pair the app with your gateway (see <a href="#ios-app">iOS app</a>).</li>
+          <li>
+            In the Settings app, open <strong>Apps → Safari → Extensions → Omnesis</strong> (<strong
+              >Safari → Extensions → Omnesis</strong
+            >
+            on iOS 17) and allow the extension.
+          </li>
+          <li>
+            Choose the websites it may read: <em>All Websites</em>, or allow sites one at a time
+            when Safari asks.
+          </li>
+        </ol>
+        <p>
+          The app's <strong>Settings → Safari</strong> shows whether capture is ready and lists what
+          is sent. The Omnesis button in Safari's page menu shows the state, pauses capture, and
+          excludes the open page's site; both are the gateway's shared capture settings, so they
+          apply to every browser. Pages in Private Browsing are never read. Safari captures text
+          only: it takes no page screenshots. Unpairing the app stops capture and discards pages
+          still waiting to be sent. Other browsers on iPhone and iPad cannot load extensions, so
+          only Safari is covered.
+        </p>
+
         <h2 id="agent-harness">Agent harness</h2>
         <p>
           A machine running OpenClaw or Hermes joins with the installer's <code>--openclaw</code> or

@@ -18,7 +18,11 @@ src/capture/       the chrome-free capture engine: URL normalization, Markdown e
                    state machine (lifecycle.ts), the tab→worker handoff queue, the policy cache
 src/chrome/        the glue that runs in the browser: the service worker (background.ts), the content
                    script (content.ts), the popup and options controllers, storage keys, messages
-scripts/           build.mjs (esbuild), package-store.mjs (store ZIP), test-manifest.mjs (E2E variant),
+src/safari/        the same capture code for Safari on iPhone and iPad: a background that reaches the
+                   gateway only through the app (native-bridge.ts), the page entry, a small popup
+public-safari/     the Safari build's manifest.json, popup.html and popup.css
+scripts/           build.mjs (esbuild), build-safari.mjs (the iPhone app's Safari bundle),
+                   package-store.mjs (store ZIP), test-manifest.mjs (E2E variant),
                    generate-icons.mjs / generate-store-assets.mjs, smoke-lifecycle.mjs (headed smoke)
 store/             the Chrome Web Store listing, privacy declarations and generated assets
 release-contract.json  what the store review is told: version, protocol, scopes, the gateway routes used
@@ -27,6 +31,31 @@ release-contract.json  what the store review is told: version, protocol, scopes,
 `src/push` and `src/capture` import nothing from `chrome.*`; they take `fetch`,
 a durable key/value store and timers as parameters. That is what lets the same
 code run under Node in the spawned-gateway E2E and byte for byte in the worker.
+
+## Safari on iPhone and iPad
+
+Safari runs web extensions on iOS only from inside an app, stops an extension's
+background script within a minute of its last event, and trusts only
+certificates the system trusts. `src/safari` therefore keeps the page script,
+the capture lifecycle, the upload queue and the capture-settings client
+unchanged and replaces the way out: `createNativeFetch` turns each request the
+push client makes into a `runtime.sendNativeMessage` call naming a method and a
+path. The app's extension handler holds the gateway address, a `write:web`
+credential and the certificate pin, and refuses any request outside the list in
+`native-contract.ts`. No token or gateway address is ever in the script or its
+storage (`bundle.test.ts`).
+
+The pairing is the app's. The background mirrors it into `storage.local` as a
+web-only pairing record under a placeholder origin, which is what
+`content-script.ts` already waits for, and drops the queue, the staged captures
+and the settings copy when the app is unpaired or paired to another gateway.
+
+`npm run build:safari -w extension` writes the bundle to
+`ios/Sources/OmnesisSafariExtension/Resources/`, where it is committed so an
+Xcode build needs no Node toolchain. `bundle.test.ts` rebuilds it and fails when
+the committed copy differs, so run the build after changing anything the Safari
+entries import. `browser-safari-capture.e2e.test.ts` drives the background
+against a real gateway with a stand-in for the app.
 
 ## How it works
 
