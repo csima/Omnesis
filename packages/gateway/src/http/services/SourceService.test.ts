@@ -1032,6 +1032,43 @@ describe("SourceService.resync", () => {
     hosted.service.dispose();
   });
 
+  test("a source the gateway hosts is refused whichever device its row names", async () => {
+    const phone = createDevice(db, { name: "Maya-iPhone", kind: "ios" });
+    const captured = createSource(db, {
+      type: SourceType("web"),
+      accountId: AccountId("local"),
+      deviceId: phone.id,
+    });
+    if (!captured) throw new Error("fixture source was not created");
+    upsertDocuments(db, [
+      {
+        providerId: "web",
+        sourceId: captured.id,
+        externalId: "page-1",
+        title: "Captured page",
+        content: "captured body",
+        contentHash: "page-hash-1",
+        metadata: {},
+        sourceCreatedAt: "2026-01-01T00:00:00Z",
+        sourceUpdatedAt: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    const sendCommand = vi.fn(() => Promise.resolve({ ok: true, triggered: 1 }));
+    const service = makeService({
+      wsServer: { sendCommand, isConnected: () => true } as unknown as DeviceWsServer,
+    });
+
+    for (const deviceId of [undefined, phone.id]) {
+      await expect(service.resync(captured.id, deviceId)).rejects.toMatchObject({
+        status: 400,
+        code: "RESYNC_PUSH_ONLY",
+      });
+    }
+    expect(getDocumentCount(db, captured.id), "nothing was deleted").toBe(1);
+    expect(sendCommand).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   test("a per-device resync names the member, so a member that only pushes is refused while the owner is not", async () => {
     const owner = createDevice(db, { name: "Maya-Laptop", kind: "collector", capabilities: {} });
     const pusher = createDevice(db, {
