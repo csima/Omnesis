@@ -326,7 +326,19 @@ export function missingHostedWriteScopes(granted: readonly Scope[], kind: Device
   )
     return [];
   if (held.has(SCOPE_WRITE_ALL)) return [];
-  return DEVICE_HOSTED_SOURCE_TYPES[kind].map(writeScope).filter((s) => !held.has(s));
+  const hosted = DEVICE_HOSTED_SOURCE_TYPES[kind].map(writeScope);
+  // A credential holding nothing but writes to sources another device kind
+  // hosts was issued for those alone, such as a phone's `write:web` for its
+  // browser extension. Repair restores the grant this kind's own table gives;
+  // it never widens a credential issued for another kind's sources.
+  const hostedElsewhere = new Set(
+    DEVICE_KINDS.filter((other) => other !== kind).flatMap((other) =>
+      DEVICE_HOSTED_SOURCE_TYPES[other].map(writeScope),
+    ),
+  );
+  if (granted.length > 0 && granted.every((s) => !hosted.includes(s) && hostedElsewhere.has(s)))
+    return [];
+  return hosted.filter((s) => !held.has(s));
 }
 
 /** Classification of a scope for permission checks. */

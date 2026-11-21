@@ -295,6 +295,34 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
     })) as { rows: unknown[][] };
     expect(visits.rows).toEqual([[9100, phone.id, SAFARI_PROFILE_LABEL]]);
     expect(refusedByApp, "Safari asked for nothing outside the contract").toEqual([]);
+
+    const tokens = (await harness.gatewayJson(`/admin/tokens?deviceId=${phone.id}`)) as {
+      items: Array<{ name: string | null; scopes: string[] }>;
+    };
+    expect(
+      tokens.items.find((token) => token.name === "safari")?.scopes,
+      "use does not widen the credential to the phone's own sources",
+    ).toEqual(["write:web"]);
+    const asPhoto = await fetch(`${gatewayUrl}/documents`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${safariToken}` },
+      body: JSON.stringify({
+        documents: [
+          {
+            providerId: "apple",
+            sourceId: "photos",
+            externalId: "safari-e2e-photo",
+            title: "Not a web page",
+            content: "A photo summary Safari has no business writing.",
+            contentHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            metadata: { documentType: "photo" },
+            sourceCreatedAt: "2026-03-01T10:00:00.000Z",
+            sourceUpdatedAt: "2026-03-01T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+    expect(asPhoto.status).toBe(403);
   });
 
   test("(3) the first push registered web to the iPhone, and it cannot be resynced", async () => {
