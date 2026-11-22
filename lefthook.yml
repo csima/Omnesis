@@ -23,6 +23,7 @@ pre-commit:
       # hook never re-stages a false-stamped vendor file.
       exclude:
         - "packages/gateway/portal/vendor/**"
+        - "ios/Sources/OmnesisSafariExtension/Resources/**"
       run: node scripts/add-license-header.mjs {staged_files}
       stage_fixed: true
 

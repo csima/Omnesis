@@ -14,6 +14,7 @@
         <string>$(AppIdentifierPrefix)$(OMNESIS_BUNDLE_ID)</string>
         <string>$(AppIdentifierPrefix)$(OMNESIS_BUNDLE_ID).notifications</string>
         <string>$(AppIdentifierPrefix)$(OMNESIS_BUNDLE_ID).task-widgets</string>
+        <string>$(AppIdentifierPrefix)$(OMNESIS_BUNDLE_ID).safari</string>
     </array>
 
     <!-- Lets the slow-answer push declare interruption-level

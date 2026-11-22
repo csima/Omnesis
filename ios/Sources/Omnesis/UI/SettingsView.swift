@@ -191,6 +191,8 @@ struct SettingsView: View {
                     .listRowBackground(Color.clear)
                 }
 
+                SafariCaptureSettingsSection(pairing: store.pairing)
+
                 aboutSection
 
                 if let err = store.lastError {

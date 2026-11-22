@@ -26,7 +26,11 @@ const SUPPORTED = new Set([
 // stamping our AGPL license + copyright onto someone else's MIT/BSD/ISC code is
 // a false authorship claim and strips their required upstream notice. Attribution
 // for these libraries lives in THIRD_PARTY_NOTICES.md instead.
-const EXCLUDED_SUBSTRINGS = ["packages/gateway/portal/vendor/"];
+const EXCLUDED_SUBSTRINGS = [
+  "packages/gateway/portal/vendor/",
+  // Built output that bundles third-party code; its sources carry the header.
+  "ios/Sources/OmnesisSafariExtension/Resources/",
+];
 
 function isExcluded(file) {
   const normalized = file.split("\\").join("/");

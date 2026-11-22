@@ -76,6 +76,28 @@ snapshots are device-only, and changing or removing the pairing invalidates cach
 content. Requests preserve HTTPS system trust or the pairing's certificate pin.
 The demo app does not publish credentials to the production widgets.
 
+## Safari capture
+
+The production app embeds a Safari Web Extension (`OmnesisSafariExtension`) that
+saves the pages read in Safari to the gateway's Web Pages source. Its JavaScript
+is the browser extension's capture code, built by `npm run build:safari -w
+extension` into `Sources/OmnesisSafariExtension/Resources/` and committed, so an
+Xcode build needs no Node toolchain; `extension/src/safari/bundle.test.ts` fails
+when the committed copy is stale.
+
+The script holds no gateway address and no credential. It names a request and
+`SafariWebExtensionHandler` decides whether to send it: `SafariBridge` allows only
+the capture uploads and the capture settings (`SafariBridgeRequest`), to the
+paired gateway, with the pairing's own trust rule. The app mints a `write:web`
+token for its device (`SafariCaptureCredentialProvisioner`) and publishes it in a
+dedicated `.safari` Keychain access group, which both bundles must have in their
+provisioning profiles; the extension cannot read the app's primary pairing. The
+demo app carries no extension and publishes nothing.
+
+Safari runs the extension only after the person allows it in Safari's settings
+and on the websites it may read, so capture can only be checked end to end in
+Safari on a simulator or device.
+
 ## WebRTC microphone initialization
 
 The pinned WebRTC vendor deliberately disables microphone input until
@@ -111,7 +133,7 @@ cd ios && xcodegen generate && open Omnesis.xcodeproj
 
 Cloning the source does not grant signing rights to the official `dev.omnesis.ios` App ID. If your Apple team is not authorized for it, register your own base identifier under your team and use the ignored local override. An authorized official-team developer can keep the default identity and set only their team. A simulator build does not need your Apple team or a provisioning profile; a physical phone build does.
 
-1. Join the Apple Developer Program for physical-device capabilities. In Certificates, Identifiers & Profiles, create an explicit App ID for your base identifier (for example, `com.example.myomnesis`). Prepare matching identifiers for the app's embedded notification service (`.notification-service`), widgets (`.widgets`), Watch app (`.watchkitapp`) and Watch complications (`.watchkitapp.widgets`). The optional demo app uses `.demo` and needs its own App ID if you build it. Enable the capabilities each target requests in Xcode: the phone app needs HealthKit, Push Notifications and Time Sensitive Notifications; the demo needs HealthKit and Push Notifications. The notification service must share the app's Keychain access group. The task widget extension shares a dedicated device-only Keychain group (`.task-widgets`) with the phone app for its gateway credential and task snapshots; enable that group on both identifiers. The Watch and Watch complications targets do not hold pairing credentials. Apple may require capability or provisioning changes in the Developer portal before Xcode can sign these targets.
+1. Join the Apple Developer Program for physical-device capabilities. In Certificates, Identifiers & Profiles, create an explicit App ID for your base identifier (for example, `com.example.myomnesis`). Prepare matching identifiers for the app's embedded notification service (`.notification-service`), widgets (`.widgets`), Safari extension (`.safari-extension`), Watch app (`.watchkitapp`) and Watch complications (`.watchkitapp.widgets`). The optional demo app uses `.demo` and needs its own App ID if you build it. Enable the capabilities each target requests in Xcode: the phone app needs HealthKit, Push Notifications and Time Sensitive Notifications; the demo needs HealthKit and Push Notifications. The notification service must share the app's Keychain access group. The task widget extension shares a dedicated device-only Keychain group (`.task-widgets`) with the phone app for its gateway credential and task snapshots; enable that group on both identifiers. The Safari extension likewise shares a dedicated device-only Keychain group (`.safari`) with the phone app for its web-capture credential. The Watch and Watch complications targets do not hold pairing credentials. Apple may require capability or provisioning changes in the Developer portal before Xcode can sign these targets.
 2. Copy `Local.xcconfig.example` to `Local.xcconfig` and set `OMNESIS_BUNDLE_ID` to the base identifier and `DEVELOPMENT_TEAM` to your 10-character Team ID (shown in Apple Developer account membership details). `Local.xcconfig` is ignored by Git. The tracked `Config.xcconfig` supplies the official default, then includes your local file so your override wins. The generated app, demo, embedded extensions, Watch companion reference and Keychain groups derive from the same base. Do not edit tracked identifiers to personalize a build.
 3. Run `xcodegen generate` from `ios/` and open `Omnesis.xcodeproj`. Select the `Omnesis` scheme and your connected iPhone. In Signing & Capabilities, confirm every target uses your team and the expected identifier. For a local Debug build, use automatic signing and let Xcode create development provisioning profiles; sign in to your Apple account in Xcode if prompted. If you just enabled a capability, refresh or regenerate the affected profile and build again. Run with ⌘R to install. The Release configuration carries official distribution profile names, so an independent distribution archive requires your own profiles and export configuration.
 4. Pair the installed app with your gateway using `omnesis devices pair --kind ios`. Grant notification permission when prompted. The app obtains and registers its APNs device token automatically; do not copy a carrier token by hand.

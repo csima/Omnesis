@@ -173,7 +173,7 @@
           run on a collector — some on any machine, some only on macOS because they read local Apple
           databases. A few run inside the <a href="apps">phone apps</a> and push straight to the
           gateway. A handful live on the gateway itself: Web Pages (type <code>web</code>), fed by
-          the browser extension, and the Omnesis-native sources listed under
+          the browser extension and by Safari on iPhone, and the Omnesis-native sources listed under
           <a href="#omnesis-itself">Omnesis itself</a>.
         </p>
         <p>
@@ -1353,14 +1353,15 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
                   <span class="pill">Paired extension</span>
                 </td>
                 <td>
-                  The full text of pages you visit, captured by the paired browser extension as one
+                  The full text of pages you visit, captured by the paired browser extension, or by
+                  <a href="setup#safari-iphone">Safari on a paired iPhone or iPad</a>, as one
                   document per page, plus a page-visits analytics table. Each visit records the
-                  paired browser and the Chrome profile name you entered during pairing, so visits
-                  from different profiles stay apart; a page document names the profile that last
-                  changed it. Omnesis never fetches URLs it finds in other sources — only pages you
-                  open in the browser are captured. When another source indexes the same item (a
-                  GitHub issue, say), links prefer that source's document and keep the captured page
-                  attached to it.
+                  paired browser and the Chrome profile name you entered during pairing, or the
+                  phone and <em>Safari</em>, so visits from different profiles stay apart; a page
+                  document names the profile that last changed it. Omnesis never fetches URLs it
+                  finds in other sources — only pages you open in the browser are captured. When
+                  another source indexes the same item (a GitHub issue, say), links prefer that
+                  source's document and keep the captured page attached to it.
                 </td>
               </tr>
             </tbody>

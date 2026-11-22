@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Omnesis",
+  "version": "1.0",
+  "description": "Saves the web pages you read in Safari to your private Omnesis index.",
+  "permissions": ["storage", "unlimitedStorage", "alarms", "nativeMessaging", "activeTab"],
+  "host_permissions": ["https://*/*"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Omnesis",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  }
+}
