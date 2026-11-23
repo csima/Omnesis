@@ -20,6 +20,21 @@ export interface ScreenshotCheckMessage {
   contentHash: string;
 }
 
+/**
+ * Page → worker: this page is visible and focused again after a capture, so a
+ * screenshot its tab missed may be tried now. Carries nothing: the worker
+ * knows the tab from the sender, and asks the page again before any shot.
+ */
+export const SCREENSHOT_IN_VIEW_TYPE = "screenshot-in-view";
+
+export function isScreenshotInViewMessage(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === SCREENSHOT_IN_VIEW_TYPE
+  );
+}
+
 export type ScreenshotCheckRefusal =
   "navigated" | "other-capture" | "not-focused" | "sensitive-field" | "typing";
 

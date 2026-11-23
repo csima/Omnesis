@@ -60,6 +60,8 @@ export class FakeNativeApp {
   /** The gateway no longer accepts the credential the app holds. */
   credentialRefused = false;
   policy = capturePolicy();
+  /** False for an app that predates the screenshot upload and refuses it. */
+  allowsPreviews = true;
   readonly requests: NativeRequest[] = [];
   statusReads = 0;
 
@@ -115,6 +117,9 @@ export class FakeNativeApp {
       return ok({ ingested: (body as { documents: unknown[] }).documents.length });
     }
     if (method === "POST" && path === "/analytics/ingest") return ok({ ingested: 1, deleted: 0 });
+    if (method === "PUT" && path === "/documents/preview" && this.allowsPreviews) {
+      return ok({ stored: true, preview: {} });
+    }
     return { ok: false, reason: "refused" };
   }
 

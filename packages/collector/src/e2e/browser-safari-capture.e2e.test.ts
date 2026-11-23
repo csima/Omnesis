@@ -13,6 +13,7 @@ import {
 import {
   createSafariBackground,
   isAllowedNativeRequest,
+  safariScreenshotBrowser,
   SAFARI_GATEWAY_ORIGIN,
   SAFARI_PROFILE_LABEL,
   type NativeMessage,
@@ -20,6 +21,7 @@ import {
   type SafariMessageSender,
   type SafariPopupAck,
   type SafariStorageArea,
+  type SafariScreenshotApi,
 } from "@omnesis/extension/safari";
 import { gatewayLogTail } from "./gateway-request.js";
 import { SyntheticE2EHarness } from "./synth-harness.js";
@@ -45,7 +47,10 @@ import { SyntheticE2EHarness } from "./synth-harness.js";
  *       own capture settings, and stop capture in Safari at once;
  *   (5) a desktop browser capturing the same page afterwards updates the one
  *       document rather than adding a second;
- *   (6) unpairing in the app leaves Safari with no pairing and nothing queued.
+ *   (6) once the shared policy has screenshots on, a page read while Safari
+ *       was in the background is shot when its tab is back in view, and the
+ *       app's web-only credential stores the shot as the page's preview;
+ *   (7) unpairing in the app leaves Safari with no pairing and nothing queued.
  *
  * All pages are invented (example.org hosts, fictional text).
  */
@@ -104,6 +109,13 @@ async function sha256(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** An invented JPEG: the SOI marker the gateway checks, then filler. */
+function inventedJpeg(): Uint8Array {
+  const bytes = new Uint8Array(2048);
+  bytes.set([0xff, 0xd8, 0xff, 0xe0], 0);
+  return bytes;
+}
+
 const RUNTIME_ID = "safari-extension-e2e";
 const page: SafariMessageSender = { id: RUNTIME_ID, tab: { id: 1, incognito: false } };
 const POPUP_URL = "safari-web-extension://e2e/popup.html";
@@ -120,6 +132,26 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
   let storage: MemoryStorage;
   let background: SafariBackground;
   const refusedByApp: string[] = [];
+  /** Safari's front tab, as the screenshot code reads it. */
+  const front = { active: false, url: "" };
+  const shotsTaken: number[] = [];
+  const screenshotApi: SafariScreenshotApi = {
+    tabs: {
+      get: (tabId) =>
+        Promise.resolve({
+          id: tabId,
+          windowId: 1,
+          active: front.active,
+          url: front.url,
+          incognito: false,
+        }),
+      captureVisibleTab: (windowId) => {
+        shotsTaken.push(windowId);
+        return Promise.resolve("data:image/png;base64,iVBORw0KGgo=");
+      },
+    },
+    windows: { get: () => Promise.resolve({ focused: true }) },
+  };
 
   /** What the app's extension handler does with one message from Safari. */
   const sendNative = async (message: NativeMessage): Promise<unknown> => {
@@ -162,7 +194,12 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
   }
 
   /** A page Safari's content script finished reading, as it hands it to the background. */
-  async function read(url: string, title: string, text: string): Promise<{ accepted: boolean }> {
+  async function read(
+    url: string,
+    title: string,
+    text: string,
+    from: SafariMessageSender = page,
+  ): Promise<{ accepted: boolean }> {
     const ack = await ask<{ ok: boolean; accepted?: boolean }>(
       {
         type: "capture",
@@ -179,7 +216,7 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
         handoffKey: `omnesis.capture.pending.v1.e2e.visit.${await sha256(url)}`,
         pairingId: await sha256(`${SAFARI_GATEWAY_ORIGIN}\0${phone.id}`),
       },
-      page,
+      from,
     );
     expect(ack.ok, "the background took the hand-off").toBe(true);
     return { accepted: ack.accepted === true };
@@ -234,6 +271,22 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
       sendNative,
       runtimeId: RUNTIME_ID,
       popupUrl: POPUP_URL,
+      screenshots: {
+        browser: safariScreenshotBrowser(screenshotApi),
+        // Safari's canvas encodes no WebP, so the encoder settles on JPEG.
+        codec: {
+          decode: () => Promise.resolve({ width: 1179, height: 2556 }),
+          encode: (_image, _width, _height, type) =>
+            Promise.resolve(
+              type === "image/jpeg"
+                ? { type, bytes: inventedJpeg() }
+                : { type: "image/png", bytes: new Uint8Array(8) },
+            ),
+        },
+        // The page script's own check: this capture, visible and focused.
+        askPage: () => Promise.resolve({ ok: true }),
+        settleMs: 0,
+      },
     });
   }, 180000);
 
@@ -419,7 +472,75 @@ describe("Safari capture through the iPhone app (spawned gateway)", () => {
     expect(listed.items.find((source) => source.id === "web")?.deviceId).toBe(phone.id);
   });
 
-  test("(6) unpairing in the app leaves Safari with no pairing and nothing queued", async () => {
+  test("(6) a page read with Safari in the background is shot once back in view, and stored as its preview", async () => {
+    expect(
+      (
+        (await harness.gatewayJson("/web-capture-policy/screenshots", {
+          method: "PUT",
+          body: JSON.stringify({ enabled: true }),
+        })) as { screenshots: { enabled: boolean } }
+      ).screenshots,
+    ).toEqual({ enabled: true });
+    // The popup re-reads the shared settings, as it does when opened.
+    await ask<SafariPopupAck>({ type: "safari-status" }, popup);
+
+    const url = "https://trails.example.org/aspen-loop";
+    const before = await webDocCount();
+    front.active = false;
+    front.url = url;
+    const inTab = { id: RUNTIME_ID, url, tab: { id: 4, incognito: false } };
+    expect(
+      await read(url, "Aspen loop", "The aspen loop is muddy below the second bridge.", inTab),
+    ).toEqual({ accepted: true });
+    await untilWebDocCount(before + 1);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(shotsTaken, "another app was in front: no shot yet").toEqual([]);
+
+    front.active = true;
+    expect(await background.tabInView(4)).toBe("queued");
+    expect(shotsTaken).toEqual([1]);
+
+    const found = (await harness.gatewayJson(
+      `/documents/search?q=${encodeURIComponent("aspen loop is muddy")}&limit=50`,
+    )) as { results?: Array<{ id: string; source_id: string }> };
+    const doc = found.results?.find((d) => d.source_id === "web");
+    expect(doc, "the page is a web document").toBeDefined();
+    const deadline = Date.now() + 20_000;
+    let served = await harness.gatewayFetch(`/documents/${doc!.id}/preview`);
+    while (served.status === 404 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      served = await harness.gatewayFetch(`/documents/${doc!.id}/preview`);
+    }
+    expect(served.status, "the phone's web credential stored the preview").toBe(200);
+    expect(served.headers.get("content-type")).toBe("image/jpeg");
+    const stored = (await harness.gatewayJson(`/documents/${doc!.id}`)) as {
+      preview?: { contentType: string; width: number; height: number };
+    };
+    expect(stored.preview).toMatchObject({ contentType: "image/jpeg", width: 590, height: 1280 });
+    expect(refusedByApp, "the upload is inside the contract").toEqual([]);
+    expect(String(storage.data.get("omnesis.push.queue.v1") ?? "[]")).toBe("[]");
+
+    // A page whose tab navigated away before it came back is never shot.
+    front.active = false;
+    const next = "https://trails.example.org/aspen-loop-north";
+    front.url = next;
+    await read(next, "Aspen loop north", "The north spur is closed for nesting.", {
+      ...inTab,
+      url: next,
+    });
+    await untilWebDocCount(before + 2);
+    await background.tabNavigated(4, "https://trails.example.org/elsewhere");
+    front.active = true;
+    expect(await background.tabInView(4)).toBe("idle");
+    expect(shotsTaken).toEqual([1]);
+
+    await harness.gatewayJson("/web-capture-policy/screenshots", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: false }),
+    });
+  });
+
+  test("(7) unpairing in the app leaves Safari with no pairing and nothing queued", async () => {
     // A page read while the gateway cannot be reached waits in Safari's queue.
     appGateway = "https://127.0.0.1:9";
     await expect(

@@ -28,6 +28,8 @@ declare global {
         remove(keys: string | string[]): Promise<void>;
       }
       const local: StorageArea;
+      /** Cleared when the browser closes; absent where the browser has none. */
+      const session: StorageArea | undefined;
       const onChanged: {
         addListener(
           callback: (changes: Record<string, StorageChange>, areaName: string) => void,
@@ -167,6 +169,7 @@ declare global {
         active?: boolean;
         currentWindow?: boolean;
         lastFocusedWindow?: boolean;
+        windowId?: number;
       }): Promise<Tab[]>;
       function get(tabId: number): Promise<Tab>;
       function update(tabId: number, details: { active?: boolean; url?: string }): Promise<Tab>;
@@ -176,9 +179,20 @@ declare global {
         windowId: number,
         options: { format?: "jpeg" | "png"; quality?: number },
       ): Promise<string>;
+      const onActivated: {
+        addListener(callback: (info: { tabId: number; windowId: number }) => void): void;
+      };
+      const onUpdated: {
+        addListener(
+          callback: (tabId: number, change: { url?: string; status?: string }) => void,
+        ): void;
+      };
+      const onRemoved: { addListener(callback: (tabId: number) => void): void };
     }
     namespace windows {
       const WINDOW_ID_CURRENT: number;
+      const WINDOW_ID_NONE: number;
+      const onFocusChanged: { addListener(callback: (windowId: number) => void): void };
       function get(windowId: number): Promise<{ id?: number; focused: boolean; state?: string }>;
       function update(windowId: number, details: { focused: boolean }): Promise<unknown>;
       function getCurrent(): Promise<{ id?: number }>;

@@ -12,13 +12,16 @@ interface Vector {
   path: string;
 }
 
-/** The cases the iPhone app's own check is tested against (SafariBridgeRequestTests). */
+/**
+ * The cases both checks are tested against. This copy adds the page
+ * screenshot upload; the iPhone app's SafariBridgeRequestTests read
+ * `ios/Tests/OmnesisTests/Fixtures/safari-bridge-requests.json`, which takes
+ * this file's contents when the app allows the upload, and this suite then
+ * reads that one again.
+ */
 const vectors = JSON.parse(
   readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../ios/Tests/OmnesisTests/Fixtures/safari-bridge-requests.json",
-    ),
+    join(dirname(fileURLToPath(import.meta.url)), "safari-bridge-requests.json"),
     "utf8",
   ),
 ) as { allowed: Vector[]; refused: Vector[] };

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Adrien Conrath
 
-import { judgeCaptureUrl, type WebCapturePolicy } from "@omnesis/provider-web/capture-policy";
+import {
+  judgeCaptureUrl,
+  screenshotsEnabled,
+  type WebCapturePolicy,
+} from "@omnesis/provider-web/capture-policy";
 import { hashText } from "../capture/content-hash.js";
 import {
   clearCachedPolicy,
@@ -33,7 +37,31 @@ import {
   clearPushServerState,
   PushClient,
 } from "../push/client.js";
-import { buildPageVisit, buildWebPageDocument } from "../push/documents.js";
+import {
+  buildPageVisit,
+  buildWebPageDocument,
+  WEB_PROVIDER_ID,
+  WEB_SOURCE_ID,
+} from "../push/documents.js";
+import { messageWithTimeout } from "../chrome/message-timeout.js";
+import {
+  SCREENSHOT_CONFIRM_TIMEOUT_MS,
+  takePageScreenshot,
+  type PageScreenshot,
+  type ScreenshotBrowser,
+} from "../chrome/screenshot.js";
+import {
+  isScreenshotInViewMessage,
+  SCREENSHOT_CHECK_TYPE,
+  type ScreenshotCheckMessage,
+} from "../chrome/screenshot-check.js";
+import {
+  createScreenshotScheduler,
+  type PendingScreenshotStorage,
+  type ScreenshotOutcome,
+  type ScreenshotRequest,
+  type ScreenshotScheduler,
+} from "../chrome/screenshot-scheduler.js";
 import { REQUIRED_WEB_SCOPE } from "../push/pairing.js";
 import {
   createNativeFetch,
@@ -49,6 +77,7 @@ import {
   type SafariPopupMessage,
   type SafariStatus,
 } from "./messages.js";
+import type { DecodedImage, ScreenshotCodec } from "../capture/screenshot.js";
 import type { DurableStore } from "../push/types.js";
 
 /** The gateway's real host, kept beside the pairing so its own pages are never captured. */
@@ -76,7 +105,22 @@ const NATIVE_CREDENTIAL_PLACEHOLDER = "native";
 export interface SafariMessageSender {
   id?: string;
   url?: string;
-  tab?: { id?: number; incognito?: boolean };
+  tab?: { id?: number; incognito?: boolean; url?: string };
+}
+
+/**
+ * What a page screenshot needs from Safari. Without it the extension captures
+ * text only.
+ */
+export interface SafariScreenshotDeps {
+  browser: ScreenshotBrowser;
+  codec: ScreenshotCodec<DecodedImage>;
+  /** `tabs.sendMessage`: ask the page whether it may be shot as this capture. */
+  askPage(tabId: number, message: ScreenshotCheckMessage): Promise<unknown>;
+  /** Where shots waiting for their tab are kept; `storage` when absent. */
+  pending?: PendingScreenshotStorage;
+  /** For tests: how long a tab back in view is left to settle. */
+  settleMs?: number;
 }
 
 export interface SafariBackgroundDeps {
@@ -91,6 +135,7 @@ export interface SafariBackgroundDeps {
   popupUrl: string;
   now?: () => number;
   nativeTimeoutMs?: number;
+  screenshots?: SafariScreenshotDeps;
 }
 
 export interface SafariBackground {
@@ -102,6 +147,11 @@ export interface SafariBackground {
     sendResponse: (response?: unknown) => void,
   ): boolean;
   handleAlarm(name: string): void;
+  /** The tab is the active one again, or its window took focus: retry its missed shot. */
+  tabInView(tabId: number): Promise<ScreenshotOutcome>;
+  /** The tab now shows `url`: a shot waiting for another address goes. */
+  tabNavigated(tabId: number, url: string): Promise<void>;
+  tabClosed(tabId: number): Promise<void>;
 }
 
 function isObjectWithType(message: unknown, type: string): boolean {
@@ -308,8 +358,10 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
 
   function handleCapture(
     message: Extract<ContentToSwMessage, { type: "capture" }>,
+    tab?: { id: number; frameUrl: string },
   ): Promise<CaptureAck> {
-    return serializeQueueWork(async () => {
+    let screenshot: ScreenshotRequest | null = null;
+    const ack = serializeQueueWork(async () => {
       const finish = async (ack: CaptureAck): Promise<CaptureAck> => {
         if (message.handoffKey) await storage.remove(message.handoffKey);
         return ack;
@@ -365,9 +417,97 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
           }),
         );
       }
+      // A screenshot is taken only of the tab that sent this capture, never
+      // for one recovered from storage after the fact.
+      if (tab && message.pairingId && screenshotsEnabled(policy)) {
+        screenshot = {
+          tabId: tab.id,
+          frameUrl: tab.frameUrl,
+          normalizedUrl: emission.normalizedUrl,
+          externalId,
+          contentHash: emission.contentHash,
+          pairingId: message.pairingId,
+        };
+      }
       return finish({ ok: true, accepted: true });
     });
+    return ack.then((result) => {
+      // Off the queue lane, so a slow shot never delays the page's ack.
+      if (screenshot && scheduler) void scheduler.capture(screenshot).catch(() => undefined);
+      return result;
+    });
   }
+
+  /** Whether a capture still wants its shot: same pairing, screenshots on, none taken yet. */
+  async function screenshotWanted(request: ScreenshotRequest): Promise<boolean> {
+    const pairing = await loadPairing();
+    if (!pairing || (await capturePairingId(pairing)) !== request.pairingId) return false;
+    const policy = await currentPolicy();
+    if (!policy || !screenshotsEnabled(policy)) return false;
+    const client = await buildClient();
+    return client !== null && (await client.previewWanted(request.externalId, request.contentHash));
+  }
+
+  /** Queue a shot behind its page, if the pairing and the policy still allow it. */
+  async function deliverScreenshot(
+    request: ScreenshotRequest,
+    shot: PageScreenshot,
+  ): Promise<boolean> {
+    const queued = await serializeQueueWork(async () => {
+      const pairing = await loadPairing();
+      if (!pairing || (await capturePairingId(pairing)) !== request.pairingId) return false;
+      const policy = await currentPolicy();
+      if (!policy || !screenshotsEnabled(policy)) return false;
+      const verdict = judgeCaptureUrl(policy, request.normalizedUrl, {
+        gatewayHost: await loadGatewayHost(),
+        now: now(),
+        externalId: request.externalId,
+      });
+      if (!verdict.allowed) return false;
+      const client = await buildClient();
+      if (!client) return false;
+      await client.enqueuePreview({
+        providerId: WEB_PROVIDER_ID,
+        sourceId: WEB_SOURCE_ID,
+        externalId: request.externalId,
+        contentHash: request.contentHash,
+        ...shot,
+      });
+      return true;
+    });
+    if (queued) void drain();
+    return queued;
+  }
+
+  const shots = deps.screenshots;
+  const scheduler: ScreenshotScheduler | null = shots
+    ? createScreenshotScheduler({
+        storage: shots.pending ?? storage,
+        now,
+        ...(shots.settleMs !== undefined ? { settleMs: shots.settleMs } : {}),
+        wanted: screenshotWanted,
+        shoot: (request) =>
+          takePageScreenshot(
+            {
+              tabId: request.tabId,
+              frameUrl: request.frameUrl,
+              confirm: async () => {
+                const answer = (await messageWithTimeout(
+                  shots.askPage(request.tabId, {
+                    type: SCREENSHOT_CHECK_TYPE,
+                    url: request.frameUrl,
+                    contentHash: request.contentHash,
+                  }),
+                  SCREENSHOT_CONFIRM_TIMEOUT_MS,
+                )) as { ok?: unknown } | null | undefined;
+                return answer?.ok === true;
+              },
+            },
+            { browser: shots.browser, codec: shots.codec, now },
+          ),
+        deliver: deliverScreenshot,
+      })
+    : null;
 
   /** Captures a page staged before a background that was stopped could take them. */
   async function recoverPendingHandoffs(): Promise<void> {
@@ -536,8 +676,14 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
       if (sender.id !== runtimeId) return false;
       const fromPage = sender.tab?.id !== undefined && sender.tab.incognito !== true;
       if (fromPage && isCaptureMessage(message)) {
+        // Only a tab Safari says is outside Private Browsing is ever shot.
+        const frameUrl = sender.url ?? sender.tab?.url;
+        const tab =
+          sender.tab?.id !== undefined && sender.tab.incognito === false && frameUrl
+            ? { id: sender.tab.id, frameUrl }
+            : undefined;
         respond(
-          handleCapture(message).then((ack) => {
+          handleCapture(message, tab).then((ack) => {
             if (ack.ok && ack.accepted) void drain();
             return ack;
           }),
@@ -558,6 +704,13 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
           () => ({ eligible: true, skipPasswordForms: true }) satisfies CaptureEligibilityResponse,
         );
         return true;
+      }
+      if (fromPage && isScreenshotInViewMessage(message)) {
+        const tabId = sender.tab?.id;
+        if (scheduler && tabId !== undefined && sender.tab?.incognito === false) {
+          void scheduler.inView(tabId).catch(() => undefined);
+        }
+        return false;
       }
       if (fromPage && isObjectWithType(message, SAFARI_SYNC_MESSAGE_TYPE)) {
         respond(
@@ -592,5 +745,9 @@ export function createSafariBackground(deps: SafariBackgroundDeps): SafariBackgr
     handleAlarm(name) {
       if (name === SAFARI_DRAIN_ALARM || name === SAFARI_RETRY_ALARM) void drain();
     },
+
+    tabInView: (tabId) => scheduler?.inView(tabId) ?? Promise.resolve("idle"),
+    tabNavigated: (tabId, url) => scheduler?.navigated(tabId, url) ?? Promise.resolve(),
+    tabClosed: (tabId) => scheduler?.closed(tabId) ?? Promise.resolve(),
   };
 }

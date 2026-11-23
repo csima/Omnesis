@@ -586,6 +586,31 @@ describe("content script — screenshot confirmation", () => {
     expect(ask(page, PAGE_URL, contentHash)).toEqual({ ok: false, reason: "navigated" });
   });
 
+  it("tells the worker once it is back in view after a capture, so a missed shot can be retried", async () => {
+    const page = openPage();
+    await waitForState(page, "watching");
+    const inViewMessages = () =>
+      page.chrome.messages.filter((message) => message.type === ("screenshot-in-view" as never));
+    let focused = true;
+    Object.assign(page.document, {
+      hasFocus: () => focused,
+      visibilityState: "visible",
+    });
+    page.window.fire("focus");
+    await settle();
+    expect(inViewMessages(), "nothing emitted yet, so nothing to illustrate").toEqual([]);
+
+    await page.clock.tick(5_000);
+    await vi.waitFor(() => expect(page.chrome.captures()).toHaveLength(1));
+    focused = false;
+    page.window.fire("blur");
+    focused = true;
+    page.window.fire("focus");
+    page.window.fire("focus");
+    await settle();
+    expect(inViewMessages()).toEqual([{ type: "screenshot-in-view" }]);
+  });
+
   it("refuses before the page has emitted any capture", async () => {
     const page = openPage();
     await waitForState(page, "watching");

@@ -1155,16 +1155,20 @@ omnesis.example.com {
           and still shows exactly the address the capture came from, only of a page the extension
           would capture anyway, and only once the page confirms it has no password, one-time-code or
           card field and nothing being typed; it is downscaled to at most 1280 pixels on its longest
-          side and dropped if it is still over 512 KB. A page is shot again only when its text has
-          changed. Screenshots are not redacted the way captured text is: whatever the page shows on
-          screen is in the image. Chrome lets an extension take screenshots only with access to all
-          sites, so turning this on in a browser asks Chrome for that permission there; another
-          paired browser shows <em>Allow screenshots in this browser</em> on its Options page until
-          it is granted, and takes none before. The gateway keeps one per page, in its own encrypted
-          store, includes it in backups and exports, and deletes it with the page, for good or as a
-          copy, and with an excluded domain's pages. Turning screenshots off stops new ones; those
-          already saved stay with their pages. A gateway whose preview store cannot be opened
-          reports screenshots as unavailable, and browsers take none.
+          side and dropped if it is still over 512 KB. A page that is not in view when it is
+          captured, because another tab, window or app is in front or the page is still being typed
+          into, is shot the next time its tab comes back into view, by the same checks, for up to
+          half an hour and a few tries; navigating the tab elsewhere or closing it drops the shot. A
+          page is shot again only when its text has changed. Screenshots are not redacted the way
+          captured text is: whatever the page shows on screen is in the image. Chrome lets an
+          extension take screenshots only with access to all sites, so turning this on in a browser
+          asks Chrome for that permission there; another paired browser shows
+          <em>Allow screenshots in this browser</em> on its Options page until it is granted, and
+          takes none before. The gateway keeps one per page, in its own encrypted store, includes it
+          in backups and exports, and deletes it with the page, for good or as a copy, and with an
+          excluded domain's pages. Turning screenshots off stops new ones; those already saved stay
+          with their pages. A gateway whose preview store cannot be opened reports screenshots as
+          unavailable, and browsers take none.
         </p>
         <p>
           A browser rereads the settings when its copy is older than fifteen minutes, whenever the
@@ -1203,10 +1207,13 @@ omnesis.example.com {
           The app's <strong>Settings → Safari</strong> shows whether capture is ready and lists what
           is sent. The Omnesis button in Safari's page menu shows the state, pauses capture, and
           excludes the open page's site; both are the gateway's shared capture settings, so they
-          apply to every browser. Pages in Private Browsing are never read. Safari captures text
-          only: it takes no page screenshots. Unpairing the app stops capture and discards pages
-          still waiting to be sent. Other browsers on iPhone and iPad cannot load extensions, so
-          only Safari is covered.
+          apply to every browser. Pages in Private Browsing are never read. While
+          <a href="#browser-extension-screenshots">page screenshots</a> are switched on in the
+          shared settings, from a paired browser or the portal, Safari saves one of each captured
+          page by the same rules: only of the front tab while it still shows the captured page,
+          never in Private Browsing, and sent by the app after the page itself. Unpairing the app
+          stops capture and discards pages still waiting to be sent. Other browsers on iPhone and
+          iPad cannot load extensions, so only Safari is covered.
         </p>
 
         <h2 id="agent-harness">Agent harness</h2>

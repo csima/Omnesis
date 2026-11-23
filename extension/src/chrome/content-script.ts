@@ -27,7 +27,11 @@ import {
 import { CaptureActivation } from "./capture-activation.js";
 import { attachCaptureStatusListener } from "./content-status.js";
 import { applyCaptureStorageAction, captureStorageAction } from "./capture-storage-change.js";
-import { checkScreenshot, isScreenshotCheckMessage } from "./screenshot-check.js";
+import {
+  checkScreenshot,
+  isScreenshotCheckMessage,
+  SCREENSHOT_IN_VIEW_TYPE,
+} from "./screenshot-check.js";
 
 /**
  * Content-script glue — the thin boundary that wires the browser (DOM, History
@@ -406,9 +410,19 @@ export function startContentScript(env: ContentScriptEnvironment): void {
   }
 
   // Focus / visibility — pause the dwell clock when the tab is hidden or blurred.
+  let wasInView = false;
   const syncFocus = (): void => {
-    if (document.visibilityState === "visible" && document.hasFocus()) lifecycle.onFocus();
+    const inView = document.visibilityState === "visible" && document.hasFocus();
+    if (inView) lifecycle.onFocus();
     else lifecycle.onBlur();
+    // Back in view after a capture: a screenshot this tab missed may be taken
+    // now. The worker asks the page again before shooting.
+    if (inView && !wasInView && lastEmittedHash !== null && !torndown && contextAlive()) {
+      void Promise.resolve()
+        .then(() => chrome.runtime.sendMessage({ type: SCREENSHOT_IN_VIEW_TYPE }))
+        .catch(() => undefined);
+    }
+    wasInView = inView;
   };
   document.addEventListener("visibilitychange", syncFocus);
   window.addEventListener("focus", syncFocus);

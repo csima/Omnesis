@@ -8,6 +8,7 @@ import {
 import { MAX_CAPTURE_URL_CHARS } from "../capture/lifecycle.js";
 import { normalizeGatewayUrl } from "../push/pairing.js";
 import { normalizeProfileLabel } from "./storage.js";
+import { isScreenshotInViewMessage } from "./screenshot-check.js";
 import {
   type CaptureAck,
   type CaptureEligibilityResponse,
@@ -54,6 +55,8 @@ export interface BackgroundMessageDeps {
   readPolicy: () => Promise<CapturePolicySnapshot>;
   mutateExclusions: (message: ExclusionMessage) => Promise<{ purged: number }>;
   setScreenshots: (enabled: boolean) => Promise<void>;
+  /** A page that is visible and focused again; its tab's missed screenshot may be retried. */
+  screenshotInView?: (tabId: number) => Promise<unknown>;
   changePairing: (
     message: Extract<
       OptionsToSwMessage,
@@ -108,6 +111,16 @@ export function routeBackgroundMessage(
       () => ({ eligible: true, skipPasswordForms: true }) satisfies CaptureEligibilityResponse,
     );
     return true;
+  }
+
+  if (
+    fromThisExtension &&
+    sender.tab?.id !== undefined &&
+    sender.tab.incognito !== true &&
+    isScreenshotInViewMessage(message)
+  ) {
+    if (deps.screenshotInView) runDetached(deps.screenshotInView(sender.tab.id));
+    return false;
   }
 
   const fromPopup = fromThisExtension && sender.url === deps.popupUrl;

@@ -11,7 +11,14 @@ export {
   SAFARI_GATEWAY_HOST_KEY,
   SAFARI_PROFILE_LABEL,
 } from "./background.js";
-export type { SafariBackground, SafariBackgroundDeps, SafariMessageSender } from "./background.js";
+export type {
+  SafariBackground,
+  SafariBackgroundDeps,
+  SafariMessageSender,
+  SafariScreenshotDeps,
+} from "./background.js";
+export { safariScreenshotBrowser } from "./screenshot.js";
+export type { SafariScreenshotApi } from "./screenshot.js";
 export type { SafariPopupAck, SafariPopupMessage, SafariStatus } from "./messages.js";
 export { isAllowedNativeRequest } from "./native-contract.js";
 export { SAFARI_GATEWAY_ORIGIN } from "./native-bridge.js";

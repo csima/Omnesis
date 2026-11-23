@@ -3,14 +3,18 @@
 
 /**
  * The gateway requests the Safari extension may ask the iPhone app to make:
- * the two capture uploads and the capture settings it shows and edits. The
- * app enforces the same list (`SafariBridgeRequest` in the iOS sources), and
- * `ios/Tests/OmnesisTests/Fixtures/safari-bridge-requests.json` holds the
- * cases both sides are tested against.
+ * the page uploads (the page, its visit and its screenshot) and the capture
+ * settings it shows and edits. The app enforces the same list
+ * (`SafariBridgeRequest` in the iOS sources), and `safari-bridge-requests.json`
+ * beside this file holds the cases both sides are tested against; the app's
+ * tests read their copy under `ios/Tests/OmnesisTests/Fixtures/`. An app that
+ * does not yet allow the screenshot upload refuses it, and the shot leaves
+ * the queue unsent while pages keep flowing.
  */
 const FIXED_REQUESTS: ReadonlySet<string> = new Set([
   "POST /documents",
   "POST /analytics/ingest",
+  "PUT /documents/preview",
   "GET /web-capture-policy",
   "PUT /web-capture-policy/pause",
   "DELETE /web-capture-policy/pause",

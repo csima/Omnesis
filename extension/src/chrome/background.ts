@@ -88,7 +88,7 @@ import {
   type ScreenshotCheckResult,
 } from "./screenshot-check.js";
 import { messageWithTimeout } from "./message-timeout.js";
-import type { CaptureEmission } from "../capture/lifecycle.js";
+import { createScreenshotScheduler, type ScreenshotRequest } from "./screenshot-scheduler.js";
 import type {
   CaptureEligibilityResponse,
   CapturePolicySnapshot,
@@ -445,90 +445,81 @@ function drainOnce(): Promise<void> {
   );
 }
 
-/** A page screenshot to take once its capture is queued. */
-interface ScreenshotJob {
-  tabId: number;
-  /** The exact frame address the capture was sent from. */
-  frameUrl: string;
-  emission: CaptureEmission;
-  externalId: string;
-  pairingId: string;
-}
-
 /**
- * Screenshots are taken one at a time: `captureVisibleTab` is rate-limited and
- * shoots the window as it is, so two shots must never overlap.
+ * Page screenshots, one at a time: `captureVisibleTab` is rate-limited and
+ * shoots the window as it is, so two shots must never overlap. A shot missed
+ * because the tab was not in view waits, per tab, for the tab to come back
+ * into view (see `screenshot-scheduler.ts`). The pending list lives in
+ * session storage, which Chrome clears with the tab ids it names.
  */
-let screenshotWork: Promise<void> = Promise.resolve();
-
-/**
- * Take the screenshot a just-queued capture asked for and queue it behind the
- * page. Runs off the queue lane, so a slow capture never delays a page's
- * acknowledgement; the shot is queued only if the policy still wants it and
- * the pairing that asked for it is still the one in force.
- */
-function schedulePageScreenshot(job: ScreenshotJob): void {
-  screenshotWork = screenshotWork
-    .then(async () => {
-      // Chrome allows the shot only with the `<all_urls>` grant, asked for in
-      // each browser when screenshots are turned on there.
-      if (!(await hasScreenshotPermission())) return;
-      const client = await buildClient();
-      if (!client || !(await client.previewWanted(job.externalId, job.emission.contentHash))) {
-        return;
-      }
-      const shot = await takePageScreenshot(
-        {
-          tabId: job.tabId,
-          frameUrl: job.frameUrl,
-          confirm: async () => {
-            const answer = await messageWithTimeout(
-              chrome.tabs.sendMessage<ScreenshotCheckResult>(job.tabId, {
-                type: SCREENSHOT_CHECK_TYPE,
-                url: job.frameUrl,
-                contentHash: job.emission.contentHash,
-              } satisfies ScreenshotCheckMessage),
-              SCREENSHOT_CONFIRM_TIMEOUT_MS,
-            );
-            return answer?.ok === true;
-          },
+const screenshots = createScreenshotScheduler({
+  storage: chrome.storage.session ?? chrome.storage.local,
+  async wanted(request) {
+    // Chrome allows the shot only with the `<all_urls>` grant, asked for in
+    // each browser when screenshots are turned on there.
+    if (!(await hasScreenshotPermission())) return false;
+    const config = await loadConfig();
+    if (!config || (await capturePairingId(config)) !== request.pairingId) return false;
+    const policy = await currentPolicy();
+    if (!policy || !screenshotsEnabled(policy)) return false;
+    const client = await buildClient();
+    return client !== null && (await client.previewWanted(request.externalId, request.contentHash));
+  },
+  shoot: (request) =>
+    takePageScreenshot(
+      {
+        tabId: request.tabId,
+        frameUrl: request.frameUrl,
+        confirm: async () => {
+          const answer = await messageWithTimeout(
+            chrome.tabs.sendMessage<ScreenshotCheckResult>(request.tabId, {
+              type: SCREENSHOT_CHECK_TYPE,
+              url: request.frameUrl,
+              contentHash: request.contentHash,
+            } satisfies ScreenshotCheckMessage),
+            SCREENSHOT_CONFIRM_TIMEOUT_MS,
+          );
+          return answer?.ok === true;
         },
-        { browser: chromeScreenshotBrowser(), codec: offscreenCodec },
-      );
-      if (typeof shot === "string") return;
-      const queued = await serializeQueueWork(async () => {
-        const config = await loadConfig();
-        if (!config || (await capturePairingId(config)) !== job.pairingId) return false;
-        const policy = await currentPolicy();
-        if (!policy || !screenshotsEnabled(policy)) return false;
-        const verdict = judgeCaptureUrl(policy, job.emission.normalizedUrl, {
-          gatewayHost: gatewayHostOf(config),
-          now: Date.now(),
-          externalId: job.externalId,
-        });
-        if (!verdict.allowed) return false;
-        const current = await buildClient();
-        if (!current) return false;
-        await current.enqueuePreview({
-          providerId: WEB_PROVIDER_ID,
-          sourceId: WEB_SOURCE_ID,
-          externalId: job.externalId,
-          contentHash: job.emission.contentHash,
-          ...shot,
-        });
-        return true;
+      },
+      { browser: chromeScreenshotBrowser(), codec: offscreenCodec },
+    ),
+  // Queued only if the policy still wants it and the pairing that asked for
+  // it is still the one in force.
+  async deliver(request, shot) {
+    const queued = await serializeQueueWork(async () => {
+      const config = await loadConfig();
+      if (!config || (await capturePairingId(config)) !== request.pairingId) return false;
+      const policy = await currentPolicy();
+      if (!policy || !screenshotsEnabled(policy)) return false;
+      const verdict = judgeCaptureUrl(policy, request.normalizedUrl, {
+        gatewayHost: gatewayHostOf(config),
+        now: Date.now(),
+        externalId: request.externalId,
       });
-      if (queued) await drainOnce();
-    })
-    .catch(() => undefined);
-}
+      if (!verdict.allowed) return false;
+      const current = await buildClient();
+      if (!current) return false;
+      await current.enqueuePreview({
+        providerId: WEB_PROVIDER_ID,
+        sourceId: WEB_SOURCE_ID,
+        externalId: request.externalId,
+        contentHash: request.contentHash,
+        ...shot,
+      });
+      return true;
+    });
+    if (queued) await drainOnce();
+    return queued;
+  },
+});
 
 /** Enqueue a confirmed capture's two planes, then kick a drain. */
 async function handleCapture(
   message: Extract<ContentToSwMessage, { type: "capture" }>,
   tab?: { id: number; frameUrl: string | null },
 ): Promise<CaptureAck> {
-  let screenshot: ScreenshotJob | null = null;
+  let screenshot: ScreenshotRequest | null = null;
   const ack = await serializeQueueWork(async () => {
     const finish = async (ack: CaptureAck): Promise<CaptureAck> => {
       if (message.handoffKey) await chrome.storage.local.remove(message.handoffKey);
@@ -615,14 +606,16 @@ async function handleCapture(
       screenshot = {
         tabId: tab.id,
         frameUrl: tab.frameUrl,
-        emission,
+        normalizedUrl: emission.normalizedUrl,
         externalId,
+        contentHash: emission.contentHash,
         pairingId: message.pairingId,
       };
     }
     return finish({ ok: true, accepted: true });
   });
-  if (screenshot) schedulePageScreenshot(screenshot);
+  // Runs off the queue lane, so a slow shot never delays the page's ack.
+  if (screenshot) runEvent(screenshots.capture(screenshot));
   return ack;
 }
 
@@ -992,6 +985,23 @@ async function reconcilePermissionWork<T>(work: Promise<T>): Promise<T> {
   }
 }
 
+// A screenshot missed while its tab was out of view is tried again when the
+// tab comes back: activated, its window focused, or the page reporting it is
+// visible again (routed below). A navigation or a closed tab drops it.
+chrome.tabs?.onActivated?.addListener(({ tabId }) => runEvent(screenshots.inView(tabId)));
+chrome.windows?.onFocusChanged?.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  runEvent(
+    chrome.tabs
+      .query({ active: true, windowId })
+      .then(([tab]) => (tab?.id !== undefined ? screenshots.inView(tab.id) : "idle")),
+  );
+});
+chrome.tabs?.onUpdated?.addListener((tabId, change) => {
+  if (change.url !== undefined) runEvent(screenshots.navigated(tabId, change.url));
+});
+chrome.tabs?.onRemoved?.addListener((tabId) => runEvent(screenshots.closed(tabId)));
+
 chrome.permissions.onAdded.addListener((permissions) => {
   runEvent(reconcilePermissionWork(permissionCoordinator.handleAdded(permissions)));
 });
@@ -1017,6 +1027,7 @@ chrome.runtime.onMessage.addListener(
       readPolicy: readPolicySnapshot,
       mutateExclusions,
       setScreenshots,
+      screenshotInView: (tabId) => screenshots.inView(tabId),
       changePairing: handlePairingState,
     }),
 );

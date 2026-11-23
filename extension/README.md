@@ -50,6 +50,14 @@ web-only pairing record under a placeholder origin, which is what
 `content-script.ts` already waits for, and drops the queue, the staged captures
 and the settings copy when the app is unpaired or paired to another gateway.
 
+Page screenshots follow the Chrome rules (`chrome/screenshot.ts`): the
+background shoots the front tab with `tabs.captureVisibleTab`, scales and
+encodes it with `OffscreenCanvas` or the background page's own canvas
+(`safari/screenshot.ts`; Safari encodes no WebP, so it is JPEG), and queues it
+as an ordinary `PUT /documents/preview` request behind its page. In both
+browsers a shot missed because the tab was not in view waits per tab and is
+tried again when the tab comes back into view (`chrome/screenshot-scheduler.ts`).
+
 `npm run build:safari -w extension` writes the bundle to
 `ios/Sources/OmnesisSafariExtension/Resources/`, where it is committed so an
 Xcode build needs no Node toolchain. `bundle.test.ts` rebuilds it and fails when

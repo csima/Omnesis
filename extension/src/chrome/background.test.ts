@@ -2459,6 +2459,170 @@ describe("MV3 background page screenshots", () => {
     await vi.waitFor(() => expect(screen.captureVisibleTab).toHaveBeenCalledTimes(2));
   });
 
+  /** A window and tab that can be switched away from and back, with the tab events Chrome fires. */
+  function switchableScreen(url = PAGE) {
+    const state = { active: false, focused: true, url, incognito: false };
+    const listeners: {
+      activated?: (info: { tabId: number; windowId: number }) => void;
+      focus?: (windowId: number) => void;
+      updated?: (tabId: number, change: { url?: string }) => void;
+      removed?: (tabId: number) => void;
+    } = {};
+    const captureVisibleTab = vi.fn(async () => "data:image/jpeg;base64,AAAA");
+    return {
+      state,
+      captureVisibleTab,
+      activate: () => {
+        state.active = true;
+        listeners.activated?.({ tabId: 7, windowId: 2 });
+      },
+      focusWindow: () => {
+        state.focused = true;
+        listeners.focus?.(2);
+      },
+      navigate: (next: string) => {
+        state.url = next;
+        listeners.updated?.(7, { url: next });
+      },
+      close: () => listeners.removed?.(7),
+      extra: {
+        tabs: {
+          get: vi.fn(async () => ({
+            id: 7,
+            windowId: 2,
+            active: state.active,
+            url: state.url,
+            incognito: state.incognito,
+          })),
+          query: vi.fn(async () => (state.active ? [{ id: 7, windowId: 2 }] : [])),
+          captureVisibleTab,
+          sendMessage: vi.fn(async () => ({ ok: true })),
+          onActivated: {
+            addListener: (fn: typeof listeners.activated) => (listeners.activated = fn),
+          },
+          onUpdated: { addListener: (fn: typeof listeners.updated) => (listeners.updated = fn) },
+          onRemoved: { addListener: (fn: typeof listeners.removed) => (listeners.removed = fn) },
+        },
+        windows: {
+          WINDOW_ID_NONE: -1,
+          get: vi.fn(async () => ({ id: 2, focused: state.focused, state: "normal" })),
+          onFocusChanged: { addListener: (fn: typeof listeners.focus) => (listeners.focus = fn) },
+        },
+      },
+    };
+  }
+
+  async function startSwitchable(requests: string[], screen: ReturnType<typeof switchableScreen>) {
+    stubCanvas();
+    return startBackground(
+      recordingFetch(true, requests),
+      { [CAPTURE_POLICY_KEY]: cachedPolicy(policyBody({ screenshots: { enabled: true } })) },
+      screen.extra,
+      { screenshots: true },
+    );
+  }
+
+  it("takes a screenshot missed in the background once its tab is active again", async () => {
+    const requests: string[] = [];
+    const screen = switchableScreen();
+    const { listener, storage } = await startSwitchable(requests, screen);
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await vi.waitFor(() => expect(String(storage["omnesis.screenshots.pending.v1"])).not.toBe(""));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+    screen.activate();
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"), {
+      timeout: 3_000,
+    });
+    expect(requests.indexOf("POST /documents")).toBeLessThan(
+      requests.indexOf("PUT /documents/preview"),
+    );
+    expect(storage["omnesis.screenshots.pending.v1"]).toEqual([]);
+  });
+
+  it("takes a missed screenshot when its window regains focus", async () => {
+    const requests: string[] = [];
+    const screen = switchableScreen();
+    screen.state.active = true;
+    screen.state.focused = false;
+    const { listener } = await startSwitchable(requests, screen);
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+    screen.focusWindow();
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"), {
+      timeout: 3_000,
+    });
+  });
+
+  it("retries when the page reports it is visible again", async () => {
+    const requests: string[] = [];
+    const screen = switchableScreen();
+    const { listener } = await startSwitchable(requests, screen);
+    const sender = { id: "extension-test", tab: { id: 7, url: PAGE } };
+    await sendMessage(listener, await boundCapture(emissionFor()), sender);
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    screen.state.active = true;
+    expect(listener({ type: "screenshot-in-view" }, sender, () => undefined)).toBe(false);
+    await vi.waitFor(() => expect(requests).toContain("PUT /documents/preview"), {
+      timeout: 3_000,
+    });
+  });
+
+  it.each([
+    [
+      "navigated away",
+      (screen: ReturnType<typeof switchableScreen>) => screen.navigate(`${PAGE}/next-chapter`),
+    ],
+    ["closed", (screen: ReturnType<typeof switchableScreen>) => screen.close()],
+  ])("drops a missed screenshot whose tab %s", async (_label, change) => {
+    const requests: string[] = [];
+    const screen = switchableScreen();
+    const { listener, storage } = await startSwitchable(requests, screen);
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    await vi.waitFor(() =>
+      expect(storage["omnesis.screenshots.pending.v1"]).toEqual([
+        expect.objectContaining({ tabId: 7 }),
+      ]),
+    );
+    change(screen);
+    await vi.waitFor(() => expect(storage["omnesis.screenshots.pending.v1"]).toEqual([]));
+    screen.state.url = PAGE;
+    screen.activate();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+  });
+
+  it("never shoots an incognito tab, even when it comes back into view", async () => {
+    const requests: string[] = [];
+    const screen = switchableScreen();
+    screen.state.incognito = true;
+    const { listener } = await startSwitchable(requests, screen);
+    await sendMessage(listener, await boundCapture(emissionFor()), {
+      id: "extension-test",
+      tab: { id: 7, url: PAGE },
+    });
+    await vi.waitFor(() => expect(requests).toContain("POST /documents"));
+    screen.activate();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    screen.activate();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(screen.captureVisibleTab).not.toHaveBeenCalled();
+    expect(requests).not.toContain("PUT /documents/preview");
+  });
+
   it("can switch the shared setting from the popup and adopts the gateway's answer", async () => {
     let enabled = false;
     const fetchImpl = policyAwareFetch(

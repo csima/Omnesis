@@ -13,6 +13,9 @@
   }
 
   // ../packages/providers/web/src/capture-policy.ts
+  function screenshotsEnabled(policy) {
+    return policy.screenshots?.enabled === true && policy.screenshots.available !== false;
+  }
   var DEFAULT_WEB_CAPTURE_RULES = {
     skipPasswordForms: true,
     skipPathSegments: [
@@ -1822,10 +1825,303 @@
     await store.set(PREVIEW_LEDGER_KEY, "");
   }
 
+  // src/chrome/message-timeout.ts
+  function messageWithTimeout(work, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("extension message timed out")), timeoutMs);
+      void work.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  // src/capture/screenshot.ts
+  var MAX_SCREENSHOT_SIDE = 1280;
+  var SCREENSHOT_QUALITY = 0.7;
+  var MAX_SCREENSHOT_BYTES = 512 * 1024;
+  function scaledSize(width, height, maxSide = MAX_SCREENSHOT_SIDE) {
+    const longest = Math.max(width, height);
+    if (longest <= maxSide) return { width, height };
+    const scale = maxSide / longest;
+    return {
+      width: Math.max(1, Math.round(width * scale)),
+      height: Math.max(1, Math.round(height * scale))
+    };
+  }
+  async function encodeScreenshot(dataUrl, codec2) {
+    const image = await codec2.decode(dataUrl);
+    try {
+      if (image.width < 1 || image.height < 1) return null;
+      const size = scaledSize(image.width, image.height);
+      for (const type of ["image/webp", "image/jpeg"]) {
+        const encoded = await codec2.encode(image, size.width, size.height, type, SCREENSHOT_QUALITY);
+        if (encoded.type !== type) continue;
+        if (encoded.bytes.byteLength === 0 || encoded.bytes.byteLength > MAX_SCREENSHOT_BYTES) {
+          return null;
+        }
+        return { contentType: type, ...size, bytes: encoded.bytes };
+      }
+      return null;
+    } finally {
+      codec2.release?.(image);
+    }
+  }
+  function bytesToBase64(bytes) {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 32768) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    }
+    return btoa(binary);
+  }
+
+  // src/chrome/screenshot.ts
+  async function inView(browser, tabId, frameUrl) {
+    try {
+      const tab = await browser.getTab(tabId);
+      if (!tab.active || tab.incognito || tab.url !== frameUrl) return null;
+      const window = await browser.getWindow(tab.windowId);
+      if (!window.focused || window.state === "minimized") return null;
+      return { windowId: tab.windowId };
+    } catch {
+      return null;
+    }
+  }
+  async function takePageScreenshot(target, deps) {
+    const before = await inView(deps.browser, target.tabId, target.frameUrl);
+    if (!before) return "not-in-view";
+    const confirmed = await target.confirm().catch(() => false);
+    if (!confirmed) return "unconfirmed";
+    const capturedAt = new Date((deps.now ?? Date.now)()).toISOString();
+    let dataUrl;
+    try {
+      dataUrl = await deps.browser.captureVisibleTab(before.windowId, {
+        format: "jpeg",
+        quality: 92
+      });
+    } catch {
+      return "capture-failed";
+    }
+    const after = await inView(deps.browser, target.tabId, target.frameUrl);
+    if (!after || after.windowId !== before.windowId) return "changed";
+    let encoded;
+    try {
+      encoded = await encodeScreenshot(dataUrl, deps.codec);
+    } catch {
+      return "capture-failed";
+    }
+    if (!encoded) return "too-large";
+    return {
+      contentType: encoded.contentType,
+      width: encoded.width,
+      height: encoded.height,
+      capturedAt,
+      image: bytesToBase64(encoded.bytes)
+    };
+  }
+  var SCREENSHOT_CONFIRM_TIMEOUT_MS = 1e3;
+  var offscreenCodec = {
+    async decode(dataUrl) {
+      const comma = dataUrl.indexOf(",");
+      const type = /^data:([^;,]+)/.exec(dataUrl)?.[1] ?? "image/jpeg";
+      const binary = atob(dataUrl.slice(comma + 1));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      return createImageBitmap(new Blob([bytes], { type }));
+    },
+    async encode(image, width, height, type, quality) {
+      const canvas = new OffscreenCanvas(width, height);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("no 2D context");
+      context.imageSmoothingQuality = "high";
+      context.drawImage(image, 0, 0, width, height);
+      const blob = await canvas.convertToBlob({ type, quality });
+      return { type: blob.type, bytes: new Uint8Array(await blob.arrayBuffer()) };
+    },
+    release(image) {
+      image.close();
+    }
+  };
+
+  // src/chrome/screenshot-check.ts
+  var SCREENSHOT_CHECK_TYPE = "screenshot-check";
+  var SCREENSHOT_IN_VIEW_TYPE = "screenshot-in-view";
+  function isScreenshotInViewMessage(value) {
+    return typeof value === "object" && value !== null && value.type === SCREENSHOT_IN_VIEW_TYPE;
+  }
+  var SENSITIVE_FIELDS = [
+    'input[type="password"]',
+    '[autocomplete~="one-time-code"]',
+    '[autocomplete*="cc-"]',
+    'input[name*="card" i][name*="number" i]',
+    'input[name*="cvc" i]',
+    'input[name*="cvv" i]'
+  ].join(",");
+
+  // src/chrome/screenshot-scheduler.ts
+  var PENDING_SCREENSHOTS_KEY = "omnesis.screenshots.pending.v1";
+  var MAX_SCREENSHOT_ATTEMPTS = 4;
+  var PENDING_SCREENSHOT_TTL_MS = 30 * 60 * 1e3;
+  var MAX_PENDING_SCREENSHOTS = 16;
+  var SCREENSHOT_SETTLE_MS = 500;
+  var TRANSIENT_SKIPS = /* @__PURE__ */ new Set([
+    "not-in-view",
+    "unconfirmed",
+    "changed",
+    "capture-failed"
+  ]);
+  function isTransientScreenshotSkip(skip) {
+    return TRANSIENT_SKIPS.has(skip);
+  }
+  function parsePending(raw) {
+    if (typeof raw !== "object" || raw === null) return null;
+    const entry = raw;
+    const strings = [
+      entry.frameUrl,
+      entry.normalizedUrl,
+      entry.externalId,
+      entry.contentHash,
+      entry.pairingId
+    ];
+    if (!strings.every((value) => typeof value === "string" && value.length > 0)) return null;
+    if (!Number.isInteger(entry.tabId) || !Number.isInteger(entry.attempts) || typeof entry.since !== "number") {
+      return null;
+    }
+    return entry;
+  }
+  function sameCapture(a, b) {
+    return a.tabId === b.tabId && a.frameUrl === b.frameUrl && a.externalId === b.externalId && a.contentHash === b.contentHash && a.pairingId === b.pairingId;
+  }
+  function createScreenshotScheduler(deps) {
+    const now = deps.now ?? (() => Date.now());
+    const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const settleMs = deps.settleMs ?? SCREENSHOT_SETTLE_MS;
+    const waking = /* @__PURE__ */ new Set();
+    let lane = Promise.resolve();
+    function serialize(work) {
+      const result = lane.then(work, work);
+      lane = result.then(
+        () => void 0,
+        () => void 0
+      );
+      return result;
+    }
+    async function readPending() {
+      const out = /* @__PURE__ */ new Map();
+      let raw;
+      try {
+        raw = (await deps.storage.get(PENDING_SCREENSHOTS_KEY))[PENDING_SCREENSHOTS_KEY];
+      } catch {
+        return out;
+      }
+      if (!Array.isArray(raw)) return out;
+      const at = now();
+      for (const item of raw) {
+        const entry = parsePending(item);
+        if (!entry) continue;
+        if (at - entry.since > PENDING_SCREENSHOT_TTL_MS || entry.since - at > 6e4) continue;
+        if (entry.attempts >= MAX_SCREENSHOT_ATTEMPTS) continue;
+        out.set(entry.tabId, entry);
+      }
+      return out;
+    }
+    async function writePending(pending) {
+      const kept = [...pending.values()].sort((a, b) => a.since - b.since).slice(-MAX_PENDING_SCREENSHOTS);
+      await deps.storage.set({ [PENDING_SCREENSHOTS_KEY]: kept });
+    }
+    async function update(change) {
+      const pending = await readPending();
+      if (change(pending)) await writePending(pending);
+    }
+    function settle(request) {
+      return update((pending) => {
+        const current = pending.get(request.tabId);
+        if (!current || !sameCapture(current, request)) return false;
+        pending.delete(request.tabId);
+        return true;
+      });
+    }
+    async function attempt(entry) {
+      if (!await deps.wanted(entry)) {
+        await settle(entry);
+        return "dropped";
+      }
+      const shot = await deps.shoot(entry);
+      if (typeof shot !== "string") {
+        await settle(entry);
+        return await deps.deliver(entry, shot) ? "queued" : "dropped";
+      }
+      const attempts = entry.attempts + 1;
+      if (!isTransientScreenshotSkip(shot) || attempts >= MAX_SCREENSHOT_ATTEMPTS) {
+        await settle(entry);
+        return "dropped";
+      }
+      await update((pending) => {
+        const current = pending.get(entry.tabId);
+        if (current && !sameCapture(current, entry)) return false;
+        pending.set(entry.tabId, { ...entry, attempts });
+        return true;
+      });
+      return "pending";
+    }
+    return {
+      capture(request) {
+        return serialize(async () => {
+          const entry = { ...request, attempts: 0, since: now() };
+          await update((pending) => {
+            pending.set(request.tabId, entry);
+            return true;
+          });
+          return attempt(entry);
+        });
+      },
+      async inView(tabId) {
+        if (waking.has(tabId)) return "idle";
+        if (!(await readPending()).has(tabId)) return "idle";
+        waking.add(tabId);
+        try {
+          await sleep(settleMs);
+          return await serialize(async () => {
+            const entry = (await readPending()).get(tabId);
+            return entry ? attempt(entry) : "idle";
+          });
+        } finally {
+          waking.delete(tabId);
+        }
+      },
+      navigated(tabId, url) {
+        return serialize(
+          () => update((pending) => {
+            const current = pending.get(tabId);
+            if (!current || current.frameUrl === url) return false;
+            pending.delete(tabId);
+            return true;
+          })
+        );
+      },
+      closed(tabId) {
+        return serialize(
+          () => update((pending) => {
+            if (!pending.has(tabId)) return false;
+            pending.delete(tabId);
+            return true;
+          })
+        );
+      }
+    };
+  }
+
   // src/safari/native-contract.ts
   var FIXED_REQUESTS = /* @__PURE__ */ new Set([
     "POST /documents",
     "POST /analytics/ingest",
+    "PUT /documents/preview",
     "GET /web-capture-policy",
     "PUT /web-capture-policy/pause",
     "DELETE /web-capture-policy/pause",
@@ -2155,11 +2451,12 @@
       const skipPasswordForms = policy.rules.skipPasswordForms;
       return verdict.allowed ? { eligible: true, skipPasswordForms } : { eligible: false, reason: verdict.reason, skipPasswordForms };
     }
-    function handleCapture(message) {
-      return serializeQueueWork(async () => {
-        const finish = async (ack) => {
+    function handleCapture(message, tab) {
+      let screenshot = null;
+      const ack = serializeQueueWork(async () => {
+        const finish = async (ack2) => {
           if (message.handoffKey) await storage.remove(message.handoffKey);
-          return ack;
+          return ack2;
         };
         const refuse = () => finish({ ok: true, accepted: false });
         const pairing = await loadPairing();
@@ -2210,9 +2507,83 @@
             })
           );
         }
+        if (tab && message.pairingId && screenshotsEnabled(policy)) {
+          screenshot = {
+            tabId: tab.id,
+            frameUrl: tab.frameUrl,
+            normalizedUrl: emission.normalizedUrl,
+            externalId,
+            contentHash: emission.contentHash,
+            pairingId: message.pairingId
+          };
+        }
         return finish({ ok: true, accepted: true });
       });
+      return ack.then((result) => {
+        if (screenshot && scheduler) void scheduler.capture(screenshot).catch(() => void 0);
+        return result;
+      });
     }
+    async function screenshotWanted(request) {
+      const pairing = await loadPairing();
+      if (!pairing || await capturePairingId(pairing) !== request.pairingId) return false;
+      const policy = await currentPolicy();
+      if (!policy || !screenshotsEnabled(policy)) return false;
+      const client = await buildClient();
+      return client !== null && await client.previewWanted(request.externalId, request.contentHash);
+    }
+    async function deliverScreenshot(request, shot) {
+      const queued = await serializeQueueWork(async () => {
+        const pairing = await loadPairing();
+        if (!pairing || await capturePairingId(pairing) !== request.pairingId) return false;
+        const policy = await currentPolicy();
+        if (!policy || !screenshotsEnabled(policy)) return false;
+        const verdict = judgeCaptureUrl(policy, request.normalizedUrl, {
+          gatewayHost: await loadGatewayHost(),
+          now: now(),
+          externalId: request.externalId
+        });
+        if (!verdict.allowed) return false;
+        const client = await buildClient();
+        if (!client) return false;
+        await client.enqueuePreview({
+          providerId: WEB_PROVIDER_ID,
+          sourceId: WEB_SOURCE_ID,
+          externalId: request.externalId,
+          contentHash: request.contentHash,
+          ...shot
+        });
+        return true;
+      });
+      if (queued) void drain();
+      return queued;
+    }
+    const shots = deps.screenshots;
+    const scheduler = shots ? createScreenshotScheduler({
+      storage: shots.pending ?? storage,
+      now,
+      ...shots.settleMs !== void 0 ? { settleMs: shots.settleMs } : {},
+      wanted: screenshotWanted,
+      shoot: (request) => takePageScreenshot(
+        {
+          tabId: request.tabId,
+          frameUrl: request.frameUrl,
+          confirm: async () => {
+            const answer = await messageWithTimeout(
+              shots.askPage(request.tabId, {
+                type: SCREENSHOT_CHECK_TYPE,
+                url: request.frameUrl,
+                contentHash: request.contentHash
+              }),
+              SCREENSHOT_CONFIRM_TIMEOUT_MS
+            );
+            return answer?.ok === true;
+          }
+        },
+        { browser: shots.browser, codec: shots.codec, now }
+      ),
+      deliver: deliverScreenshot
+    }) : null;
     async function recoverPendingHandoffs() {
       const pairing = await loadPairing();
       const pairingId = pairing ? await capturePairingId(pairing) : null;
@@ -2350,8 +2721,10 @@
         if (sender.id !== runtimeId) return false;
         const fromPage = sender.tab?.id !== void 0 && sender.tab.incognito !== true;
         if (fromPage && isCaptureMessage(message)) {
+          const frameUrl = sender.url ?? sender.tab?.url;
+          const tab = sender.tab?.id !== void 0 && sender.tab.incognito === false && frameUrl ? { id: sender.tab.id, frameUrl } : void 0;
           respond(
-            handleCapture(message).then((ack) => {
+            handleCapture(message, tab).then((ack) => {
               if (ack.ok && ack.accepted) void drain();
               return ack;
             }),
@@ -2367,6 +2740,13 @@
             () => ({ eligible: true, skipPasswordForms: true })
           );
           return true;
+        }
+        if (fromPage && isScreenshotInViewMessage(message)) {
+          const tabId = sender.tab?.id;
+          if (scheduler && tabId !== void 0 && sender.tab?.incognito === false) {
+            void scheduler.inView(tabId).catch(() => void 0);
+          }
+          return false;
         }
         if (fromPage && isObjectWithType(message, SAFARI_SYNC_MESSAGE_TYPE)) {
           respond(
@@ -2394,13 +2774,75 @@
       },
       handleAlarm(name) {
         if (name === SAFARI_DRAIN_ALARM || name === SAFARI_RETRY_ALARM) void drain();
+      },
+      tabInView: (tabId) => scheduler?.inView(tabId) ?? Promise.resolve("idle"),
+      tabNavigated: (tabId, url) => scheduler?.navigated(tabId, url) ?? Promise.resolve(),
+      tabClosed: (tabId) => scheduler?.closed(tabId) ?? Promise.resolve()
+    };
+  }
+
+  // src/safari/screenshot.ts
+  function safariScreenshotBrowser(api2) {
+    return {
+      async getTab(tabId) {
+        const tab = await api2.tabs.get(tabId);
+        if (tab.windowId === void 0) throw new Error("the tab has no window");
+        return {
+          ...tab.id !== void 0 ? { id: tab.id } : {},
+          ...tab.url !== void 0 ? { url: tab.url } : {},
+          windowId: tab.windowId,
+          active: tab.active === true,
+          incognito: tab.incognito !== false
+        };
+      },
+      async getWindow(windowId) {
+        const get = api2.windows?.get;
+        if (typeof get !== "function") return { focused: true };
+        return get.call(api2.windows, windowId);
+      },
+      captureVisibleTab: (windowId, options) => api2.tabs.captureVisibleTab(windowId, options)
+    };
+  }
+  function pageCanvasCodec(env) {
+    return {
+      async decode(dataUrl) {
+        const element = env.createImage();
+        element.src = dataUrl;
+        await element.decode();
+        return { element, width: element.naturalWidth, height: element.naturalHeight };
+      },
+      async encode(image, width, height, type, quality) {
+        const canvas = env.createCanvas();
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("no 2D context");
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image.element, 0, 0, width, height);
+        const blob = await new Promise(
+          (resolve) => canvas.toBlob(resolve, type, quality)
+        );
+        if (!blob) throw new Error("the canvas encoded nothing");
+        return { type: blob.type, bytes: new Uint8Array(await blob.arrayBuffer()) };
       }
     };
+  }
+  function safariScreenshotCodec(scope = globalThis) {
+    if (typeof scope.OffscreenCanvas === "function" && typeof scope.createImageBitmap === "function") {
+      return offscreenCodec;
+    }
+    const document = scope.document;
+    if (!document) return null;
+    return pageCanvasCodec({
+      createCanvas: () => document.createElement("canvas"),
+      createImage: () => document.createElement("img")
+    });
   }
 
   // src/safari/background-entry.ts
   var api = globalThis.browser ?? chrome;
   var runtime = api.runtime;
+  var codec = safariScreenshotCodec();
   var background = createSafariBackground({
     storage: api.storage.local,
     // Safari ignores the application name on iOS and always reaches the app
@@ -2408,11 +2850,32 @@
     sendNative: (message) => runtime.sendNativeMessage("application.id", message),
     alarms: api.alarms,
     runtimeId: runtime.id ?? "",
-    popupUrl: runtime.getURL("popup.html")
+    popupUrl: runtime.getURL("popup.html"),
+    ...codec ? {
+      screenshots: {
+        browser: safariScreenshotBrowser(api),
+        codec,
+        askPage: (tabId, message) => api.tabs.sendMessage(tabId, message),
+        // Tab ids name tabs of this browser session only.
+        pending: api.storage.session ?? api.storage.local
+      }
+    } : {}
   });
   runtime.onMessage.addListener(
     (message, sender, sendResponse) => background.handleMessage(message, sender, sendResponse)
   );
   api.alarms.onAlarm.addListener((alarm) => background.handleAlarm(alarm.name));
+  var quietly = (work) => void work.catch(() => void 0);
+  api.tabs.onActivated?.addListener(({ tabId }) => quietly(background.tabInView(tabId)));
+  api.windows?.onFocusChanged?.addListener((windowId) => {
+    if (windowId === api.windows.WINDOW_ID_NONE) return;
+    quietly(
+      api.tabs.query({ active: true, windowId }).then(([tab]) => tab?.id !== void 0 ? background.tabInView(tab.id) : "idle")
+    );
+  });
+  api.tabs.onUpdated?.addListener((tabId, change) => {
+    if (change.url !== void 0) quietly(background.tabNavigated(tabId, change.url));
+  });
+  api.tabs.onRemoved?.addListener((tabId) => quietly(background.tabClosed(tabId)));
   void background.start().catch(() => void 0);
 })();

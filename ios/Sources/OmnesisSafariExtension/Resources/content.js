@@ -10503,6 +10503,7 @@ ${code}
 
   // src/chrome/screenshot-check.ts
   var SCREENSHOT_CHECK_TYPE = "screenshot-check";
+  var SCREENSHOT_IN_VIEW_TYPE = "screenshot-in-view";
   function isScreenshotCheckMessage(value) {
     if (typeof value !== "object" || value === null) return false;
     const message = value;
@@ -10793,9 +10794,15 @@ ${code}
       const link = document2.querySelector('link[rel="canonical"]');
       return link?.href ?? null;
     }
+    let wasInView = false;
     const syncFocus = () => {
-      if (document2.visibilityState === "visible" && document2.hasFocus()) lifecycle.onFocus();
+      const inView = document2.visibilityState === "visible" && document2.hasFocus();
+      if (inView) lifecycle.onFocus();
       else lifecycle.onBlur();
+      if (inView && !wasInView && lastEmittedHash !== null && !torndown && contextAlive()) {
+        void Promise.resolve().then(() => chrome2.runtime.sendMessage({ type: SCREENSHOT_IN_VIEW_TYPE })).catch(() => void 0);
+      }
+      wasInView = inView;
     };
     document2.addEventListener("visibilitychange", syncFocus);
     window2.addEventListener("focus", syncFocus);
