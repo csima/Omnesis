@@ -3,8 +3,9 @@
 
 import Foundation
 
-/// The gateway requests the Safari extension may ask the app to make: the two
-/// capture uploads and the capture settings it shows and edits. The extension
+/// The gateway requests the Safari extension may ask the app to make: the page
+/// uploads (the page, its visit and its screenshot) and the capture settings it
+/// shows and edits. The extension
 /// applies the same list before asking (`native-contract.ts`), and
 /// `Fixtures/safari-bridge-requests.json` holds the cases both are tested
 /// against. Anything else is refused here, whatever the extension sends.
@@ -12,6 +13,7 @@ public enum SafariBridgeRequest {
     private static let fixed: Set<String> = [
         "POST /documents",
         "POST /analytics/ingest",
+        "PUT /documents/preview",
         "GET /web-capture-policy",
         "PUT /web-capture-policy/pause",
         "DELETE /web-capture-policy/pause",

@@ -9,6 +9,10 @@
       "path": "/analytics/ingest"
     },
     {
+      "method": "PUT",
+      "path": "/documents/preview"
+    },
+    {
       "method": "GET",
       "path": "/web-capture-policy"
     },
@@ -35,6 +39,18 @@
   ],
   "refused": [
     {
+      "method": "POST",
+      "path": "/documents/preview"
+    },
+    {
+      "method": "PUT",
+      "path": "/documents/preview?sourceId=web"
+    },
+    {
+      "method": "GET",
+      "path": "/documents/preview"
+    },
+    {
       "method": "GET",
       "path": "/documents"
     },
@@ -45,10 +61,6 @@
     {
       "method": "POST",
       "path": "/documents/delete"
-    },
-    {
-      "method": "PUT",
-      "path": "/documents/preview"
     },
     {
       "method": "POST",

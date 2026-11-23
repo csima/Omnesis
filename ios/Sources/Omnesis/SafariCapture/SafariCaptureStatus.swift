@@ -45,6 +45,7 @@ public enum SafariCaptureStatus: Equatable, Sendable {
             "The readable text of pages you stay on",
             "Each page's address and title",
             "When you read it and for how long",
+            "A picture of the visible page, if page screenshots are on",
         ],
         staysLabel: "Never read",
         stays: [
