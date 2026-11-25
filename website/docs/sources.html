@@ -365,12 +365,10 @@
               <tr>
                 <td>
                   Quo<br /><span class="pill">any collector</span> <span class="pill">API key</span>
-                  <span class="pill">Experimental</span>
                 </td>
                 <td>
                   Text messages from a Quo (formerly OpenPhone) workspace, sent and received, on
-                  every number in it, one document per message grouped by conversation. Offered only
-                  when the gateway and collector run with <code>OMNESIS_EXPERIMENTAL=1</code> — see
+                  every number in it, one document per message grouped by conversation. See
                   <a href="#quo">Quo</a>.
                 </td>
               </tr>
@@ -522,11 +520,6 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
         </ul>
 
         <h3 id="quo">Quo</h3>
-        <p>
-          Quo is <strong>experimental</strong>: it appears in the source picker only when the
-          gateway and collector run with <code>OMNESIS_EXPERIMENTAL=1</code>, and its behavior may
-          change between releases.
-        </p>
         <p>
           Quo indexes the text messages of a <a href="https://www.quo.com/">Quo</a> workspace
           through Quo's API. A workspace owner or admin creates an API key in Quo under
