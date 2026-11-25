@@ -4,7 +4,8 @@
 import { syncPage } from "@omnesis/source-sdk";
 import { SyncError } from "@omnesis/types";
 import { QUO_PAGE_LIMIT } from "./client.js";
-import { normalizeMessage } from "./normalizer.js";
+import { QuoContactNames } from "./contact-names.js";
+import { canonicalPhone, normalizeMessage } from "./normalizer.js";
 import type { SourceHost, SyncOptions, SyncResult } from "@omnesis/source-sdk";
 import type { DocumentInput, ProviderId, SourceId } from "@omnesis/types";
 import type { QuoClient } from "./client.js";
@@ -57,10 +58,17 @@ export interface QuoMessagesSourceOptions {
  */
 export class QuoMessagesSource {
   private readonly opts: QuoMessagesSourceOptions;
+  private readonly names: QuoContactNames;
   private lines: { at: number; byId: Map<string, QuoLine> } | undefined;
 
   constructor(opts: QuoMessagesSourceOptions) {
     this.opts = opts;
+    this.names = new QuoContactNames(
+      opts.client,
+      () => opts.host.now().getTime(),
+      opts.host.log,
+      opts.host.ingestion?.phoneRegion,
+    );
   }
 
   async sync(cursor: QuoCursor | null, opts?: SyncOptions): Promise<SyncResult<QuoCursor>> {
@@ -152,6 +160,16 @@ export class QuoMessagesSource {
       log.warn(`Skipped ${malformed} Quo message record(s) that did not match the expected shape`);
     }
 
+    const phoneRegion = this.opts.host.ingestion?.phoneRegion;
+    const ownNumbers = new Set(
+      [...lines.values()].map((l) => canonicalPhone(l.number, phoneRegion) ?? l.number),
+    );
+    const counterparts = fresh
+      .flatMap((m) => [m.from, ...m.to])
+      .map((raw) => canonicalPhone(raw, phoneRegion))
+      .filter((p): p is string => Boolean(p) && !ownNumbers.has(p!));
+    const names = await this.names.namesFor(counterparts, signal);
+
     const documents: DocumentInput[] = [];
     for (const message of fresh) {
       documents.push(
@@ -160,7 +178,8 @@ export class QuoMessagesSource {
           sourceId: this.opts.sourceId,
           organizationId: this.opts.organizationId,
           lines,
-          phoneRegion: this.opts.host.ingestion?.phoneRegion,
+          phoneRegion,
+          names,
         }),
       );
     }
@@ -168,7 +187,7 @@ export class QuoMessagesSource {
     if (!exhausted) {
       return syncPage(
         documents,
-        { v: 1, watermark, walk: { ...walk, top, below } },
+        { v: 2, watermark, walk: { ...walk, top, below } },
         { hasMore: true },
       );
     }
@@ -176,7 +195,7 @@ export class QuoMessagesSource {
     if (documents.length > 0) {
       log.info(`Quo sync caught up: ${documents.length} new message(s); watermark ${next?.at}`);
     }
-    return syncPage(documents, { v: 1, watermark: next }, { hasMore: false });
+    return syncPage(documents, { v: 2, watermark: next }, { hasMore: false });
   }
 
   /** The first walk's inclusive lower bound: the history window, or the data cutoff if later. */

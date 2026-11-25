@@ -21,6 +21,14 @@ export const MAYA = "+15550100111";
 export const JAMIE = "+15550100122";
 export const DAVID = "+15550100133";
 
+export interface FakeContact {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  company: string | null;
+  phones: string[];
+}
+
 export interface FakeMessage {
   id: string;
   from: string;
@@ -39,6 +47,7 @@ export interface FakeMessage {
 export class FakeQuo {
   readonly messages: Array<FakeMessage | Record<string, unknown>> = [];
   readonly phoneNumbers = [MAIN_LINE, SUPPORT_LINE];
+  readonly contacts: FakeContact[] = [];
   orgId = FAKE_ORG_ID;
   /** Every request path served, with its query, decoded. */
   readonly requests: string[] = [];
@@ -74,6 +83,19 @@ export class FakeQuo {
       createdAt,
     };
     this.messages.push(full);
+    return full;
+  }
+
+  /** Add a workspace contact carrying these numbers. */
+  addContact(contact: Partial<FakeContact> & Pick<FakeContact, "phones">): FakeContact {
+    const full: FakeContact = {
+      id: `CT${String(this.contacts.length + 1).padStart(4, "0")}`,
+      firstName: null,
+      lastName: null,
+      company: null,
+      ...contact,
+    };
+    this.contacts.push(full);
     return full;
   }
 
@@ -117,9 +139,35 @@ export class FakeQuo {
         return json(page(this.phoneNumbers, q));
       case "/messages":
         return json(page(this.listMessages(q), q));
+      case "/contacts/search":
+        return this.searchContacts(q);
       default:
         return error(404, "Not Found");
     }
+  }
+
+  private searchContacts(q: URLSearchParams): Response {
+    if (q.get("limit") !== "50") return error(400, "limit must be 50");
+    const wanted = (q.get("phoneNumber[in]") ?? q.get("phoneNumber") ?? "").split(",");
+    if (wanted.length > 50) return error(400, "At most 50 phone numbers");
+    const matches = this.contacts.filter((c) => c.phones.some((p) => wanted.includes(p)));
+    const withProperties = q.get("include") === "properties";
+    return json({
+      data: matches.slice(0, 50).map((c) => ({
+        id: c.id,
+        firstName: c.firstName,
+        lastName: c.lastName,
+        company: c.company,
+        role: null,
+        source: "public-api",
+        createdAt: "2025-01-01T00:00:00Z",
+        updatedAt: "2025-01-01T00:00:00Z",
+        ...(withProperties
+          ? { properties: c.phones.map((value) => ({ type: "phone-number", value })) }
+          : {}),
+      })),
+      nextCursor: matches.length > 50 ? "more" : null,
+    });
   }
 
   private listMessages(q: URLSearchParams) {

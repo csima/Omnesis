@@ -12715,6 +12715,34 @@
       "value": "Workspace Settings",
       "paths": ["packages/providers/quo/src/source.test.ts"],
       "reason": "reviewed: invented Quo fixture (made-up workspace name; Quo settings and HTTP status labels, not people)"
+    },
+    {
+      "value": "Maya Reeves",
+      "paths": [
+        "packages/providers/quo/src/contact-names.test.ts",
+        "packages/providers/quo/src/normalizer.test.ts",
+        "packages/providers/quo/src/source.test.ts"
+      ],
+      "reason": "Invented Quo contact fixture from the CLAUDE.md example set; no corpus provenance."
+    },
+    {
+      "value": "Jamie Lopez",
+      "paths": [
+        "packages/providers/quo/src/contact-names.test.ts",
+        "packages/providers/quo/src/normalizer.test.ts",
+        "packages/providers/quo/src/source.test.ts"
+      ],
+      "reason": "Invented Quo contact fixture from the CLAUDE.md example set; no corpus provenance."
+    },
+    {
+      "value": "David Lin",
+      "paths": ["packages/providers/quo/src/contact-names.test.ts"],
+      "reason": "Invented Quo contact fixture from the CLAUDE.md example set; no corpus provenance."
+    },
+    {
+      "value": "Stellar Sound",
+      "paths": ["packages/providers/quo/src/contact-names.test.ts"],
+      "reason": "Invented Quo contact fixture from the CLAUDE.md example set; no corpus provenance."
     }
   ],
   "secretFixtures": [
