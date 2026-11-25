@@ -36,6 +36,7 @@
     "@omnesis/provider-paperless": "*",
     "@omnesis/provider-pi": "*",
     "@omnesis/provider-plaid": "*",
+    "@omnesis/provider-quo": "*",
     "@omnesis/provider-screen-time": "*",
     "@omnesis/provider-slack": "*",
     "@omnesis/provider-strava": "*",
