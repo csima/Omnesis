@@ -99,7 +99,7 @@ describe("quo-messages descriptor", () => {
     }
   });
 
-  test("carries a complete icon, a unit noun, a deep-link pattern and the experimental gate", () => {
+  test("carries a complete icon, a unit noun, a deep-link pattern and no experimental gate", () => {
     expect(definition.icon).toEqual(
       expect.objectContaining({
         sfSymbol: expect.any(String),
@@ -111,7 +111,7 @@ describe("quo-messages descriptor", () => {
     const svg = Buffer.from(definition.icon!.imageDataUri!.split(",")[1]!, "base64").toString();
     expect(svg).toMatch(/^<svg[\s\S]*<\/svg>$/);
     expect(definition.unitName).toBe("texts");
-    expect(definition.experimental).toBe(true);
+    expect(definition.experimental ?? false).toBe(false);
     expect(definition.urlPatterns?.[0]?.regex.length).toBeLessThanOrEqual(300);
     expect(definition.selfIdentity).toEqual({
       aliasPrefix: "quo",
