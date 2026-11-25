@@ -260,6 +260,7 @@ private struct TimelinePane: View {
 
 @available(iOS 17.0, *)
 private struct MetadataPane: View {
+    @Environment(AppStore.self) private var store
     let doc: DocumentDetail
 
     var body: some View {
@@ -278,7 +279,7 @@ private struct MetadataPane: View {
         FlatSection("Document") {
             VStack(alignment: .leading, spacing: 6) {
                 kv("Type", value: docTypeLabel(doc.documentType) ?? "—")
-                kv("Source", value: humanName(for: sourceTypeFromId(doc.sourceId)))
+                kv("Source", value: store.sourceDisplayName(forType: sourceTypeFromId(doc.sourceId)))
                 if let url = doc.sourceUrl, !url.isEmpty {
                     kv("URL", value: url, mono: true)
                 }
@@ -754,6 +755,7 @@ private struct AttachmentGraphRow: View {
 
 @available(iOS 17.0, *)
 private struct OutboundDocGraphRow: View {
+    @Environment(AppStore.self) private var store
     let ref: OutboundRef
 
     private func wrap(@ViewBuilder content: () -> some View) -> some View {
@@ -798,7 +800,7 @@ private struct OutboundDocGraphRow: View {
     private var subParts: [String] {
         var parts: [String] = []
         if let s = ref.targetSourceId {
-            parts.append(humanName(for: sourceTypeFromId(s)))
+            parts.append(store.sourceDisplayName(forType: sourceTypeFromId(s)))
         }
         if ref.linkType != "references", ref.linkType != "url" {
             parts.append(ref.linkType)
@@ -831,7 +833,7 @@ private struct InboundDocGraphRow: View {
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(humanName(for: sourceTypeFromId(ref.sourceSourceId)))
+                    Text(store.sourceDisplayName(forType: sourceTypeFromId(ref.sourceSourceId)))
                         .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }
@@ -870,7 +872,7 @@ private struct NearDupGraphRow: View {
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(humanName(for: sourceTypeFromId(edge.otherSourceId)))
+                    Text(store.sourceDisplayName(forType: sourceTypeFromId(edge.otherSourceId)))
                         .scaledFont(size: 10)
                         .foregroundStyle(Theme.textMuted)
                 }

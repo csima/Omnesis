@@ -346,7 +346,7 @@ struct SearchResultRow: View {
     private var metaParts: [String] {
         var parts: [String] = []
         let type = sourceTypeFromId(item.sourceId)
-        parts.append(humanName(for: type))
+        parts.append(store.sourceDisplayName(forType: type))
         if let label = docTypeLabel(item.documentType) { parts.append(label) }
         if let when = formatTimeAgo(item.sourceCreatedAt) { parts.append(when) }
         if let author = item.author, !author.isEmpty { parts.append(author) }
@@ -358,7 +358,7 @@ struct SearchResultRow: View {
     private var metaPartsExcludingDocLabel: [String] {
         var parts: [String] = []
         let type = sourceTypeFromId(item.sourceId)
-        parts.append(humanName(for: type))
+        parts.append(store.sourceDisplayName(forType: type))
         if let when = formatTimeAgo(item.sourceCreatedAt) { parts.append(when) }
         if let author = item.author, !author.isEmpty { parts.append(author) }
         return parts
@@ -675,6 +675,25 @@ struct SearchPipelineFooter: View {
         .background(Theme.bgPrimary.ignoresSafeArea())
         .navigationTitle("Search")
     }
+    .preferredColorScheme(.dark)
+}
+
+@available(iOS 17.0, *)
+#Preview("Search — result from a source the gateway names") {
+    NavigationStack {
+        ScrollView {
+            SearchResultRow(
+                item: PreviewMocks.searchResultFromGatewayNamedSource,
+                store: AppStore.preview(sourceLabelByType: PreviewMocks.gatewayNamedSourceLabels)
+            )
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, 10)
+            .padding(.horizontal, Theme.Spacing.lg)
+        }
+        .background(Theme.bgPrimary.ignoresSafeArea())
+        .navigationTitle("Search")
+    }
+    .environment(AppStore.preview(sourceLabelByType: PreviewMocks.gatewayNamedSourceLabels))
     .preferredColorScheme(.dark)
 }
 

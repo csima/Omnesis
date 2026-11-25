@@ -330,7 +330,7 @@ struct PersonDetailView: View {
     private func metaParts(doc: DocumentDetail?, roles: [String]) -> [String] {
         var parts: [String] = []
         if let doc {
-            parts.append(humanName(for: sourceTypeFromId(doc.sourceId)))
+            parts.append(store.sourceDisplayName(forType: sourceTypeFromId(doc.sourceId)))
             if let label = docTypeLabel(doc.documentType) { parts.append(label) }
             if let when = formatTimeAgo(doc.sourceCreatedAt) { parts.append(when) }
         }
