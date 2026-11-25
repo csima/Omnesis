@@ -80,7 +80,7 @@ struct SourcesView: View {
 
                     ForEach(store.pendingSourceRemovals) { removal in
                         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                            Label("Removing " + humanName(for: removal.type), systemImage: "trash")
+                            Label("Removing " + store.sourceDisplayName(forType: removal.type), systemImage: "trash")
                                 .font(.headline)
                             Text(removal.accountId).font(.caption).foregroundStyle(Theme.textSecondary)
                             Text("Gateway cleanup is still pending. Re-add this source after cleanup finishes. Pull to refresh its status.")
@@ -144,7 +144,7 @@ struct SourcesView: View {
     /// the fallback the banner would show a raw `<type>:<account>` id.
     private func pushHealthLabel(for sourceId: String) -> String {
         if let label = store.sourceLabel(forSourceId: sourceId) { return label }
-        return humanName(for: sourceTypeOf(sourceId))
+        return store.sourceDisplayName(forType: sourceTypeOf(sourceId))
     }
 
     /// Short one-liner for the inline refresh-failure banner. Routes
@@ -174,8 +174,8 @@ struct SourcesView: View {
             // Sort by the displayed label (meta feed first), not the raw
             // type id — internal ids have no humanName case and would
             // otherwise sort (and leak) as raw ids. Matches portal/Android.
-            let lhsLabel = store.sourceLabel(forSourceId: lhs.id) ?? humanName(for: lhs.type)
-            let rhsLabel = store.sourceLabel(forSourceId: rhs.id) ?? humanName(for: rhs.type)
+            let lhsLabel = store.sourceLabel(forSourceId: lhs.id) ?? store.sourceDisplayName(forType: lhs.type)
+            let rhsLabel = store.sourceLabel(forSourceId: rhs.id) ?? store.sourceDisplayName(forType: rhs.type)
             if lhsLabel != rhsLabel {
                 return lhsLabel.localizedCaseInsensitiveCompare(rhsLabel) == .orderedAscending
             }
@@ -392,7 +392,7 @@ private struct SourceRowView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(store.sourceLabel(forSourceId: source.id) ?? humanName(for: source.type))
+                    Text(store.sourceLabel(forSourceId: source.id) ?? store.sourceDisplayName(forType: source.type))
                         .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
@@ -696,7 +696,7 @@ struct SourceDetailView: View {
         HStack(spacing: Theme.Spacing.md) {
             SourceIconView(sourceId: source.id, store: store, size: 44)
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.sourceLabel(forSourceId: source.id) ?? humanName(for: source.type))
+                Text(store.sourceLabel(forSourceId: source.id) ?? store.sourceDisplayName(forType: source.type))
                     .font(.title3.bold())
                     .foregroundStyle(Theme.textPrimary)
                 Text(source.accountId)
@@ -968,7 +968,7 @@ struct SourceDetailView: View {
         guard let source = store.sources.first(where: { $0.id == sourceId }) else {
             return sourceId
         }
-        return humanName(for: source.type)
+        return store.sourceDisplayName(forType: source.type)
     }
 
     private func run(_ action: @escaping () async throws -> Void) async {

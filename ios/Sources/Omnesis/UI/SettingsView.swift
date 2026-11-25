@@ -434,7 +434,7 @@ struct SettingsView: View {
     /// the fallback the banner would show a raw `<type>:<account>` id.
     private func pushHealthLabel(for sourceId: String) -> String {
         if let label = store.sourceLabel(forSourceId: sourceId) { return label }
-        return humanName(for: sourceTypeOf(sourceId))
+        return store.sourceDisplayName(forType: sourceTypeOf(sourceId))
     }
 
     /// Sits above everything else because it reports data that is *not*
