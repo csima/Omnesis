@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 /**
- * The experimental Quo source: a Quo (formerly OpenPhone) workspace's text
+ * The Quo source: a Quo (formerly OpenPhone) workspace's text
  * messages, read through Quo's public API with a workspace API key — every
  * number, both directions, one document per message.
  */
@@ -111,8 +111,6 @@ export default defineProvider<QuoContext>({
         "Text messages from a Quo (formerly OpenPhone) workspace — every number, sent and received, one searchable document per message",
       unitName: "texts",
       icon: quoIcon,
-      // Not yet run against enough real workspaces to trust by default.
-      experimental: true,
       config: settings,
       multiDevice: { mode: "exclusive" },
       defaultSyncInterval: "5m",
