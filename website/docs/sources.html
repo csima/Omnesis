@@ -362,6 +362,18 @@
                   <code>OMNESIS_EXPERIMENTAL=1</code> — see <a href="#discord">Discord</a>.
                 </td>
               </tr>
+              <tr>
+                <td>
+                  Quo<br /><span class="pill">any collector</span> <span class="pill">API key</span>
+                  <span class="pill">Experimental</span>
+                </td>
+                <td>
+                  Text messages from a Quo (formerly OpenPhone) workspace, sent and received, on
+                  every number in it, one document per message grouped by conversation. Offered only
+                  when the gateway and collector run with <code>OMNESIS_EXPERIMENTAL=1</code> — see
+                  <a href="#quo">Quo</a>.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -506,6 +518,61 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
             blanks every message body instead — so a sync that sees a long run of empty messages
             stops and names the intent rather than indexing nothing. The source honors Discord's
             rate limits and pauses for as long as Discord asks.
+          </li>
+        </ul>
+
+        <h3 id="quo">Quo</h3>
+        <p>
+          Quo is <strong>experimental</strong>: it appears in the source picker only when the
+          gateway and collector run with <code>OMNESIS_EXPERIMENTAL=1</code>, and its behavior may
+          change between releases.
+        </p>
+        <p>
+          Quo indexes the text messages of a <a href="https://www.quo.com/">Quo</a> workspace
+          through Quo's API. A workspace owner or admin creates an API key in Quo under
+          <strong>Workspace Settings → API</strong>; paste the key itself when the source asks for
+          it, without a <code>Bearer</code> prefix. The key is checked against Quo before anything
+          is stored, and it is stored on the collector under the workspace it belongs to.
+        </p>
+        <div class="term">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+          <div class="term-body">
+            <p>
+              <span class="t-prompt">❯</span>
+              <span class="t-cmd">omnesis sources add quo</span>
+            </p>
+          </div>
+        </div>
+        <ul>
+          <li>
+            <strong>What gets indexed.</strong> Every text on every number in the workspace, in both
+            directions, one document per message. Each carries whether it was sent or received, the
+            Quo number it went through, the conversation it belongs to (so a group text's messages
+            group together), its delivery status when it was indexed, and a link that opens the
+            conversation at that message in Quo's web app. Attachments are counted and typed, not
+            downloaded. Calls, voicemails and contacts are not indexed.
+          </li>
+          <li>
+            <strong>Your side of the conversation.</strong> A Quo key belongs to the whole
+            workspace, so every text sent from one of its numbers counts as yours: it resolves to
+            the self person together with the number it went out on, and received texts name you as
+            their recipient. The other parties are people keyed by their phone numbers, the same
+            people as in other sources that know those numbers. Short codes and named senders, such
+            as verification codes, are marked as automated and become no person.
+          </li>
+          <li>
+            <strong>History and freshness.</strong> The first sync reads 180 days back (configurable
+            in <code>historyDays</code>), or back to the data cutoff when that is later. After that
+            the source checks for new texts every five minutes. Indexed texts do not expire. A text
+            deleted in Quo stays indexed, and a delivery status that changes after a text was
+            indexed is not updated.
+          </li>
+          <li>
+            <strong>Limits.</strong> Quo allows each key ten requests a second; the source stays
+            under that and waits as long as Quo asks when it is rate limited. A key that Quo rejects
+            stops the source until it is re-authenticated with a new key (<code
+              >omnesis sources reauth quo-messages:&lt;workspace&gt;</code
+            >).
           </li>
         </ul>
 

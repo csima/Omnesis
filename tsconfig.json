@@ -43,6 +43,7 @@
     { "path": "packages/providers/outlook" },
     { "path": "packages/providers/pi" },
     { "path": "packages/providers/plaid" },
+    { "path": "packages/providers/quo" },
     { "path": "packages/providers/screen-time" },
     { "path": "packages/providers/strava" },
     { "path": "packages/providers/things" },
