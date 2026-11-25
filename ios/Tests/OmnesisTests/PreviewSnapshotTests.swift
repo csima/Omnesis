@@ -1731,6 +1731,24 @@ final class PreviewSnapshotTests: XCTestCase {
 
     /// Rows with a landscape and a tall thumbnail, one whose image is still
     /// loading on the first frame, and one without a preview, side by side.
+    func testSearchResultFromGatewayNamedSource() {
+        // A source the app has no built-in name for is named by the label
+        // the gateway publishes, never by its raw type id.
+        let store = AppStore.preview(sourceLabelByType: PreviewMocks.gatewayNamedSourceLabels)
+        let body = NavigationStack {
+            ScrollView {
+                SearchResultRow(item: PreviewMocks.searchResultFromGatewayNamedSource, store: store)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, Theme.Spacing.lg)
+            }
+            .background(Theme.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Search")
+        }
+        .environment(store)
+        snapshot(body, name: "10-search-gateway-named-source")
+    }
+
     func testSearchResultsWithPreviews() {
         PreviewMocks.primeDocumentPreviewImages()
         snapshot(

@@ -866,6 +866,14 @@ public final class AppStore {
         adminCoord.sourceLabel(forSourceId: sourceId)
     }
 
+    /// The name to show for a source type ("Quo" for `quo-messages`): the
+    /// label the gateway publishes for the type, else the built-in name an
+    /// older gateway relies on. Source names stay owned by each provider's
+    /// descriptor, so a new source needs no app change to be named.
+    public func sourceDisplayName(forType type: String) -> String {
+        adminCoord.sourceLabelByType[type] ?? humanName(for: type)
+    }
+
     /// Provider-declared unit noun for a source ("emails", "messages",
     /// "activities", …). Resolved from the descriptor cache loaded at
     /// startup so source-specific labels remain owned by the provider
@@ -2575,16 +2583,20 @@ public final class AppStore {
             grouped[s.type, default: []].append(s)
         }
         return grouped
-            .map { SourceGroup(type: $0.key, sources: $0.value.sorted { $0.accountId < $1.accountId }) }
+            .map {
+                SourceGroup(
+                    type: $0.key,
+                    displayName: sourceDisplayName(forType: $0.key),
+                    sources: $0.value.sorted { $0.accountId < $1.accountId }
+                )
+            }
             .sorted { $0.displayName < $1.displayName }
     }
 
     public struct SourceGroup: Hashable {
         public let type: String
+        public let displayName: String
         public let sources: [SourceRecord]
-        public var displayName: String {
-            humanName(for: type)
-        }
     }
 
     // MARK: - Cross-coordinator orchestration
@@ -3314,6 +3326,7 @@ extension AppStore {
         wsState: DeviceSocket.ConnectionState? = nil,
         sourceIconByType: [String: String] = [:],
         sourceIconById: [String: String] = [:],
+        sourceLabelByType: [String: String] = [:],
         sourceUnitNameByType: [String: String] = PreviewMocks.agentSourceUnitNames,
         sourceBgColorByType: [String: String] = PreviewMocks.sourceBgColorByType,
         sourceAccentColorByType: [String: String] = PreviewMocks.sourceAccentColorByType,
@@ -3360,6 +3373,7 @@ extension AppStore {
             wsState: wsState,
             sourceIconByType: sourceIconByType,
             sourceIconById: sourceIconById,
+            sourceLabelByType: sourceLabelByType,
             sourceUnitNameByType: sourceUnitNameByType,
             sourceBgColorByType: sourceBgColorByType,
             sourceAccentColorByType: sourceAccentColorByType,

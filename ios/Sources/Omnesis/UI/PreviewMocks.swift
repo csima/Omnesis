@@ -1526,6 +1526,25 @@ enum PreviewMocks {
 
     // MARK: - Search
 
+    /// A source type the app has no built-in name for; only the gateway's
+    /// published label can name it.
+    static let gatewayNamedSourceLabels: [String: String] = ["quo-messages": "Quo"]
+
+    static let searchResultFromGatewayNamedSource = SearchResultItem(
+        documentId: "quo-text-0101",
+        sourceId: "quo-messages:OR0100example",
+        documentType: "message",
+        title: "Maya Reeves",
+        sourceUrl: nil,
+        appUrl: nil,
+        sourceCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600 * 2)),
+        author: "Maya Reeves",
+        chunkText: "Running ten minutes late for the studio walkthrough. Start without me and I'll catch up on the floor plan.",
+        score: 0.84,
+        refCount: nil,
+        scoreBreakdown: nil
+    )
+
     static let searchResults: [SearchResultItem] = [
         SearchResultItem(
             documentId: "abc-123",

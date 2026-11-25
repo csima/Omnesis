@@ -338,7 +338,7 @@ struct DocumentDetailView: View {
     }
 
     private func metaParts(doc: DocumentDetail) -> [String] {
-        var parts: [String] = [humanName(for: sourceTypeFromId(doc.sourceId))]
+        var parts: [String] = [store.sourceDisplayName(forType: sourceTypeFromId(doc.sourceId))]
         if let label = docTypeLabel(doc.documentType) { parts.append(label) }
         if let when = formatTimeAgo(doc.sourceCreatedAt) { parts.append(when) }
         return parts
@@ -347,7 +347,7 @@ struct DocumentDetailView: View {
     /// Same as `metaParts`, minus the doc-type label — used when the pill
     /// already carries the format.
     private func textExcludingDocLabel(doc: DocumentDetail) -> String {
-        var parts: [String] = [humanName(for: sourceTypeFromId(doc.sourceId))]
+        var parts: [String] = [store.sourceDisplayName(forType: sourceTypeFromId(doc.sourceId))]
         if let when = formatTimeAgo(doc.sourceCreatedAt) { parts.append(when) }
         return parts.joined(separator: " · ")
     }
