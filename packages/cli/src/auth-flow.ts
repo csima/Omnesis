@@ -341,6 +341,68 @@ async function refuseTypedAnswer(flowId: string, title: string): Promise<never> 
   throw new CliError(typedAnswerRefusal(title), EXIT_USER_ERROR);
 }
 
+/** How long, and how often, to read a flow's record once its stream is gone. */
+const RECORD_POLL_DEADLINE_MS = 120_000;
+const RECORD_POLL_INTERVAL_MS = 2_000;
+
+interface FlowRecord {
+  state?: string;
+  resolvedAccountId?: string;
+  resolvedNotices?: Array<{ title: string; detail?: string }>;
+  errorMessage?: string;
+  errorDetail?: Record<string, unknown>;
+}
+
+/**
+ * Read how a flow ended from the gateway's record of it, for when its event
+ * stream is gone before the terminal event arrived.
+ *
+ * Polls until the record is `completed` or `error`, riding out a gateway that
+ * is briefly unreachable or failing, and reports the result the way the live
+ * event would have. Gives up quietly at the deadline, or at once when the
+ * gateway no longer knows the flow, leaving the caller's own "finished
+ * without an account" outcome.
+ */
+async function settleFromFlowRecord(flowId: string): Promise<
+  | {
+      accountId?: string;
+      errorMessage?: string;
+      missingCredentials?: { fileKey: string; providerName: string };
+    }
+  | undefined
+> {
+  const deadline = Date.now() + RECORD_POLL_DEADLINE_MS;
+  while (true) {
+    let record: FlowRecord | undefined;
+    let res: Response | undefined;
+    try {
+      res = await gatewayFetch(`/admin/auth-flows/${encodeURIComponent(flowId)}`);
+    } catch {
+      res = undefined; // unreachable for now: a stalled or restarting gateway
+    }
+    // A flow the gateway no longer knows, or will not show, will not settle.
+    if (res && res.status >= 400 && res.status < 500) return undefined;
+    if (res?.ok) {
+      record = (await res.json().catch(() => undefined)) as FlowRecord | undefined;
+      if (typeof record?.state !== "string") return undefined;
+    }
+    if (record?.state === "completed" && typeof record.resolvedAccountId === "string") {
+      printNotices({ notices: record.resolvedNotices ?? [] });
+      return { accountId: record.resolvedAccountId };
+    }
+    if (record?.state === "error") {
+      const errorMessage = record.errorMessage ?? "Unknown";
+      const missingCredentials = reportFailure(
+        { ...(record.errorDetail ?? {}), error: errorMessage },
+        errorMessage,
+      );
+      return { errorMessage, missingCredentials };
+    }
+    if (Date.now() + RECORD_POLL_INTERVAL_MS > deadline) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, RECORD_POLL_INTERVAL_MS));
+  }
+}
+
 export async function runAuthFlow(
   ctx: { deviceId: string },
   sourceType: string,
@@ -509,8 +571,16 @@ export async function runAuthFlowDetailed(
     closePrompt();
   };
 
+  let streamLost = false;
   while (true) {
-    const { done, value } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch {
+      streamLost = true;
+      break;
+    }
+    const { done, value } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
@@ -599,6 +669,21 @@ export async function runAuthFlowDetailed(
   // prompt is gone even if the stream ended without one (gateway restart).
   terminalSeen = true;
   closePrompt();
+
+  // The flow runs on the collector whether or not anyone is listening, so a
+  // stream that broke or ended before its terminal event (a gateway stalled
+  // long enough to drop the connection, or restarted) is not a failed flow:
+  // the gateway's record of it says how it ended.
+  if (!resolvedAccountId && !errorMessage && !missingCredentials) {
+    if (streamLost)
+      console.log(`${c.dim}Lost the gateway's event stream; checking the flow…${c.reset}`);
+    const settled = await settleFromFlowRecord(flowId);
+    if (settled) {
+      resolvedAccountId = settled.accountId;
+      errorMessage = settled.errorMessage;
+      missingCredentials = settled.missingCredentials;
+    }
+  }
 
   if (resolvedAccountId) return { accountId: resolvedAccountId };
   if (missingCredentials) return { missingCredentials, errorMessage };

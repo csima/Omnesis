@@ -31,7 +31,7 @@ jobs:
           branch: cla-signatures
           # The CLA document contributors read before signing.
           path-to-document: https://github.com/omnesis-dev/Omnesis/blob/main/CLA.md
-          # Repo owner and bot accounts — never asked to sign.
-          allowlist: adrienconrath,*[bot]
+          # Repo owners, their Claude agent and bot accounts — never asked to sign.
+          allowlist: adrienconrath,csima,Claude,*[bot]
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA."
