@@ -12705,6 +12705,16 @@
         "evals/universes/e2e-minimal/sources/slack/messages.json"
       ],
       "reason": "Invented Slack fixture name for the Slack source and its synthetic universes; fictional, never personal corpus data."
+    },
+    {
+      "value": "Bad Request",
+      "paths": ["packages/providers/quo/src/client.test.ts"],
+      "reason": "reviewed: invented Quo fixture (made-up workspace name; Quo settings and HTTP status labels, not people)"
+    },
+    {
+      "value": "Workspace Settings",
+      "paths": ["packages/providers/quo/src/source.test.ts"],
+      "reason": "reviewed: invented Quo fixture (made-up workspace name; Quo settings and HTTP status labels, not people)"
     }
   ],
   "secretFixtures": [
