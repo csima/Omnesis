@@ -56,10 +56,10 @@ vi.mock("./utils.js", () => ({
   c: new Proxy({}, { get: () => "" }) as Record<string, string>,
   gatewayFetch: utilsMocks.gatewayFetch,
   gatewayJson: utilsMocks.gatewayJson,
-  buildCliFx: async () => ({}),
+  buildCliFx: () => Promise.resolve({}),
   linkify: (text: string) => text,
-  withSpinner: async (_label: string, fn: (spin: { message: (m: string) => void }) => unknown) =>
-    fn({ message: () => {} }),
+  withSpinner: (_label: string, fn: (spin: { message: (m: string) => void }) => unknown) =>
+    Promise.resolve(fn({ message: () => {} })),
 }));
 
 import { EXIT_USER_ERROR } from "@omnesis/cli-shared";
@@ -70,6 +70,7 @@ function sseChannel(): {
   response: Response;
   push: (event: string, data: unknown) => void;
   close: () => void;
+  fail: (err: Error) => void;
 } {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
@@ -83,6 +84,7 @@ function sseChannel(): {
     push: (event, data) =>
       controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)),
     close: () => controller.close(),
+    fail: (err) => controller.error(err),
   };
 }
 
@@ -506,5 +508,96 @@ describe("a wait an operator can act on", () => {
     expect(describeWait(9 * 60_000)).toBe("about 9 minutes");
     expect(describeWait(60 * 60_000)).toBe("about an hour");
     expect(describeWait(6 * 60 * 60_000)).toBe("about 6 hours");
+  });
+});
+
+describe("a dropped event stream is not a failed flow", () => {
+  // The flow keeps running on the collector when the gateway stalls long
+  // enough to cut the CLI's stream; the gateway's record says how it ended.
+  const recordResponse = (body: unknown, status = 200) =>
+    ({ ok: status < 400, status, json: () => Promise.resolve(body) }) as unknown as Response;
+
+  function route(sse: ReturnType<typeof sseChannel>, record: () => Promise<Response>) {
+    utilsMocks.gatewayJson.mockResolvedValue({ flowId: "flow-dropped" });
+    utilsMocks.gatewayFetch.mockImplementation(async (path: string) =>
+      path.endsWith("/events") ? sse.response : record(),
+    );
+  }
+
+  test("a stream cut before the terminal event takes the account from the flow record", async () => {
+    const sse = sseChannel();
+    route(sse, () =>
+      Promise.resolve(
+        recordResponse({
+          state: "completed",
+          resolvedAccountId: "ORexample01",
+          resolvedNotices: [{ title: "One number was skipped" }],
+        }),
+      ),
+    );
+    const run = runAuthFlowDetailed({ deviceId: "dev-1" }, "quo-messages", {});
+    await waitFor(() => utilsMocks.gatewayFetch.mock.calls.length >= 1);
+    sse.fail(new TypeError("terminated"));
+    expect(await run).toEqual({ accountId: "ORexample01" });
+    const logged = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+    expect(logged).toContain("Lost the gateway's event stream");
+    expect(utilsMocks.gatewayFetch).toHaveBeenCalledWith("/admin/auth-flows/flow-dropped");
+  });
+
+  test("a stream that ends without a terminal event reports the recorded failure and its remedy", async () => {
+    const sse = sseChannel();
+    route(sse, () =>
+      Promise.resolve(
+        recordResponse({
+          state: "error",
+          errorMessage: "Quo rejected this API key",
+          errorDetail: { code: "credential-rejected", remedy: "Generate a new key in Quo" },
+        }),
+      ),
+    );
+    const run = runAuthFlowDetailed({ deviceId: "dev-1" }, "quo-messages", {});
+    await waitFor(() => utilsMocks.gatewayFetch.mock.calls.length >= 1);
+    sse.close();
+    expect(await run).toEqual({ errorMessage: "Quo rejected this API key" });
+    const printed = errorSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+    expect(printed).toContain("Quo rejected this API key");
+    expect(printed).toContain("Generate a new key in Quo");
+  });
+
+  test("a flow the gateway no longer knows ends at once instead of polling", async () => {
+    const sse = sseChannel();
+    const record = vi.fn(() => Promise.resolve(recordResponse({ error: "flow not found" }, 404)));
+    route(sse, record);
+    const run = runAuthFlowDetailed({ deviceId: "dev-1" }, "quo-messages", {});
+    await waitFor(() => utilsMocks.gatewayFetch.mock.calls.length >= 1);
+    sse.fail(new TypeError("terminated"));
+    expect(await run).toEqual({ errorMessage: "no account id" });
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  test("an unreachable gateway is retried until the record settles", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const sse = sseChannel();
+      const record = vi
+        .fn<() => Promise<Response>>()
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce(recordResponse({ state: "completing" }))
+        .mockResolvedValue(
+          recordResponse({ state: "completed", resolvedAccountId: "ORexample02" }),
+        );
+      route(sse, record);
+      const run = runAuthFlowDetailed({ deviceId: "dev-1" }, "quo-messages", {});
+      await waitFor(() => utilsMocks.gatewayFetch.mock.calls.length >= 1);
+      sse.fail(new TypeError("terminated"));
+      await waitFor(() => record.mock.calls.length >= 1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => record.mock.calls.length >= 2);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await run).toEqual({ accountId: "ORexample02" });
+      expect(record).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
