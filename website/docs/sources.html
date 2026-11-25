@@ -543,7 +543,8 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
             Quo number it went through, the conversation it belongs to (so a group text's messages
             group together), its delivery status when it was indexed, and a link that opens the
             conversation at that message in Quo's web app. Attachments are counted and typed, not
-            downloaded. Calls, voicemails and contacts are not indexed.
+            downloaded. Calls, voicemails and contacts are not indexed; contacts are read only for
+            their names.
           </li>
           <li>
             <strong>Your side of the conversation.</strong> A Quo key belongs to the whole
@@ -552,6 +553,16 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
             their recipient. The other parties are people keyed by their phone numbers, the same
             people as in other sources that know those numbers. Short codes and named senders, such
             as verification codes, are marked as automated and become no person.
+          </li>
+          <li>
+            <strong>Names.</strong> A number the workspace's Quo contacts name is shown with that
+            name beside it, as Quo's inbox shows it: in the title (<code
+              >Text from +15550100111 (Maya Reeves)</code
+            >), in the From and To lines, and on the person. The name is the contact's first and
+            last name, or its company when it has neither; a number two contacts name differently
+            gets no name. Names are read when a text is indexed and looked up again every few hours,
+            so a contact renamed later keeps its old name on texts already indexed. A key that may
+            not read contacts indexes texts without names.
           </li>
           <li>
             <strong>History and freshness.</strong> The first sync reads 180 days back (configurable

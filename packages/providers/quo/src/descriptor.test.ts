@@ -142,8 +142,16 @@ describe("quo-messages descriptor", () => {
             watermark: { at: "2026-10-01T09:00:00.000Z", ids: ["ACmsg0001"] },
             walk: { below: { at: "2026-10-05T09:00:00.000Z", ids: ["ACmsg0009"] } },
           },
+          2: {
+            v: 2,
+            watermark: { at: "2026-10-01T09:00:00.000Z", ids: ["ACmsg0001"] },
+            walk: { below: { at: "2026-10-05T09:00:00.000Z", ids: ["ACmsg0009"] } },
+          },
         },
-        refusedStateFixtures: ["unreadable", { v: 2 }],
+        expectMigrated: {
+          1: (state) => expect(state).toEqual({ v: 2 }),
+        },
+        refusedStateFixtures: ["unreadable", { v: 3 }],
       },
     });
     for (const report of reports)
@@ -151,9 +159,9 @@ describe("quo-messages descriptor", () => {
   });
 
   test("resumes settled and pending cursors, and refuses a newer major version", () => {
-    const settled: QuoCursor = { v: 1, watermark: { at: "2026-10-01T09:00:00.000Z", ids: [] } };
+    const settled: QuoCursor = { v: 2, watermark: { at: "2026-10-01T09:00:00.000Z", ids: [] } };
     const bootstrap: QuoCursor = {
-      v: 1,
+      v: 2,
       walk: {
         floor: "2026-04-18T12:00:00.000Z",
         top: { at: "2026-10-01T09:00:00.000Z", ids: ["ACmsg0040"] },
@@ -171,17 +179,28 @@ describe("quo-messages descriptor", () => {
     expect(
       resolveSourceState(
         quoMessagesStateSpec,
-        { e: 1, v: 2, state: settled },
+        { e: 1, v: 3, state: settled },
         { sourceId: "quo-messages" },
       ).kind,
     ).toBe("refused");
-    expect(quoMessagesStateSpec.decode({ v: 1, watermark: { at: "never", ids: [] } })).toBeNull();
+    expect(quoMessagesStateSpec.decode({ v: 2, watermark: { at: "never", ids: [] } })).toBeNull();
+  });
+
+  test("a version 1 bookmark is dropped so the history is walked again with names", () => {
+    const v1 = { v: 1, watermark: { at: "2026-10-01T09:00:00.000Z", ids: ["ACmsg0001"] } };
+    expect(
+      resolveSourceState(
+        quoMessagesStateSpec,
+        { e: 1, v: 1, state: v1 },
+        { sourceId: "quo-messages" },
+      ),
+    ).toMatchObject({ kind: "migrated", state: { v: 2 } });
   });
 
   test("a cursor holding thousands of ids in one millisecond fits the state ceiling", () => {
     const ids = Array.from({ length: 5_000 }, (_, i) => `ACmsg${String(i).padStart(20, "0")}`);
     const cursor: QuoCursor = {
-      v: 1,
+      v: 2,
       watermark: { at: "2026-10-01T09:00:00.000Z", ids },
       walk: {
         top: { at: "2026-10-02T09:00:00.000Z", ids },

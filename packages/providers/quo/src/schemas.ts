@@ -14,6 +14,7 @@
  *
  * https://www.quo.com/docs/2026-03-30/messages/list-messages
  * https://www.quo.com/docs/2026-03-30/phone-numbers/list-phone-numbers
+ * https://www.quo.com/docs/2026-03-30/contacts/search-contacts
  */
 
 import { z } from "zod";
@@ -45,6 +46,23 @@ export const quoPhoneNumberSchema = z.object({
   name: z.string().nullish(),
 });
 export type QuoPhoneNumber = z.infer<typeof quoPhoneNumberSchema>;
+
+/**
+ * One contact from a contact search with `include=properties`. The search
+ * returns the contact's phone numbers (and emails) as typed properties; the
+ * plain contact list carries no phone number at all.
+ */
+export const quoContactSchema = z.object({
+  id: z.string().min(1),
+  firstName: z.string().nullish(),
+  lastName: z.string().nullish(),
+  company: z.string().nullish(),
+  properties: z
+    .array(z.object({ type: z.string(), value: z.string() }))
+    .nullish()
+    .transform((p) => p ?? []),
+});
+export type QuoContact = z.infer<typeof quoContactSchema>;
 
 export const quoOrganizationSchema = z.object({
   data: z.object({

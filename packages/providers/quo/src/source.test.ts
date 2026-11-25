@@ -385,3 +385,44 @@ describe("normalized output on the sync path", () => {
     ]);
   });
 });
+
+describe("contact names", () => {
+  test("texts carry the names the workspace's contacts give their numbers", async () => {
+    const { fake, source } = setup();
+    fake.addContact({ firstName: "Maya", lastName: "Reeves", phones: [MAYA] });
+    fake.add({ direction: "incoming", text: "Running five minutes late." });
+    fake.add({ direction: "outgoing", to: [JAMIE], conversationId: "CNjamie0001" });
+
+    const { documents } = await drain(source, null);
+
+    expect(documents.map((d) => d.title).sort()).toEqual([
+      `Text from ${MAYA} (Maya Reeves)`,
+      `Text to ${JAMIE}`,
+    ]);
+    const searches = fake.requests.filter((r) => r.startsWith("/contacts/search"));
+    expect(searches).toHaveLength(1);
+    expect(searches[0]).not.toContain(MAIN_LINE.phoneNumber);
+  });
+
+  test("a version 1 bookmark walks the history again and re-emits every text with names", async () => {
+    const { fake, source, make } = setup();
+    const first = fake.add({ direction: "incoming" });
+    const second = fake.add({ direction: "incoming", from: JAMIE, conversationId: "CNjamie0001" });
+    const settled = await drain(source, null);
+    expect(settled.ids.sort()).toEqual([first.id, second.id].sort());
+
+    fake.addContact({ firstName: "Jamie", lastName: "Lopez", phones: [JAMIE] });
+    const stored = { e: 1, v: 1, state: { ...settled.cursor, v: 1 } };
+    const outcome = resolveSourceState(quoMessagesStateSpec, stored, { sourceId: "quo-messages" });
+    expect(outcome.kind).toBe("migrated");
+
+    const rerun = await drain(make(), (outcome as { state: QuoCursor }).state);
+
+    expect(rerun.ids.sort()).toEqual([first.id, second.id].sort());
+    expect(rerun.documents.find((d) => d.externalId === second.id)?.title).toBe(
+      `Text from ${JAMIE} (Jamie Lopez)`,
+    );
+    const again = await drain(make(), rerun.cursor);
+    expect(again.ids).toEqual([]);
+  });
+});

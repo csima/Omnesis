@@ -25,6 +25,8 @@ export interface NormalizeContext {
   lines: ReadonlyMap<string, QuoLine>;
   /** ISO 3166-1 region used when a number is not already international. */
   phoneRegion?: string;
+  /** Names from the workspace's Quo contacts, by E.164 number. */
+  names?: ReadonlyMap<string, string>;
 }
 
 /** The self LID: the account's own organization, paired through `selfIdentity`. */
@@ -73,6 +75,11 @@ function classify(raw: string, region?: string): Party {
   return { kind: "sender-id", value };
 }
 
+/** A number with the contact name Quo knows it by, the way Quo's inbox shows it. */
+export function formatNumber(phone: string, name: string | undefined): string {
+  return name ? `${phone} (${name})` : phone;
+}
+
 /**
  * One Quo text message as one document.
  *
@@ -83,19 +90,22 @@ function classify(raw: string, region?: string): Party {
  * number it went out on. An incoming message names that same self as a
  * recipient. Everyone else is a phone number; short codes, alphanumeric
  * sender ids and withheld callers name nobody and become no person.
+ *
+ * A number the workspace's contacts name shows that name beside it in the
+ * title and the From and To lines, and the name goes on its person.
  */
 export function normalizeMessage(message: QuoMessage, ctx: NormalizeContext): DocumentInput {
   const outgoing = message.direction === "outgoing";
   const ownNumbers = new Set(
-    [...ctx.lines.values()].map((l) => classifyPhone(l.number, ctx.phoneRegion) ?? l.number),
+    [...ctx.lines.values()].map((l) => canonicalPhone(l.number, ctx.phoneRegion) ?? l.number),
   );
   const line = ctx.lines.get(message.phoneNumberId ?? "");
   const lineNumber =
-    (line ? (classifyPhone(line.number, ctx.phoneRegion) ?? line.number) : undefined) ??
+    (line ? (canonicalPhone(line.number, ctx.phoneRegion) ?? line.number) : undefined) ??
     (outgoing
-      ? classifyPhone(message.from, ctx.phoneRegion)
+      ? canonicalPhone(message.from, ctx.phoneRegion)
       : message.to
-          .map((t) => classifyPhone(t, ctx.phoneRegion))
+          .map((t) => canonicalPhone(t, ctx.phoneRegion))
           .find((n) => n && ownNumbers.has(n)));
   if (lineNumber) ownNumbers.add(lineNumber);
 
@@ -117,14 +127,21 @@ export function normalizeMessage(message: QuoMessage, ctx: NormalizeContext): Do
   for (const party of counterparts) {
     if (party.kind !== "phone") continue;
     const role = !outgoing && party.value === sender.value ? "sender" : "recipient";
-    people.push({ role, identifiers: [{ kind: "phone", value: party.value }] });
+    const name = ctx.names?.get(party.value);
+    people.push({
+      role,
+      ...(name ? { name } : {}),
+      identifiers: [{ kind: "phone", value: party.value }],
+    });
   }
 
+  const label = (p: Party) =>
+    p.kind === "phone" ? formatNumber(p.value, ctx.names?.get(p.value)) : p.value;
   const isGroup = counterparts.length > 1;
   const names = counterparts.map((p) => p.value);
   const title = outgoing
-    ? `${isGroup ? "Group text" : "Text"} to ${listLabel(names)}`
-    : `${isGroup ? "Group text" : "Text"} from ${sender.kind === "withheld" ? "a withheld number" : sender.value}`;
+    ? `${isGroup ? "Group text" : "Text"} to ${listLabel(counterparts.map(label))}`
+    : `${isGroup ? "Group text" : "Text"} from ${sender.kind === "withheld" ? "a withheld number" : label(sender)}`;
 
   const lineLabel = lineNumber ? `${lineNumber}${line?.name ? ` (${line.name})` : ""}` : undefined;
   const text =
@@ -148,8 +165,8 @@ export function normalizeMessage(message: QuoMessage, ctx: NormalizeContext): Do
     outgoing
       ? `Outgoing text, sent from the Quo number ${lineLabel ?? message.from}`
       : `Incoming text, received on the Quo number ${lineLabel ?? "of this workspace"}`,
-    `From: ${message.from}`,
-    `To: ${message.to.join(", ")}`,
+    `From: ${isOwn(sender) ? message.from : label(sender)}`,
+    `To: ${recipients.map((r, i) => (isOwn(r) ? message.to[i] : label(r))).join(", ")}`,
   ];
   const content = lines.join("\n");
 
@@ -185,7 +202,8 @@ export function normalizeMessage(message: QuoMessage, ctx: NormalizeContext): Do
   };
 }
 
-function classifyPhone(raw: string, region?: string): string | undefined {
+/** The E.164 form of a dialable number, or nothing for a short code, sender id or withheld caller. */
+export function canonicalPhone(raw: string, region?: string): string | undefined {
   const party = classify(raw, region);
   return party.kind === "phone" ? party.value : undefined;
 }
