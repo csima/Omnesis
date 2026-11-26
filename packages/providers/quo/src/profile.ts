@@ -32,7 +32,7 @@ export const quoDocumentProfile: DocumentEventProfile = {
       path: "extra.threadId",
       type: "string",
       description:
-        "Quo conversation the text belongs to. Every text exchanged with the same person, or the same group, on the same Quo number shares it. Opaque: never shown to a person and never parsed for meaning.",
+        "Quo conversation the text belongs to. Every text exchanged with the same person, or the same group, on the same Quo number shares it. It is Quo's conversationId, the identifier a reply names. Opaque: never shown to a person and never parsed for meaning.",
     },
     {
       path: "extra.isGroup",
@@ -46,6 +46,18 @@ export const quoDocumentProfile: DocumentEventProfile = {
       identifiesPeople: true,
       description:
         "The workspace's own Quo number the text was sent from or received on, in E.164 form such as +15550100100.",
+    },
+    {
+      path: "extra.quoNumberId",
+      type: "string",
+      description:
+        "Quo's id (PN…) for the workspace number the conversation is on. Opaque; a connector names it as the line a reply is sent from. Absent when Quo reported no number.",
+    },
+    {
+      path: "extra.fromSelf",
+      type: "boolean",
+      description:
+        "True when the text was sent from the workspace, false when it was received. The reliable test for whether the owner already answered a conversation: compare the newest fromSelf text with the newest incoming one.",
     },
     {
       path: "extra.quoNumberName",
