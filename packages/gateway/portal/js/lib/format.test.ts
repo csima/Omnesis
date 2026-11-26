@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Adrien Conrath
 
 // @ts-expect-error — the portal is plain JS, no .d.ts ships alongside.
-import { docHref, isExternalDocHref, isOpenableExternalUrl, loadSourceMeta, sourceIconResolves, sourceIcon, sourceIconUrl } from "./format.js";
+import { docHref, isExternalDocHref, isOpenableExternalUrl, loadSourceMeta, sourceIconResolves, sourceIcon, sourceIconUrl, sourceIsExperimental } from "./format.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgo=";
@@ -167,5 +167,28 @@ describe("sourceIconResolves — does the meta cache resolve a real icon for thi
     expect(sourceIconResolves("hosted")).toBe(false);
     expect(sourceIconResolves("blob")).toBe(false);
     expect(sourceIconResolves("svg")).toBe(false);
+  });
+});
+
+describe("sourceIsExperimental — the descriptor's experimental mark, by source type", () => {
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("is true only for a type whose descriptor marks it, and survives a synced entry for the same type", async () => {
+    // @ts-expect-error — minimal fetch stub for the meta loader.
+    globalThis.fetch = mockMetaFetch({ trial: { label: "Trial" }, "trial:one": { label: "Trial one" } }, [
+      { id: "trial", experimental: true },
+      { id: "steady", name: "Steady", experimental: false },
+    ]);
+    await loadSourceMeta();
+    expect(sourceIsExperimental("trial")).toBe(true);
+    expect(sourceIsExperimental("steady")).toBe(false);
+    expect(sourceIsExperimental("undescribed")).toBe(false);
+    expect(sourceIsExperimental("")).toBe(false);
   });
 });

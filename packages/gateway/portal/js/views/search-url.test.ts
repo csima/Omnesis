@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   getDocumentSummariesBulk: vi.fn(),
   getPeople: vi.fn(),
   getStatus: vi.fn(),
+  getAdminSources: vi.fn(),
 }));
 vi.mock("../api.js", () => api);
 vi.mock("../components/facets.js", () => ({ FacetPanel: () => null }));
@@ -53,6 +54,7 @@ beforeEach(() => {
   api.getSearchReadiness.mockResolvedValue({ indexer: { status: "ready" } });
   api.getPeople.mockResolvedValue({ people: [] });
   api.getStatus.mockResolvedValue({});
+  api.getAdminSources.mockResolvedValue({ items: [] });
   api.getDocumentsPeopleBulk.mockResolvedValue({ docs: {} });
   api.search.mockImplementation(async (text) => ({ query: { original: text }, results: [] }));
 });
