@@ -214,6 +214,50 @@ describe("normalizeMessage", () => {
   });
 });
 
+describe("contact names", () => {
+  const named: NormalizeContext = {
+    ...ctx,
+    names: new Map([
+      [MAYA, "Maya Reeves"],
+      [JAMIE, "Jamie Lopez"],
+    ]),
+  };
+
+  test("an incoming text shows the sender's name beside the number and on the person", () => {
+    const doc = normalizeMessage(message({ direction: "incoming" }), named);
+
+    expect(doc.title).toBe(`Text from ${MAYA} (Maya Reeves)`);
+    expect(doc.content).toContain(`From: ${MAYA} (Maya Reeves)`);
+    expect(doc.content).toContain(`To: ${MAIN_LINE.phoneNumber}`);
+    expect(doc.metadata.people).toContainEqual({
+      role: "sender",
+      name: "Maya Reeves",
+      identifiers: [{ kind: "phone", value: MAYA }],
+    });
+    expect(doc.metadata.extra).toMatchObject({ counterparts: [MAYA] });
+  });
+
+  test("an outgoing group text names each member the contacts know, and only those", () => {
+    const doc = normalizeMessage(
+      message({ direction: "outgoing", to: [MAYA, DAVID, JAMIE], conversationId: "CNgroup0001" }),
+      named,
+    );
+
+    expect(doc.title).toBe(`Group text to ${MAYA} (Maya Reeves), ${DAVID}, ${JAMIE} (Jamie Lopez)`);
+    expect(doc.content).toContain(`From: ${MAIN_LINE.phoneNumber}`);
+    expect(doc.content).toContain(`To: ${MAYA} (Maya Reeves), ${DAVID}, ${JAMIE} (Jamie Lopez)`);
+    const david = doc.metadata.people?.find((p) => p.identifiers?.[0]?.value === DAVID);
+    expect(david).toEqual({ role: "recipient", identifiers: [{ kind: "phone", value: DAVID }] });
+  });
+
+  test("a number the contacts do not name reads exactly as before", () => {
+    const plain = normalizeMessage(message({ direction: "incoming", from: DAVID }), ctx);
+    const withNames = normalizeMessage(message({ direction: "incoming", from: DAVID }), named);
+
+    expect(withNames).toEqual(plain);
+  });
+});
+
 describe("deep links", () => {
   test("the declared URL pattern recovers the external id from an emitted sourceUrl", () => {
     const doc = normalizeMessage(message({ direction: "outgoing" }), ctx);

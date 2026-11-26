@@ -26,7 +26,7 @@ const boundarySchema = z.object({
 export type Boundary = z.infer<typeof boundarySchema>;
 
 const cursorSchema = z.object({
-  v: z.literal(1),
+  v: z.literal(2),
   /**
    * Everything created after the history floor and up to this instant has
    * been emitted, together with the listed ids at the instant itself.
@@ -51,10 +51,23 @@ const cursorSchema = z.object({
 export type QuoCursor = z.infer<typeof cursorSchema>;
 
 export const quoMessagesStateSpec: SourceStateSpec<QuoCursor> = {
-  version: 1,
+  version: 2,
   decode(value: unknown): QuoCursor | null {
     const parsed = cursorSchema.safeParse(value);
     return parsed.success ? parsed.data : null;
+  },
+  migrate: {
+    /**
+     * Version 2 names the other party from the workspace's Quo contacts. The
+     * bookmark is dropped so the history window is walked once more and every
+     * text already indexed is re-emitted, with names, onto its own id.
+     */
+    1: () => ({ v: 2 }),
+  },
+  /** A bookmark stored without its envelope still says which version wrote it. */
+  legacyVersion: (value) => {
+    const v = (value as { v?: unknown } | null)?.v;
+    return v === 1 || v === 2 ? v : null;
   },
   /**
    * Quo keeps the history the API lists, so a discarded bookmark costs one

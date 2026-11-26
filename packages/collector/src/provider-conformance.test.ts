@@ -94,6 +94,14 @@ const slackCursor = {
   },
 };
 
+const quoCursor = {
+  v: 1,
+  watermark: { at: timestamp, ids: ["ACmsg0001"] },
+  walk: {
+    top: { at: "2026-01-03T00:00:00.000Z", ids: ["ACmsg0009"] },
+    below: { at: "2026-01-02T12:00:00.000Z", ids: ["ACmsg0004", "ACmsg0005"] },
+  },
+};
 const current: Record<string, unknown> = {
   "apple-notes": { lastModifiedTimestamp: 700, lastModifiedPk: 12 },
   "apple-reminders": { lastModifiedTimestamp: 700, lastModifiedPk: 12 },
@@ -238,14 +246,7 @@ const current: Record<string, unknown> = {
     snapshot: { ids: { documents: ["3", "7", "9"] } },
   },
   plaid: { phase: "transactions", transactionsCursor: "page-2", lastSnapshotDate: "2026-01-02" },
-  "quo-messages": {
-    v: 1,
-    watermark: { at: timestamp, ids: ["ACmsg0001"] },
-    walk: {
-      top: { at: "2026-01-03T00:00:00.000Z", ids: ["ACmsg0009"] },
-      below: { at: "2026-01-02T12:00:00.000Z", ids: ["ACmsg0004", "ACmsg0005"] },
-    },
-  },
+  "quo-messages": { ...quoCursor, v: 2 },
   slack: slackCursor,
   "slack-session": slackCursor,
   "telegram-messages": { phase: "incremental", committedSeq: 42, storeId: "store-1" },
@@ -258,6 +259,7 @@ const current: Record<string, unknown> = {
 };
 
 const historical: Record<string, unknown> = {
+  "quo-messages": quoCursor,
   "granola-meetings": { phase: "incremental", pageCursor: "page-2", syncedUpTo: timestamp },
   "google-calendar": calendarLegacy,
   "notion-databases": notionCursor,
@@ -317,10 +319,10 @@ const installed: Record<string, Record<string, Record<string, unknown>>> = {
   },
   "quo-messages": {
     // Between walks: only the watermark and the ids sharing its millisecond.
-    settled: { v: 1, watermark: { at: timestamp, ids: ["ACmsg0001"] } },
+    settled: { v: 2, watermark: { at: timestamp, ids: ["ACmsg0001"] } },
     // Partway through the first walk, before any watermark exists.
     bootstrap: {
-      v: 1,
+      v: 2,
       walk: {
         floor: "2025-07-06T00:00:00.000Z",
         top: { at: timestamp, ids: ["ACmsg0009"] },
@@ -328,7 +330,7 @@ const installed: Record<string, Record<string, Record<string, unknown>>> = {
       },
     },
     // A first walk that found an empty workspace settles on its floor.
-    empty: { v: 1, watermark: { at: "2025-07-06T00:00:00.000Z", ids: [] } },
+    empty: { v: 2, watermark: { at: "2025-07-06T00:00:00.000Z", ids: [] } },
   },
   "telegram-messages": {
     // Mid-way through the history walk: the drain acknowledges during bootstrap.
@@ -338,6 +340,7 @@ const installed: Record<string, Record<string, Record<string, unknown>>> = {
   },
 };
 const expectations: Record<string, (state: Record<string, unknown>) => void> = {
+  "quo-messages": (state) => expect(state).toEqual({ v: 2 }),
   "granola-meetings": (state) =>
     expect(state).toEqual({
       ...(historical["granola-meetings"] as Record<string, unknown>),

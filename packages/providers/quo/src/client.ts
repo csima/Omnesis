@@ -4,12 +4,13 @@
 import { createLogger } from "@omnesis/core";
 import { SyncError } from "@omnesis/types";
 import {
+  quoContactSchema,
   quoListEnvelopeSchema,
   quoMessageSchema,
   quoOrganizationSchema,
   quoPhoneNumberSchema,
 } from "./schemas.js";
-import type { QuoMessage, QuoOrganization, QuoPhoneNumber } from "./schemas.js";
+import type { QuoContact, QuoMessage, QuoOrganization, QuoPhoneNumber } from "./schemas.js";
 
 const log = createLogger("provider:quo").child("client");
 
@@ -36,6 +37,8 @@ const MAX_RETRIES = 2;
 const SERVER_ERROR_BACKOFF_MS = 1_000;
 /** Backoff when Quo answers 429 without a usable Retry-After. */
 const DEFAULT_RATE_LIMIT_MS = 1_000;
+/** Most numbers one contact search may name, and the only page size it accepts. */
+export const QUO_CONTACT_SEARCH_MAX = 50;
 /** Bound on phone-number pages, so a server that never stops paging cannot loop forever. */
 const MAX_PHONE_NUMBER_PAGES = 100;
 /** Longest error detail placed in a message. */
@@ -125,6 +128,35 @@ export class QuoClient {
       after = envelope.nextCursor;
     }
     throw new SyncError("unknown", "Quo kept paging phone numbers past its safe page limit.");
+  }
+
+  /**
+   * The workspace's contacts that carry any of these E.164 numbers, each with
+   * its phone and email properties. Quo matches numbers exactly.
+   */
+  async searchContactsByPhone(
+    phones: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<{ contacts: QuoContact[]; truncated: boolean }> {
+    if (phones.length === 0) return { contacts: [], truncated: false };
+    if (phones.length > QUO_CONTACT_SEARCH_MAX) {
+      throw new Error(`A Quo contact search takes at most ${QUO_CONTACT_SEARCH_MAX} numbers`);
+    }
+    const query = new URLSearchParams({
+      limit: String(QUO_CONTACT_SEARCH_MAX),
+      include: "properties",
+      "phoneNumber[in]": phones.join(","),
+    });
+    const envelope = parseEnvelope(
+      await this.request("/contacts/search", query, signal),
+      "contact search",
+    );
+    const contacts: QuoContact[] = [];
+    for (const item of envelope.data) {
+      const parsed = quoContactSchema.safeParse(item);
+      if (parsed.success) contacts.push(parsed.data);
+    }
+    return { contacts, truncated: Boolean(envelope.nextCursor) };
   }
 
   /** One page of the organization's messages, newest first. */
