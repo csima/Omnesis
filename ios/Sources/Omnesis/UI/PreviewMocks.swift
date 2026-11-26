@@ -609,6 +609,41 @@ enum PreviewMocks {
         sourceWhatsApp, sourceStrava, sourceExpiring, sourceStale, sourceSharedVault,
     ]
 
+    // MARK: - Search source chips
+
+    /// A second invented Gmail account, so the chip row shows two accounts
+    /// folding into one "Gmail" chip.
+    static let sourceGmailSecond = SourceRecord(
+        id: "gmail:second@example.com",
+        type: "gmail",
+        accountId: "second@example.com",
+        deviceId: "dev_mac_mini"
+    )
+    static let searchChipSources: [SourceRecord] = sources + [sourceGmailSecond]
+    /// Display names as the fixture sources' descriptors would declare them;
+    /// `apple-notes` is left out to show the title-cased fallback.
+    static let searchChipLabelByType: [String: String] = [
+        "gmail": "Gmail",
+        "apple-health": "Apple Health",
+        "whatsapp-messages": "WhatsApp",
+        "strava-activities": "Strava",
+        "plaid": "Plaid",
+        "obsidian": "Obsidian",
+    ]
+    /// Invented counts: the second Gmail account lifts Gmail past Strava.
+    static let searchChipStatusSnapshot = StatusSnapshot(
+        documents: StatusSnapshot.Documents(
+            total: statusSnapshot.documents.total + 2_400,
+            bySource: statusSnapshot.documents.bySource.merging(
+                [sourceGmailSecond.id: 2_400], uniquingKeysWith: +
+            ),
+            unitCountBySource: nil
+        ),
+        dbSizeBytes: statusSnapshot.dbSizeBytes,
+        latestActivityBySource: statusSnapshot.latestActivityBySource,
+        experimental: false
+    )
+
     static let deviceNames: [String: String] = [
         "dev_mac_mini": "mac-mini",
         "dev_iphone": "iPhone",
