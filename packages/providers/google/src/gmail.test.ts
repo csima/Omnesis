@@ -1022,6 +1022,51 @@ describe("GmailSource", () => {
     });
   });
 
+  describe("direction, triage state and reply identifiers", () => {
+    function setup(overrides: Parameters<typeof makeGmailMessage>[1]) {
+      const msg = makeGmailMessage("msg-1", { internalDate: "1704067200000", ...overrides });
+      gmail.users.messages.list = vi.fn(() =>
+        Promise.resolve({ data: { messages: [{ id: "msg-1" }] } }),
+      );
+      gmail.users.messages.get = vi.fn(() => Promise.resolve({ data: msg }));
+    }
+
+    test("a received unread message exposes thread and header identifiers", async () => {
+      setup({
+        labelIds: ["INBOX", "UNREAD"],
+        extraHeaders: [
+          { name: "Message-ID", value: "<m1@mail.example.com>" },
+          { name: "In-Reply-To", value: "<m0@mail.example.com>" },
+          { name: "References", value: "<m00@mail.example.com> <m0@mail.example.com>" },
+        ],
+      });
+      const extra = (await source.sync(null)).documents[0].metadata.extra!;
+      expect(extra).toMatchObject({
+        threadId: "thread-msg-1",
+        direction: "received",
+        unread: true,
+        archived: false,
+        starred: false,
+        messageId: "<m1@mail.example.com>",
+        inReplyTo: "<m0@mail.example.com>",
+        references: ["<m00@mail.example.com>", "<m0@mail.example.com>"],
+      });
+    });
+
+    test("a sent message is outbound and read", async () => {
+      setup({ labelIds: ["SENT"], from: "test@example.com", to: "other@example.com" });
+      const extra = (await source.sync(null)).documents[0].metadata.extra!;
+      expect(extra).toMatchObject({ direction: "sent", unread: false, archived: false });
+      expect(extra).not.toHaveProperty("inReplyTo");
+    });
+
+    test("a message with no inbox label is archived", async () => {
+      setup({ labelIds: ["STARRED"] });
+      const extra = (await source.sync(null)).documents[0].metadata.extra!;
+      expect(extra).toMatchObject({ archived: true, starred: true });
+    });
+  });
+
   describe("relevance score", () => {
     function setupSingleMessage(msgOverrides: Parameters<typeof makeGmailMessage>[1]) {
       const msg = makeGmailMessage("msg-1", { internalDate: "1704067200000", ...msgOverrides });

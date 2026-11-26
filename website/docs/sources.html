@@ -542,9 +542,11 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
             directions, one document per message. Each carries whether it was sent or received, the
             Quo number it went through, the conversation it belongs to (so a group text's messages
             group together), its delivery status when it was indexed, and a link that opens the
-            conversation at that message in Quo's web app. Attachments are counted and typed, not
-            downloaded. Calls, voicemails and contacts are not indexed; contacts are read only for
-            their names.
+            conversation at that message in Quo's web app. The number's Quo id and a
+            <code>fromSelf</code> flag sit in the document's metadata beside the conversation id, so
+            a connector that can only send replies knows where to answer and whether you already
+            did. Attachments are counted and typed, not downloaded. Calls, voicemails and contacts
+            are not indexed; contacts are read only for their names.
           </li>
           <li>
             <strong>Your side of the conversation.</strong> A Quo key belongs to the whole

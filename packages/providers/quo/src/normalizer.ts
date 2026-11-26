@@ -190,6 +190,8 @@ export function normalizeMessage(message: QuoMessage, ctx: NormalizeContext): Do
       extra: {
         direction: message.direction,
         threadId: message.conversationId,
+        fromSelf: outgoing,
+        ...(message.phoneNumberId ? { quoNumberId: message.phoneNumberId } : {}),
         isGroup,
         deliveryStatus: message.status,
         counterparts: names,

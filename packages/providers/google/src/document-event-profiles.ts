@@ -75,6 +75,52 @@ export const gmailDocumentEventProfile: DocumentEventProfile = {
         "Gmail's identifier for the conversation this message belongs to. Every message in a back-and-forth carries the same value, so it is what identifies a thread — a reply cannot be recognised as a reply to anything without it. Opaque: never shown to a person and never parsed for meaning. Attachment documents carry no thread id, so a condition about a conversation matches the messages and not their attachments.",
     },
     {
+      path: "extra.direction",
+      type: "string",
+      description:
+        "Whether the account owner sent the message (the SENT label, or the owner's own address in From) or received it. A message in a thread the owner has replied to shows that reply as its own sent document in the same threadId.",
+      allowedValues: ["sent", "received"],
+      valueAliases: {
+        sent: ["outbound", "I sent", "from me", "replied"],
+        received: ["inbound", "incoming", "from them"],
+      },
+    },
+    {
+      path: "extra.unread",
+      type: "boolean",
+      description:
+        "Whether the message is still unread in Gmail (the UNREAD label). Refreshed when the label changes.",
+    },
+    {
+      path: "extra.archived",
+      type: "boolean",
+      description:
+        "Whether the message has left the inbox without being sent or drafted by the owner (no INBOX, SENT or DRAFT label). Refreshed when the label changes.",
+    },
+    {
+      path: "extra.starred",
+      type: "boolean",
+      description: "Whether the message is starred in Gmail. Refreshed when the label changes.",
+    },
+    {
+      path: "extra.messageId",
+      type: "string",
+      description:
+        "The RFC 5322 Message-ID header, angle brackets included. Opaque: a connector sends it as the In-Reply-To of a reply. Absent when the message has none.",
+    },
+    {
+      path: "extra.inReplyTo",
+      type: "string",
+      description:
+        "The RFC 5322 In-Reply-To header, angle brackets included: the Message-ID of the message this one answers. Absent when the message is not a reply.",
+    },
+    {
+      path: "extra.references",
+      type: "string-array",
+      description:
+        "The RFC 5322 References header as Message-IDs, oldest first. A connector extends it with the message being answered when it replies. Absent when the message has none.",
+    },
+    {
       path: "bulkMail",
       type: "boolean",
       description:
