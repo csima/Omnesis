@@ -36,10 +36,18 @@ import {
   sourceMemberConfigBody,
   sourceLegacyRowsBody,
   sourceResyncBody,
+  syncNowBody,
 } from "../../schemas/index.js";
 import { normalizeIcon } from "../../../icon-normalizer.js";
 import { gatewayHostedDescriptors } from "../../../internal-source-descriptors.js";
 import { assertMutableSource, listInternalSources } from "../../../internal-sources.js";
+import {
+  SyncNowBadRequestError,
+  SyncNowCoordinator,
+  SyncNowUnknownSourceError,
+  type SyncNowDispatchResult,
+} from "../../../sync-now.js";
+import { getSourceStatsBulk } from "../../../data/repositories/SourceStatsRepository.js";
 import { log, wsProxy, type AdminRoutesDeps } from "./internals.js";
 import type { Context } from "hono";
 import type { AppEnv, RouteApp } from "../types.js";
@@ -66,6 +74,7 @@ import type { AppEnv, RouteApp } from "../types.js";
  *   DELETE /admin/sources/:id
  *   POST   /admin/sources/:id/sync
  *   POST   /admin/sources/:id/resync
+ *   POST   /admin/sync-now
  *   GET    /admin/sources/:id/legacy-rows
  *   POST   /admin/sources/:id/legacy-rows
  *   GET    /admin/sources/:id/debug
@@ -618,6 +627,66 @@ export function mountSourceRoutes(app: RouteApp, deps: AdminRoutesDeps): void {
         `Sync dispatch failed for ${id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       throw new BadGatewayError(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  const syncNow = new SyncNowCoordinator({
+    listSources: () =>
+      sourceService
+        .listSourcesForAdmin()
+        .map((s) => ({ id: s.id, type: s.type, enabled: s.enabled })),
+    status: (id) => {
+      const st = sourceService.syncStatusFor(SourceId(id));
+      if (!st) return null;
+      return {
+        state: st.state,
+        lastSyncAt: st.lastSyncAt ?? null,
+        erroredAt: st.erroredAt,
+        errorMessage: st.errorMessage,
+      };
+    },
+    documentCount: (id) => getSourceStatsBulk(deps.db, [id])[id]?.documentCount ?? 0,
+    dispatch: async (id): Promise<SyncNowDispatchResult> => {
+      if (!wsServer) return { ok: false, error: "no WS server" };
+      const sourceId = SourceId(id);
+      const targets = sourceService.syncTargets(sourceId);
+      const devices = targets.length > 0 ? targets : [deviceForSource(sourceId)].filter(Boolean);
+      const online = devices.filter((d): d is DeviceId => !!d && wsServer.isConnected(d));
+      if (online.length === 0)
+        return { ok: false, error: "no device hosting the source is online" };
+      const results = await Promise.all(
+        online.map(async (deviceId) => {
+          try {
+            return await wsServer.sendCommand(deviceId, "source.sync", { sourceId });
+          } catch (err) {
+            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+        }),
+      );
+      const ok = results.some((r) => r.ok);
+      return {
+        ok,
+        triggered: results.reduce((n, r) => n + (r.ok ? (r.triggered ?? 0) : 0), 0),
+        skipped: results.reduce((n, r) => n + (r.ok ? (r.skipped ?? 0) : 0), 0),
+        error: ok
+          ? undefined
+          : results
+              .map((r) => r.error)
+              .filter(Boolean)
+              .join("; "),
+      };
+    },
+  });
+
+  app.post("/admin/sync-now", scope.admin(), validateJson(syncNowBody), async (c) => {
+    const body = c.req.valid("json");
+    try {
+      const result = await syncNow.syncNow(body);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof SyncNowUnknownSourceError) throw new NotFoundError(err.message);
+      if (err instanceof SyncNowBadRequestError) throw new BadRequestError(err.message);
+      throw err;
     }
   });
 

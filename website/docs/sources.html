@@ -2021,7 +2021,13 @@ WHERE contains(m.text, '&lt;@' || m.self_id || '&gt;')
                   <strong>Sync</strong>, or <code>omnesis sources sync &lt;id&gt;</code>.<br />
                   Runs an incremental sync without waiting for the next scheduled one.
                   <code>--wait</code> blocks until it finishes. If a sync is already running, it
-                  waits for that sync to finish.
+                  waits for that sync to finish. For a message that expires in minutes, such as a
+                  verification code, <code>omnesis sources sync-now &lt;id&gt;</code> or
+                  <code>--type &lt;type&gt;</code> refreshes just those sources and returns within
+                  <code>--timeout</code> seconds (default 20, at most 60). Concurrent requests for
+                  one source share a single sync, and a source that just finished one is not synced
+                  again for a few seconds. The answer lists each source's sync time, lag and new
+                  items.
                 </td>
               </tr>
               <tr>
