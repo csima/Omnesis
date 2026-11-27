@@ -2043,6 +2043,7 @@ let agentConversationsRuntime:
 // watches through it.
 let subscriptionService: import("./subscriptions/service.js").SubscriptionService | undefined;
 let statusCacheRuntime: import("./http/services/StatusCache.js").StatusCache | undefined;
+let sqlQueryRunner: import("./sql-query-runner.js").SqlQueryRunner | undefined;
 let mcpHttpRuntime: import("./http/routes/mcp-streamable.js").McpHttpRuntime | undefined;
 
 // The watch journal and the runtime over it.
@@ -2567,6 +2568,10 @@ const app = createServer(db, DB_PATH, {
   },
   onStatusCache: (cache) => {
     statusCacheRuntime = cache;
+  },
+  sqlEncryptionKey: storageEncryption.mainDbKey,
+  onSqlQueryRunner: (runner) => {
+    sqlQueryRunner = runner;
   },
   onMcpHttpRuntime: (runtime) => {
     mcpHttpRuntime = runtime;
@@ -3793,6 +3798,7 @@ const doShutdown = async (): Promise<void> => {
   }
   anthropicCatalogService.stop();
   statusCacheRuntime?.stop();
+  await sqlQueryRunner?.close();
   // Stop advertising on the LAN first — it's I/O-cheap and releases the
   // multicast socket so a quick restart doesn't collide on it.
   try {

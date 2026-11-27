@@ -14,6 +14,27 @@ import {
   EXIT_FAILURE,
 } from "../utils.js";
 
+/**
+ * The gateway cuts a sqlite query off at 15 s by default and at most 60 s
+ * (`OMNESIS_SQL_TIMEOUT_MS`). The CLI waits a little past that ceiling so it
+ * reports the gateway's own 504 (with its hint) instead of hanging or
+ * aborting first.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_S = 65;
+
+/** `--timeout` in seconds → milliseconds; a missing value is the default. */
+export function parseRequestTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return DEFAULT_REQUEST_TIMEOUT_S * 1000;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new CliError(
+      `${c.red}--timeout must be a positive number of seconds${c.reset}`,
+      EXIT_USER_ERROR,
+    );
+  }
+  return Math.round(seconds * 1000);
+}
+
 export const sqlCommand = defineCommand({
   meta: {
     name: "sql",
@@ -35,6 +56,10 @@ export const sqlCommand = defineCommand({
       type: "boolean",
       description: "Machine-readable JSON output",
     },
+    timeout: {
+      type: "string",
+      description: `request timeout in seconds (default: ${DEFAULT_REQUEST_TIMEOUT_S})`,
+    },
   },
   async run(ctx) {
     const { args } = ctx;
@@ -53,12 +78,23 @@ export const sqlCommand = defineCommand({
     const dbArg = args.db;
     const endpoint = dbArg === "sqlite" ? "/sql" : "/analytics/sql";
 
+    const timeoutMs = parseRequestTimeoutMs(args.timeout);
     const res = await withSpinner(`Running ${dbArg} query`, () =>
       gw(endpoint, {
         method: "POST",
         body: JSON.stringify({ sql }),
+        signal: AbortSignal.timeout(timeoutMs),
       }),
-    );
+    ).catch((err: unknown) => {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new CliError(
+          `${c.red}No response from the gateway within ${timeoutMs / 1000}s. ` +
+            `Narrow the query or raise --timeout.${c.reset}`,
+          EXIT_GATEWAY_ERROR,
+        );
+      }
+      throw err;
+    });
 
     if (!res.ok) {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
