@@ -298,4 +298,25 @@ describe("the message schema at the boundary", () => {
       quoMessageSchema.safeParse({ ...message({ direction: "incoming" }), ...patch }).success,
     ).toBe(false);
   });
+  test("an incoming text exposes the conversation and line ids a reply names", () => {
+    const extra = normalizeMessage(message({ direction: "incoming" }), ctx).metadata.extra!;
+    expect(extra).toMatchObject({
+      fromSelf: false,
+      threadId: "CNmaya0001",
+      quoNumberId: MAIN_LINE.id,
+      quoNumber: MAIN_LINE.phoneNumber,
+      counterparts: [MAYA],
+    });
+  });
+
+  test("an outgoing text is from self and carries the same reply identifiers", () => {
+    const extra = normalizeMessage(message({ direction: "outgoing" }), ctx).metadata.extra!;
+    expect(extra).toMatchObject({
+      fromSelf: true,
+      threadId: "CNmaya0001",
+      quoNumberId: MAIN_LINE.id,
+      quoNumber: MAIN_LINE.phoneNumber,
+      counterparts: [MAYA],
+    });
+  });
 });

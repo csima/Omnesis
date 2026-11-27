@@ -89,4 +89,69 @@ describe("daily Slack normalizer", () => {
   it("returns no document for an empty confirmed day", () => {
     expect(normalizeDay(CHANNEL, "2026-05-19", [], [], IDENTITY, ids)).toBeNull();
   });
+  it("exposes who spoke last and the exact thread and channel identifiers", () => {
+    const root = slackTs(Date.parse("2026-05-19T10:00:00Z"));
+    const other = slackTs(Date.parse("2026-05-19T10:05:00Z"));
+    const mine = slackTs(Date.parse("2026-05-19T10:10:00Z"));
+    const later = slackTs(Date.parse("2026-05-19T11:00:00Z"));
+    const extra = normalizeDay(
+      CHANNEL,
+      "2026-05-19",
+      [
+        { ts: root, text: "Question", user: "UOTHER0" },
+        { ts: other, thread_ts: root, text: "More", user: "UOTHER0" },
+        { ts: mine, thread_ts: root, text: "Answer", user: "USELF00" },
+        { ts: later, text: "Unrelated", user: "UOTHER0" },
+      ],
+      [
+        { id: "USELF00", name: "alex" },
+        { id: "UOTHER0", name: "river" },
+      ],
+      IDENTITY,
+      ids,
+    )!.metadata.extra!;
+    expect(extra).toMatchObject({
+      direction: "sent",
+      selfMessageCount: 1,
+      lastMessageFromSelf: false,
+      lastSelfMessageAt: "2026-05-19T10:10:00.000Z",
+      workspaceId: "TEXAMPLE",
+      channelId: "CEXAMPLE",
+      threadTs: [root, later],
+      unansweredThreadTs: [later],
+      latestTs: later,
+    });
+  });
+
+  it("is received with no self activity when the owner never spoke", () => {
+    const ts = slackTs(Date.parse("2026-05-19T10:00:00Z"));
+    const extra = normalizeDay(
+      CHANNEL,
+      "2026-05-19",
+      [{ ts, text: "Hi", user: "UOTHER0" }],
+      [{ id: "UOTHER0", name: "river" }],
+      IDENTITY,
+      ids,
+    )!.metadata.extra!;
+    expect(extra).toMatchObject({
+      direction: "received",
+      selfMessageCount: 0,
+      unansweredThreadTs: [ts],
+    });
+    expect(extra).not.toHaveProperty("lastSelfMessageAt");
+  });
+
+  it("names a reply's parent thread even when the root is on another day", () => {
+    const parent = slackTs(Date.parse("2026-05-18T10:00:00Z"));
+    const reply = slackTs(Date.parse("2026-05-19T10:00:00Z"));
+    const extra = normalizeDay(
+      CHANNEL,
+      "2026-05-19",
+      [{ ts: reply, thread_ts: parent, text: "Reply", user: "USELF00" }],
+      [{ id: "USELF00", name: "alex" }],
+      IDENTITY,
+      ids,
+    )!.metadata.extra!;
+    expect(extra).toMatchObject({ threadTs: [parent], unansweredThreadTs: [] });
+  });
 });

@@ -55,6 +55,16 @@ export function normalizeDay(
     for (const reply of sorted.filter((m) => m.thread_ts === root.ts && m.ts !== root.ts))
       lines.push("  ↳ " + render(reply));
   }
+  const fromSelf = (m: Message): boolean => m.user === identity.user_id;
+  const threadOrder: string[] = [];
+  const lastInThread = new Map<string, Message>();
+  for (const m of sorted) {
+    const key = m.thread_ts ?? m.ts;
+    if (!lastInThread.has(key)) threadOrder.push(key);
+    lastInThread.set(key, m);
+  }
+  const selfMessages = sorted.filter(fromSelf);
+  const lastMessage = sorted[sorted.length - 1];
   const title = `${identity.team} · ${conversation.name ?? conversation.user ?? conversation.id} — ${day}`;
   const fullContent = `# ${title}\n\n${lines.join("\n\n")}`;
   const notice = "\n\n_Conversation preview truncated; full messages remain in analytics._";
@@ -82,6 +92,21 @@ export function normalizeDay(
         isGroup: !conversation.is_im,
         participants: people.filter((p) => p.role === "participant").map((p) => p.name),
         date: day,
+        direction: selfMessages.length === 0 ? "received" : "sent",
+        selfMessageCount: selfMessages.length,
+        lastMessageFromSelf: fromSelf(lastMessage),
+        ...(selfMessages.length
+          ? {
+              lastSelfMessageAt: new Date(
+                tsMs(selfMessages[selfMessages.length - 1].ts),
+              ).toISOString(),
+            }
+          : {}),
+        workspaceId: identity.team_id,
+        channelId: conversation.id,
+        threadTs: threadOrder,
+        unansweredThreadTs: threadOrder.filter((key) => !fromSelf(lastInThread.get(key)!)),
+        latestTs: lastMessage.ts,
       },
     },
     sourceCreatedAt: new Date(tsMs(sorted[0].ts)).toISOString(),
