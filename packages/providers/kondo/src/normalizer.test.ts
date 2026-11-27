@@ -63,7 +63,65 @@ describe("normalizeChat", () => {
       labels: ["Hiring"],
       archived: false,
       date: "2026-03-08",
+      inboxProfileId: OWNER_URN,
+      participantProfileIds: [MAYA.profileUrn],
+      direction: "sent",
+      selfMessageCount: 1,
+      lastMessageFromSelf: true,
+      lastSelfMessageAt: "2026-03-08T09:40:00.000Z",
     });
+  });
+
+  test("a day the owner did not write in is received and the other side spoke last", () => {
+    const [, second] = normalizeChat(chat(), ctx);
+    expect(second.metadata.extra).toMatchObject({
+      direction: "received",
+      selfMessageCount: 0,
+      lastMessageFromSelf: false,
+      inboxProfileId: OWNER_URN,
+    });
+    expect(second.metadata.extra).not.toHaveProperty("lastSelfMessageAt");
+  });
+
+  test("empty messages do not count as the owner speaking", () => {
+    const [doc] = normalizeChat(
+      chat({
+        messages: [
+          msg(MAYA, "2026-03-08T09:15:00.000Z", "Hello"),
+          msg("self", "2026-03-08T09:40:00.000Z", "   "),
+        ],
+      }),
+      ctx,
+    );
+    expect(doc.metadata.extra).toMatchObject({
+      selfMessageCount: 0,
+      lastMessageFromSelf: false,
+      messageCount: 1,
+    });
+  });
+
+  test("a group chat lists every other member's profile id once, never the owner's", () => {
+    const [doc] = normalizeChat(
+      chat({
+        participants: [OWNER, MAYA, JAMIE, MAYA],
+        messages: [msg(JAMIE, "2026-03-08T09:15:00.000Z", "Morning")],
+      }),
+      ctx,
+    );
+    expect(doc.metadata.extra?.participantProfileIds).toEqual([MAYA.profileUrn, JAMIE.profileUrn]);
+  });
+
+  test("a participant Kondo gave no member id leaves participantProfileIds empty", () => {
+    const [doc] = normalizeChat(
+      chat({
+        participants: [OWNER, { fullName: "Alex Example" }],
+        messages: [
+          { sender: "Alex Example", self: false, time: "2026-03-08T09:15:00.000Z", text: "Hi" },
+        ],
+      }),
+      ctx,
+    );
+    expect(doc.metadata.extra?.participantProfileIds).toEqual([]);
   });
 
   test("names the owner by the inbox's member id and everyone else by theirs and their handle", () => {

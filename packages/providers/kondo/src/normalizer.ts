@@ -103,6 +103,8 @@ interface Roster {
   people: PersonMention[];
   /** Display names of the other people in the chat. */
   others: string[];
+  /** LinkedIn member ids of the other people in the chat, where Kondo sent them. */
+  otherProfileIds: string[];
   selfName?: string;
 }
 
@@ -121,6 +123,7 @@ function roster(chat: KondoChat, messages: KondoMessage[], ownerUrn: string | un
 
   const people: PersonMention[] = [];
   const others: string[] = [];
+  const otherProfileIds: string[] = [];
   const seen = new Set<string>();
   let selfName: string | undefined;
   const selfLids = new Set<string>();
@@ -138,6 +141,7 @@ function roster(chat: KondoChat, messages: KondoMessage[], ownerUrn: string | un
     if (!key || seen.has(key)) continue;
     seen.add(key);
     if (name) others.push(name);
+    if (p.profileUrn && !otherProfileIds.includes(p.profileUrn)) otherProfileIds.push(p.profileUrn);
     people.push({
       role: "participant",
       ...(name ? { name } : {}),
@@ -166,7 +170,7 @@ function roster(chat: KondoChat, messages: KondoMessage[], ownerUrn: string | un
   } else if (messages.some((m) => m.self === true)) {
     people.unshift({ role: "participant", isSelf: true });
   }
-  return { people, others, selfName };
+  return { people, others, otherProfileIds, selfName };
 }
 
 /**
@@ -234,6 +238,10 @@ function renderDay(
     .filter((r): r is { message: KondoMessage; line: string } => r !== null);
   if (rendered.length === 0) return null;
 
+  const selfMessages = rendered.filter((r) => r.message.self === true);
+  const lastRendered = rendered[rendered.length - 1].message;
+  const lastSelf = selfMessages[selfMessages.length - 1]?.message;
+
   const title = `LinkedIn chat with ${shared.chatName} — ${day}`;
   const lines = [`# ${title}`, ""];
   let length = lines[0].length + 1;
@@ -270,6 +278,15 @@ function renderDay(
         labels: shared.labels,
         archived: shared.ctx.archived,
         date: day,
+        // The inbox is the LinkedIn member the chat was read as: the id a
+        // connector names to act as the owner in this thread. Kondo's chat
+        // always carries it; it is also the owner's own member id.
+        inboxProfileId: chat.profileUrn,
+        participantProfileIds: shared.people.otherProfileIds,
+        direction: selfMessages.length === 0 ? "received" : "sent",
+        selfMessageCount: selfMessages.length,
+        lastMessageFromSelf: lastRendered.self === true,
+        ...(lastSelf ? { lastSelfMessageAt: new Date(lastSelf.time).toISOString() } : {}),
       },
     },
     sourceCreatedAt: new Date(rendered[0].message.time).toISOString(),
