@@ -110,6 +110,7 @@ export class NotionDatabasesSource {
   private providerId: ProviderId;
   private dataCutoff?: string;
   private userMap?: UserMap;
+  private selfUserId?: string;
   private now: () => number;
 
   constructor(
@@ -118,13 +119,14 @@ export class NotionDatabasesSource {
     providerId: ProviderId,
     dataCutoff?: string,
     userMap?: UserMap,
-    opts: { nowFn?: () => number } = {},
+    opts: { nowFn?: () => number; selfUserId?: string } = {},
   ) {
     this.client = client;
     this.sourceId = sourceId;
     this.providerId = providerId;
     this.dataCutoff = dataCutoff;
     this.userMap = userMap;
+    this.selfUserId = opts.selfUserId;
     this.now = opts.nowFn ?? Date.now;
   }
 
@@ -482,6 +484,7 @@ export class NotionDatabasesSource {
         this.sourceId,
         this.providerId,
         this.userMap,
+        this.selfUserId,
       );
       // Track the summary's externalId for the snapshot regardless of
       // whether we re-emit the doc this cycle — it's a "currently
@@ -554,6 +557,7 @@ export class NotionDatabasesSource {
         this.sourceId,
         this.providerId,
         this.userMap,
+        { selfUserId: this.selfUserId, databaseId: db.id, dataSourceId: db.dataSourceId },
       );
       documents.push({ ...rowDoc, partitionKey: db.id });
       if (cursor.inSnapshotMode) {

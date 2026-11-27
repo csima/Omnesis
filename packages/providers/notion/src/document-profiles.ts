@@ -9,11 +9,11 @@
  * shapes (a standalone page, a database's schema summary, a database row)
  * stamp the `document` type, name `created_by` as `author`, and name a
  * distinct `last_edited_by` as `mentioned`; only the summary document carries
- * a tag. Fields the normalizer fills with an opaque Notion UUID
- * (`extra.notionId`, `extra.notionDatabaseId`) or a derived analytics table
- * name (`extra.duckdbTable`) are deliberately absent: no natural-language
- * phrase yields one of those values, so a condition referencing them could
- * only ever be built from a guess.
+ * a tag. `extra.notionId` and the derived analytics table name
+ * (`extra.duckdbTable`) stay undeclared: no natural-language phrase yields
+ * one of those values. The parent, data source and user ids that are declared
+ * are opaque too, but a write-only connector names them to act on a page, so
+ * they are declared for the code that reads them rather than for a phrase.
  */
 
 import type { DocumentEventProfile } from "@omnesis/source-sdk";
@@ -38,6 +38,50 @@ export const notionPagesDocumentProfile: DocumentEventProfile = {
         block_id: ["inside a block", "inside a toggle", "inside a column"],
       },
     },
+    {
+      path: "extra.parentId",
+      type: "string",
+      description:
+        "Id of the object's immediate parent: the page, database, data source or block it sits under. Absent for a page at the workspace root. Opaque; `extra.parentType` says which kind it is.",
+    },
+    {
+      path: "extra.lastEditedTime",
+      type: "string",
+      description:
+        "When the object was last edited, as an ISO 8601 instant, as Notion reports it. Refreshed on every edit.",
+    },
+    {
+      path: "extra.archived",
+      type: "boolean",
+      description: "Whether the object is archived in Notion.",
+    },
+    {
+      path: "extra.inTrash",
+      type: "boolean",
+      description: "Whether the object is in Notion's trash.",
+    },
+    {
+      path: "extra.createdByUserId",
+      type: "string",
+      description: "Notion user id of whoever created the object. Opaque.",
+    },
+    {
+      path: "extra.lastEditedByUserId",
+      type: "string",
+      description: "Notion user id of whoever last edited the object. Opaque.",
+    },
+    {
+      path: "extra.createdBySelf",
+      type: "boolean",
+      description:
+        "True when the owner of the Notion connection created the object, false when someone else did. Absent when Notion does not name the connection's owner.",
+    },
+    {
+      path: "extra.lastEditedBySelf",
+      type: "boolean",
+      description:
+        "True when the owner of the Notion connection made the last edit, false when someone else did. Absent when Notion does not name the connection's owner.",
+    },
   ],
 };
 
@@ -58,6 +102,62 @@ export const notionDatabasesDocumentProfile: DocumentEventProfile = {
       valueAliases: {
         "notion-database": ["a database", "a database's schema", "a table definition"],
       },
+    },
+    {
+      path: "extra.notionDatabaseId",
+      type: "string",
+      description:
+        "Id of the database a row belongs to, whether Notion parents the row by database or by data source. Carried by row documents only. Opaque.",
+    },
+    {
+      path: "extra.dataSourceId",
+      type: "string",
+      description:
+        "Id of the data source a row belongs to, the identifier a query or a new row names. Carried by row documents only. Opaque.",
+    },
+    {
+      path: "extra.parentId",
+      type: "string",
+      description:
+        "Id of the object's immediate parent: the page, database, data source or block it sits under. Absent for a page at the workspace root. Opaque; `extra.parentType` says which kind it is.",
+    },
+    {
+      path: "extra.lastEditedTime",
+      type: "string",
+      description:
+        "When the object was last edited, as an ISO 8601 instant, as Notion reports it. Refreshed on every edit.",
+    },
+    {
+      path: "extra.archived",
+      type: "boolean",
+      description: "Whether the object is archived in Notion.",
+    },
+    {
+      path: "extra.inTrash",
+      type: "boolean",
+      description: "Whether the object is in Notion's trash.",
+    },
+    {
+      path: "extra.createdByUserId",
+      type: "string",
+      description: "Notion user id of whoever created the object. Opaque.",
+    },
+    {
+      path: "extra.lastEditedByUserId",
+      type: "string",
+      description: "Notion user id of whoever last edited the object. Opaque.",
+    },
+    {
+      path: "extra.createdBySelf",
+      type: "boolean",
+      description:
+        "True when the owner of the Notion connection created the object, false when someone else did. Absent when Notion does not name the connection's owner.",
+    },
+    {
+      path: "extra.lastEditedBySelf",
+      type: "boolean",
+      description:
+        "True when the owner of the Notion connection made the last edit, false when someone else did. Absent when Notion does not name the connection's owner.",
     },
   ],
 };

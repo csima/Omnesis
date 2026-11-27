@@ -15,12 +15,18 @@ import { type DocumentInput, type PersonRole } from "@omnesis/types";
 import {
   gmailDocumentEventProfile,
   googleCalendarDocumentEventProfile,
+  googleDriveDocumentEventProfile,
+  googleContactsDocumentEventProfile,
 } from "./document-event-profiles.js";
 import {
   createMockGmail,
   createGmailSource,
   createMockCalendar,
   createCalendarSource,
+  createMockDrive,
+  createDriveSource,
+  makeDriveFile,
+  mockDriveFilesList,
   makeCalendarEvent,
   makeCalendarListEntry,
 } from "./testing/mock-google.js";
@@ -320,5 +326,43 @@ describe("Google Calendar profile matches the normalizer", () => {
     expect(googleCalendarDocumentEventProfile.metadataFields?.some((f) => f.path === "tags")).toBe(
       false,
     );
+  });
+});
+
+describe("Drive and Contacts profiles", () => {
+  test("satisfy the source-boundary contract and are published", () => {
+    expect(() =>
+      validateDocumentEventProfile(googleDriveDocumentEventProfile, "google-drive"),
+    ).not.toThrow();
+    expect(() =>
+      validateDocumentEventProfile(googleContactsDocumentEventProfile, "google-contacts"),
+    ).not.toThrow();
+    const drive = googleProvider.sources.find((s) => s.id === "google-drive");
+    const contacts = googleProvider.sources.find((s) => s.id === "google-contacts");
+    expect(drive?.documentEventProfile).toBe(googleDriveDocumentEventProfile);
+    expect(contacts?.documentEventProfile).toBe(googleContactsDocumentEventProfile);
+  });
+
+  test("every declared Drive field is emitted by a fully populated file", async () => {
+    const drive = createMockDrive();
+    mockDriveFilesList(drive, [
+      makeDriveFile({
+        parents: ["folder-a"],
+        driveId: "d1",
+        headRevisionId: "r1",
+        version: "3",
+        ownedByMe: true,
+        starred: false,
+        capabilities: { canEdit: true },
+        lastModifyingUser: { me: false },
+      }),
+    ]);
+    drive.files.export = vi.fn(() => Promise.resolve({ data: "body" }));
+    const doc = (await createDriveSource(drive).sync(null)).documents[0]!;
+    expect(doc.metadata.documentType).toBe("file");
+    for (const f of googleDriveDocumentEventProfile.metadataFields ?? []) {
+      const key = f.path.replace(/^extra\./, "");
+      expect(doc.metadata.extra, f.path).toHaveProperty(key);
+    }
   });
 });

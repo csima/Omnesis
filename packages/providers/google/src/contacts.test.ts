@@ -446,3 +446,72 @@ describe("GoogleContactsSource", () => {
     expect((result.cursor as any).syncToken).toBe("sync-token-fresh");
   });
 });
+
+describe("GoogleContactsSource etag, resource name and groups", () => {
+  async function syncOne(person: Record<string, unknown>) {
+    const { GoogleContactsSource } = await import("./contacts.js");
+    const source = new GoogleContactsSource({} as any, "u@example.com");
+    const listMock = vi.fn(() =>
+      Promise.resolve({ data: { connections: [person], nextSyncToken: "tok" } }),
+    );
+    Object.defineProperty(source, "people", {
+      value: { people: { connections: { list: listMock } } },
+      writable: true,
+      configurable: true,
+    });
+    const result = await source.sync(null);
+    return { doc: result.documents[0]!, listMock };
+  }
+
+  test("requests memberships", async () => {
+    const { listMock } = await syncOne({ resourceName: "people/c1" });
+    expect((listMock as any).mock.calls[0][0].personFields).toContain("memberships");
+  });
+
+  test("a starred contact carries etag, resource name, starred and its groups", async () => {
+    const { doc } = await syncOne({
+      resourceName: "people/c42",
+      etag: "%EgUBAj0LNy4=",
+      names: [{ displayName: "contact-fixture" }],
+      memberships: [
+        { contactGroupMembership: { contactGroupResourceName: "contactGroups/myContacts" } },
+        { contactGroupMembership: { contactGroupResourceName: "contactGroups/starred" } },
+        { contactGroupMembership: { contactGroupResourceName: "contactGroups/starred" } },
+        { contactGroupMembership: { contactGroupResourceName: "contactGroups/abc123" } },
+        { domainMembership: { inViewerDomain: true } },
+      ],
+    });
+    expect(doc.metadata.extra).toMatchObject({
+      etag: "%EgUBAj0LNy4=",
+      resourceName: "people/c42",
+      starred: true,
+      groupResourceNames: [
+        "contactGroups/myContacts",
+        "contactGroups/starred",
+        "contactGroups/abc123",
+      ],
+    });
+  });
+
+  test("a contact outside the starred group is not starred", async () => {
+    const { doc } = await syncOne({
+      resourceName: "people/c43",
+      etag: "etag-2",
+      memberships: [
+        { contactGroupMembership: { contactGroupResourceName: "contactGroups/myContacts" } },
+      ],
+    });
+    const extra = doc.metadata.extra as Record<string, unknown>;
+    expect(extra.starred).toBe(false);
+    expect(extra.groupResourceNames).toEqual(["contactGroups/myContacts"]);
+  });
+
+  test("a contact with no memberships or etag omits groups and etag", async () => {
+    const { doc } = await syncOne({ resourceName: "people/c44" });
+    const extra = doc.metadata.extra as Record<string, unknown>;
+    expect(extra.starred).toBe(false);
+    expect(extra.resourceName).toBe("people/c44");
+    expect(extra.etag).toBeUndefined();
+    expect(extra.groupResourceNames).toBeUndefined();
+  });
+});

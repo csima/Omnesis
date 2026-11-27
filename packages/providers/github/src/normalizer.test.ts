@@ -492,23 +492,72 @@ describe("document-event profiles", () => {
   }
 
   const thread = (t: GqlIssue | GqlPullRequest) =>
-    threadToDocument(t, REPO, providerId, sourceId).doc;
-  const openIssue = thread(issue());
+    threadToDocument(t, REPO, providerId, sourceId, undefined, { selfLogin: "maya-reeves" }).doc;
+  const openIssue = thread(
+    issue({
+      id: "I_synthetic_12",
+      comments: {
+        totalCount: 1,
+        nodes: [
+          {
+            id: "IC_synthetic_1",
+            author: { login: "jlopez-dev", __typename: "User" },
+            body: "Repro'd.",
+            createdAt: "2026-03-13T08:15:00Z",
+          },
+        ],
+      },
+    }),
+  );
   const unlabelledIssue = thread(issue({ labels: { nodes: [] } }));
   const answeredDiscussion = discussionToDocument(discussion(true), REPO, providerId, sourceId);
   // One document per state a thread can be in, so every declared status value
   // is proven reachable and no reachable value goes undeclared.
   const threadDocs: DocumentInput[] = [
     openIssue,
-    thread(issue({ state: "CLOSED" })),
-    thread(pull()),
+    thread(issue({ state: "CLOSED", stateReason: "NOT_PLANNED" })),
+    thread(
+      pull({
+        id: "PR_synthetic_34",
+        headRefOid: "c".repeat(40),
+        reviewRequests: {
+          nodes: [
+            { requestedReviewer: { __typename: "User", login: "Maya-Reeves" } },
+            { requestedReviewer: { __typename: "Team", combinedSlug: "acme/reviewers" } },
+          ],
+        },
+        reviewThreads: { nodes: [{ id: "PRRT_synthetic_1" }] },
+        reviews: {
+          nodes: [
+            {
+              id: "PRR_synthetic_1",
+              author: { login: "dlin-eng", __typename: "User" },
+              state: "COMMENTED",
+              body: "ping @maya-reeves",
+              submittedAt: "2026-03-14T10:00:00Z",
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_synthetic_1",
+                    author: { login: "dlin-eng", __typename: "User" },
+                    body: "nit",
+                    createdAt: "2026-03-14T10:01:00Z",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    ),
     thread(pull({ merged: false, mergedAt: null, mergedBy: null, state: "OPEN", isDraft: true })),
     thread(pull({ merged: false, mergedAt: null, mergedBy: null, state: "CLOSED" })),
     answeredDiscussion,
     discussionToDocument(discussion(false), REPO, providerId, sourceId),
   ];
 
-  const plainCommit = commitToDocument(detail(), REPO, providerId, commitsSourceId);
+  const self = { selfLogin: "maya-reeves" };
+  const plainCommit = commitToDocument(detail(), REPO, providerId, commitsSourceId, self);
   // A merge commit whose committer differs from its author and whose message
   // mentions a third login: the one shape that reaches every declared role
   // and the merge-commit flag at once.
@@ -525,6 +574,7 @@ describe("document-event profiles", () => {
     REPO,
     providerId,
     commitsSourceId,
+    self,
   );
   const commitDocs: DocumentInput[] = [plainCommit, mergeCommit];
 
@@ -598,13 +648,29 @@ describe("document-event profiles", () => {
     }
   });
 
+  // Fields only an issue or a pull request can carry.
+  const THREAD_ONLY_FIELDS = new Set([
+    "extra.nodeId",
+    "extra.headSha",
+    "extra.stateReason",
+    "extra.assignees",
+    "extra.requestedReviewers",
+    "extra.commentIds",
+    "extra.reviewIds",
+    "extra.reviewCommentIds",
+    "extra.reviewThreadIds",
+    "extra.authorIsSelf",
+    "extra.reviewRequestedFromSelf",
+    "extra.mentionsSelf",
+  ]);
+
   it("labels are absent exactly when a thread has none, and a discussion never has any", () => {
     expect(metadataAt(openIssue, "tags")).toEqual(["bug", "sync"]);
     expect(metadataAt(unlabelledIssue, "tags")).toBeUndefined();
     expect(metadataAt(answeredDiscussion, "tags")).toBeUndefined();
     // Every other declared field still reaches a discussion.
     for (const f of githubThreadsDocumentProfile.metadataFields ?? []) {
-      if (f.path === "tags") continue;
+      if (f.path === "tags" || THREAD_ONLY_FIELDS.has(f.path)) continue;
       expect(metadataAt(answeredDiscussion, f.path), f.path).toBeDefined();
     }
   });
@@ -612,5 +678,222 @@ describe("document-event profiles", () => {
   it("the merge-commit flag is absent, never false, on a single-parent commit", () => {
     expect(metadataAt(mergeCommit, "extra.mergeCommit")).toBe(true);
     expect(metadataAt(plainCommit, "extra.mergeCommit")).toBeUndefined();
+  });
+});
+
+describe("structured ids and self flags", () => {
+  const SELF = { selfLogin: "Maya-Reeves" };
+  const extraOf = (d: DocumentInput) => d.metadata.extra as Record<string, unknown>;
+
+  it("an issue carries its node id, state reason, assignees and comment ids", () => {
+    const { doc } = threadToDocument(
+      issue({
+        id: "I_synthetic_1",
+        state: "CLOSED",
+        stateReason: "COMPLETED",
+        comments: {
+          totalCount: 2,
+          nodes: [
+            { id: "IC_1", body: "a", createdAt: "2026-03-13T08:15:00Z", author: { login: "a" } },
+            { id: "IC_2", body: "b", createdAt: "2026-03-13T08:16:00Z", author: { login: "b" } },
+          ],
+        },
+      }),
+      REPO,
+      providerId,
+      sourceId,
+    );
+    expect(extraOf(doc)).toMatchObject({
+      nodeId: "I_synthetic_1",
+      stateReason: "completed",
+      assignees: ["jlopez-dev"],
+      commentIds: ["IC_1", "IC_2"],
+    });
+    expect(extraOf(doc)).not.toHaveProperty("headSha");
+    expect(extraOf(doc)).not.toHaveProperty("requestedReviewers");
+    expect(extraOf(doc)).not.toHaveProperty("reviewIds");
+  });
+
+  it("an issue never closed has no state reason", () => {
+    const { doc } = threadToDocument(issue({ stateReason: null }), REPO, providerId, sourceId);
+    expect(extraOf(doc)).not.toHaveProperty("stateReason");
+    expect(extraOf(doc)).not.toHaveProperty("nodeId");
+  });
+
+  it("a pull request carries head sha, requested reviewers, review and review-thread ids", () => {
+    const { doc } = threadToDocument(
+      pull({
+        id: "PR_1",
+        headRefOid: "d".repeat(40),
+        reviewRequests: {
+          nodes: [
+            { requestedReviewer: { __typename: "User", login: "bob-example" } },
+            { requestedReviewer: { __typename: "Team", combinedSlug: "acme/core" } },
+            { requestedReviewer: null },
+            null,
+          ],
+        },
+        reviewThreads: { nodes: [{ id: "T_1" }, { id: "T_2" }, null] },
+        reviews: {
+          nodes: [
+            {
+              id: "R_1",
+              state: "APPROVED",
+              author: { login: "bob-example", __typename: "User" },
+              submittedAt: "2026-03-14T10:00:00Z",
+              comments: {
+                nodes: [{ id: "RC_1", body: "x", createdAt: "2026-03-14T10:01:00Z" }, null],
+              },
+            },
+          ],
+        },
+      }),
+      REPO,
+      providerId,
+      sourceId,
+    );
+    expect(extraOf(doc)).toMatchObject({
+      nodeId: "PR_1",
+      headSha: "d".repeat(40),
+      requestedReviewers: ["bob-example", "acme/core"],
+      reviewIds: ["R_1"],
+      reviewCommentIds: ["RC_1"],
+      reviewThreadIds: ["T_1", "T_2"],
+    });
+    expect(extraOf(doc)).not.toHaveProperty("stateReason");
+  });
+
+  it("id lists keep only the newest 100", () => {
+    const nodes = Array.from({ length: 130 }, (_, i) => ({
+      id: `IC_${i}`,
+      body: "c",
+      createdAt: "2026-03-13T08:15:00Z",
+      author: { login: "a" },
+    }));
+    const { doc } = threadToDocument(
+      issue({ comments: { totalCount: 130, nodes } }),
+      REPO,
+      providerId,
+      sourceId,
+    );
+    const ids = extraOf(doc).commentIds as string[];
+    expect(ids).toHaveLength(100);
+    expect(ids[0]).toBe("IC_30");
+    expect(ids[99]).toBe("IC_129");
+  });
+
+  it("self flags are omitted when the login is unknown", () => {
+    const { doc } = threadToDocument(issue(), REPO, providerId, sourceId);
+    for (const k of ["authorIsSelf", "mentionsSelf", "reviewRequestedFromSelf"]) {
+      expect(extraOf(doc)).not.toHaveProperty(k);
+    }
+  });
+
+  it("flags the account's own issue and a mention of it, case-insensitively", () => {
+    const { doc } = threadToDocument(
+      issue({ body: "ping @MAYA-reeves please", author: { login: "maya-reeves" } }),
+      REPO,
+      providerId,
+      sourceId,
+      undefined,
+      SELF,
+    );
+    expect(extraOf(doc)).toMatchObject({ authorIsSelf: true, mentionsSelf: true });
+    expect(extraOf(doc)).not.toHaveProperty("reviewRequestedFromSelf");
+  });
+
+  it("flags someone else's issue that does not mention the account", () => {
+    const { doc } = threadToDocument(
+      issue({
+        body: "no mention; `@maya-reeves` in code",
+        author: { login: "bob-example" },
+        comments: null,
+      }),
+      REPO,
+      providerId,
+      sourceId,
+      undefined,
+      SELF,
+    );
+    expect(extraOf(doc)).toMatchObject({ authorIsSelf: false, mentionsSelf: false });
+  });
+
+  it("a mention in a comment counts", () => {
+    const { doc } = threadToDocument(
+      issue({
+        body: "plain",
+        comments: {
+          totalCount: 1,
+          nodes: [
+            {
+              body: "cc @maya-reeves",
+              createdAt: "2026-03-13T08:15:00Z",
+              author: { login: "bob-example" },
+            },
+          ],
+        },
+      }),
+      REPO,
+      providerId,
+      sourceId,
+      undefined,
+      SELF,
+    );
+    expect(extraOf(doc).mentionsSelf).toBe(true);
+  });
+
+  it("reviewRequestedFromSelf is true for a named request, not a team's", () => {
+    const requested = (reviewer: object) =>
+      threadToDocument(
+        pull({ reviewRequests: { nodes: [{ requestedReviewer: reviewer }] } }),
+        REPO,
+        providerId,
+        sourceId,
+        undefined,
+        SELF,
+      ).doc;
+    expect(
+      extraOf(requested({ __typename: "User", login: "maya-reeves" })).reviewRequestedFromSelf,
+    ).toBe(true);
+    expect(
+      extraOf(requested({ __typename: "Team", combinedSlug: "acme/maya-reeves" }))
+        .reviewRequestedFromSelf,
+    ).toBe(false);
+    expect(
+      extraOf(requested({ __typename: "User", login: "bob-example" })).reviewRequestedFromSelf,
+    ).toBe(false);
+  });
+
+  it("commits flag authorIsSelf by login or noreply address, and omit it without a login", () => {
+    const mine = commitToDocument(detail(), REPO, providerId, commitsSourceId, SELF);
+    expect(extraOf(mine).authorIsSelf).toBe(true);
+
+    const theirs = commitToDocument(
+      detail({ author: { login: "bob-example", type: "User" } }),
+      REPO,
+      providerId,
+      commitsSourceId,
+      SELF,
+    );
+    expect(extraOf(theirs).authorIsSelf).toBe(false);
+
+    const noreply = commitToDocument(
+      detail({
+        author: null,
+        commit: {
+          message: "m",
+          author: { name: "Maya", email: "123+maya-reeves@users.noreply.github.com" },
+          committer: { name: "Maya", email: "123+maya-reeves@users.noreply.github.com" },
+        },
+      }),
+      REPO,
+      providerId,
+      commitsSourceId,
+      SELF,
+    );
+    expect(extraOf(noreply).authorIsSelf).toBe(true);
+
+    const unknown = commitToDocument(detail(), REPO, providerId, commitsSourceId);
+    expect(extraOf(unknown)).not.toHaveProperty("authorIsSelf");
   });
 });

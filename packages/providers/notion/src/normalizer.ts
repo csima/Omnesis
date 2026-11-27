@@ -113,13 +113,95 @@ function extractPeople(
 }
 
 /**
- * Extract the parent database ID from a page, if it lives inside a database.
+ * The loosely-typed parent every Notion object carries. A page parented by a
+ * data source (API 2025-09-03 onward) names both the data source and the
+ * database that holds it, so a row keeps its database whichever shape the
+ * parent takes.
  */
-function extractParentDatabaseId(page: PageObjectResponse): string | undefined {
-  if (page.parent.type === "database_id") {
-    return page.parent.database_id;
+type NotionParent = {
+  type?: string;
+  page_id?: string;
+  database_id?: string;
+  data_source_id?: string;
+  block_id?: string;
+};
+
+function parentOf(source: { parent?: unknown }): NotionParent | undefined {
+  return source.parent as NotionParent | undefined;
+}
+
+/**
+ * The id of the database a row lives in. A `database_id` parent names it
+ * directly; a `data_source_id` parent carries it beside the data source id.
+ * `fallback` is the database the caller walked to reach the row, used only
+ * when the parent itself does not name one.
+ */
+function extractParentDatabaseId(page: PageObjectResponse, fallback?: string): string | undefined {
+  const parent = parentOf(page);
+  if (parent?.type === "database_id" || parent?.type === "data_source_id") {
+    return parent.database_id ?? fallback;
   }
   return undefined;
+}
+
+/** The data source a row lives in, from its parent or else the one the caller walked. */
+function extractParentDataSourceId(
+  page: PageObjectResponse,
+  fallback?: string,
+): string | undefined {
+  const parent = parentOf(page);
+  if (parent?.type === "data_source_id") return parent.data_source_id ?? fallback;
+  if (parent?.type === "database_id") return fallback;
+  return undefined;
+}
+
+/** The id of the object's immediate parent, whatever kind it is; absent at the workspace root. */
+function immediateParentId(source: { parent?: unknown }): string | undefined {
+  const parent = parentOf(source);
+  switch (parent?.type) {
+    case "page_id":
+      return parent.page_id;
+    case "database_id":
+      return parent.database_id;
+    case "data_source_id":
+      return parent.data_source_id;
+    case "block_id":
+      return parent.block_id;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The structured facts every Notion document carries beside its
+ * type-specific ones: where the object sits, when and by whom it was last
+ * touched, and whether it is archived or in the trash. The `*BySelf` flags are
+ * present only when the integration's owner is known.
+ */
+function commonExtra(
+  source: Pick<PageObjectResponse, "created_by" | "last_edited_by" | "last_edited_time"> & {
+    parent?: unknown;
+    archived?: boolean;
+    is_archived?: boolean;
+    in_trash?: boolean;
+  },
+  selfUserId?: string,
+): Record<string, unknown> {
+  const parentId = immediateParentId(source);
+  return {
+    ...(parentId ? { parentId } : {}),
+    lastEditedTime: source.last_edited_time,
+    archived: Boolean(source.archived ?? source.is_archived),
+    inTrash: Boolean(source.in_trash),
+    createdByUserId: source.created_by.id,
+    lastEditedByUserId: source.last_edited_by.id,
+    ...(selfUserId
+      ? {
+          createdBySelf: source.created_by.id === selfUserId,
+          lastEditedBySelf: source.last_edited_by.id === selfUserId,
+        }
+      : {}),
+  };
 }
 
 /**
@@ -142,12 +224,14 @@ export function pageToDocument(
   providerId: ProviderId,
   userMap?: UserMap,
   linkedPageIds?: string[],
+  selfUserId?: string,
 ): DocumentInput {
   const title = extractPageTitle(page);
 
   const extra: Record<string, unknown> = {
     notionId: page.id,
     parentType: page.parent.type,
+    ...commonExtra(page, selfUserId),
   };
   if (linkedPageIds && linkedPageIds.length > 0) {
     extra.links = linkedPageIds;
@@ -181,6 +265,7 @@ export function databaseSummaryToDocument(
   sourceId: SourceId,
   providerId: ProviderId,
   userMap?: UserMap,
+  selfUserId?: string,
 ): DocumentInput {
   const title = extractDatabaseTitle(database);
   const databaseId = stableDatabaseId(database);
@@ -209,6 +294,7 @@ export function databaseSummaryToDocument(
   const extra: Record<string, unknown> = {
     notionId: databaseId,
     duckdbTable: schema.tableName,
+    ...commonExtra(database, selfUserId),
   };
 
   // When the database lives under a Notion page, emit a reference-graph link
@@ -264,6 +350,8 @@ export function databaseRowToDocument(
   sourceId: SourceId,
   providerId: ProviderId,
   userMap?: UserMap,
+  /** What the caller knows beyond the row's own parent. */
+  opts: { selfUserId?: string; databaseId?: string; dataSourceId?: string } = {},
 ): DocumentInput {
   const rowTitle = extractPageTitle(page);
   const title = `${dbTitle} > ${rowTitle}`;
@@ -287,7 +375,9 @@ export function databaseRowToDocument(
       people: extractPeople(page, userMap),
       extra: {
         notionId: page.id,
-        notionDatabaseId: extractParentDatabaseId(page),
+        notionDatabaseId: extractParentDatabaseId(page, opts.databaseId),
+        dataSourceId: extractParentDataSourceId(page, opts.dataSourceId),
+        ...commonExtra(page, opts.selfUserId),
       },
     },
     sourceCreatedAt: page.created_time,

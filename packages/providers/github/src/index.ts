@@ -304,6 +304,7 @@ export default defineProvider<GithubContext>({
           sourceId,
           commitsSourceId: SourceId(`github-commits:${accountId}`),
           accountId: String(accountId),
+          selfLogin: accountLogin(String(accountId)),
           dataCutoff,
           sourceConfig,
         });
@@ -339,11 +340,12 @@ export default defineProvider<GithubContext>({
       documentEventProfile: githubCommitsDocumentProfile,
       defaultSyncInterval: "15m",
       params: REPO_PARAMS,
-      async create({ sourceId, providerId, dataCutoff, sourceConfig }, ctx) {
+      async create({ sourceId, providerId, accountId, dataCutoff, sourceConfig }, ctx) {
         const source = new GithubCommitsSource({
           client: ctx.client,
           providerId,
           sourceId,
+          selfLogin: accountLogin(String(accountId)),
           dataCutoff,
           sourceConfig,
         });

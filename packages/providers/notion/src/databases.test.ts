@@ -1712,3 +1712,69 @@ describe("Notion database discovery retirement", () => {
     expect(next.documents?.[0]?.contentHash).toBe(first.documents?.[0]?.contentHash);
   });
 });
+
+describe("NotionDatabasesSource — rows parented by a data source", () => {
+  test("keep notionDatabaseId, name the data source and flag the owner", async () => {
+    const queryResponse = {
+      object: "list",
+      next_cursor: null,
+      has_more: false,
+      type: "page_or_data_source",
+      page_or_data_source: {},
+      results: [
+        {
+          object: "page",
+          id: "row-ds-1",
+          created_time: "2026-04-01T00:00:00.000Z",
+          last_edited_time: "2026-04-02T00:00:00.000Z",
+          archived: false,
+          in_trash: false,
+          url: "https://notion.so/row-ds-1",
+          parent: { type: "data_source_id", data_source_id: "ds-1", database_id: "db-1" },
+          properties: {
+            Name: {
+              id: "title",
+              type: "title",
+              title: [
+                {
+                  type: "text",
+                  plain_text: "r",
+                  text: { content: "r", link: null },
+                  annotations: {},
+                  href: null,
+                },
+              ],
+            },
+          },
+          created_by: { object: "user", id: "u1" },
+          last_edited_by: { object: "user", id: "u2" },
+        },
+      ],
+    } as unknown as QueryDataSourceResponse;
+    const client = {
+      async getDatabase(id: string) {
+        return makeFullDatabase(id);
+      },
+      async queryDatabase() {
+        return queryResponse;
+      },
+    } as unknown as NotionClient;
+    const source = new NotionDatabasesSource(client, sourceId, providerId, undefined, undefined, {
+      selfUserId: "u1",
+    });
+    const cursor = makeSyncDbCursor(["db-1"]);
+    cursor.databases[0]!.dataSourceId = "ds-1";
+
+    const result = await source.syncStructured(cursor);
+    const rowDoc = result.documents?.find((d) => d.externalId === "row-rowds1");
+    expect(rowDoc?.metadata.extra).toMatchObject({
+      notionDatabaseId: "db-1",
+      dataSourceId: "ds-1",
+      parentId: "ds-1",
+      createdByUserId: "u1",
+      lastEditedByUserId: "u2",
+      createdBySelf: true,
+      lastEditedBySelf: false,
+    });
+  });
+});

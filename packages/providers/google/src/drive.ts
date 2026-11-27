@@ -529,9 +529,9 @@ export class GoogleDriveSource {
         tags: [],
         documentType: "file",
         people: people.length > 0 ? people : undefined,
-        // `extra` does NOT carry folder path / driveLocation today.
-        // Adding `path`, `driveLocation`, `driveName`, `parentIds` is gated
-        // on extending DRIVE_FILE_FIELDS + a folder-cache resolver.
+        // `extra` carries the raw `parents` / `driveId` ids but no resolved
+        // folder path / driveLocation; that is gated on a folder-cache
+        // resolver.
         extra: {
           // Extractor-emitted extras first (e.g. `ocr`/`ocrPageCount` when a
           // scanned/image-only page was OCR'd) so Drive carries the same
@@ -540,6 +540,21 @@ export class GoogleDriveSource {
           ...(extracted.extra ?? {}),
           mimeType,
           shared: file.shared ?? false,
+          fileId: file.id,
+          ...(file.parents?.length ? { parents: file.parents } : {}),
+          ...(file.driveId ? { driveId: file.driveId } : {}),
+          ...(file.headRevisionId ? { headRevisionId: file.headRevisionId } : {}),
+          ...(file.version ? { version: file.version } : {}),
+          ...(file.ownedByMe !== undefined && file.ownedByMe !== null
+            ? { ownedByMe: file.ownedByMe }
+            : {}),
+          ...(file.capabilities?.canEdit !== undefined && file.capabilities.canEdit !== null
+            ? { canEdit: file.capabilities.canEdit }
+            : {}),
+          ...(file.starred !== undefined && file.starred !== null ? { starred: file.starred } : {}),
+          ...(file.lastModifyingUser?.me !== undefined && file.lastModifyingUser.me !== null
+            ? { lastModifyingUserIsMe: file.lastModifyingUser.me }
+            : {}),
           fileSize: file.size ? parseInt(file.size, 10) : undefined,
           ...(extracted.pages !== undefined ? { pages: extracted.pages } : {}),
           ...(extracted.truncated ? { truncated: true } : {}),

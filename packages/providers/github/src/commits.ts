@@ -46,6 +46,8 @@ export interface GithubCommitsSourceOptions {
   client: GithubClient;
   providerId: ProviderId;
   sourceId: SourceId;
+  /** The account's GitHub login, for `authorIsSelf`. */
+  selfLogin?: string;
   dataCutoff?: string;
   sourceConfig?: SourceConfig;
   snapshotIntervalMs?: number;
@@ -334,7 +336,11 @@ export class GithubCommitsSource {
         const detail = await this.opts.client.getCommit(repo, sha);
         const committedAt = detail.commit.committer?.date ?? detail.commit.author?.date;
         if (!(this.opts.dataCutoff && committedAt && committedAt < this.opts.dataCutoff)) {
-          docs.push(commitToDocument(detail, repo, this.opts.providerId, this.opts.sourceId));
+          docs.push(
+            commitToDocument(detail, repo, this.opts.providerId, this.opts.sourceId, {
+              selfLogin: this.opts.selfLogin,
+            }),
+          );
         }
       } catch (err) {
         if (err instanceof SyncError && err.kind === "permission") {

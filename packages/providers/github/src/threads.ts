@@ -156,6 +156,8 @@ export interface GithubThreadsSourceOptions {
   /** Sibling commits source of the same account, for PR→commit edges. */
   commitsSourceId: SourceId;
   accountId: string;
+  /** The account's GitHub login, for the structured self flags. */
+  selfLogin?: string;
   dataCutoff?: string;
   /** Raw per-source config (repo allow/exclude filters). */
   sourceConfig?: SourceConfig;
@@ -772,6 +774,7 @@ export class GithubThreadsSource {
           this.opts.providerId,
           this.opts.sourceId,
           refKinds,
+          { selfLogin: this.opts.selfLogin },
         );
         docs.push(normalized.doc);
         edges.push(...this.threadEdges(head.repo, normalized));

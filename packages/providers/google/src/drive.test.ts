@@ -1476,3 +1476,76 @@ describe("GoogleDriveSource text that once stalled address extraction", () => {
     expect(mentioned?.flatMap((p) => p.emails ?? [])).toEqual(["david.lin@example.org"]);
   });
 });
+
+describe("GoogleDriveSource identifiers and ownership flags", () => {
+  test("requests the fields it emits", async () => {
+    const drive = createMockDrive();
+    mockDriveFilesList(drive, []);
+    await createDriveSource(drive).sync(null);
+    const fields = (drive.files.list as any).mock.calls[0][0].fields as string;
+    for (const f of [
+      "parents",
+      "driveId",
+      "headRevisionId",
+      "version",
+      "ownedByMe",
+      "starred",
+      "capabilities(canEdit)",
+      "lastModifyingUser(me)",
+    ]) {
+      expect(fields).toContain(f);
+    }
+  });
+
+  test("emits ids and flags from a shared-drive file", async () => {
+    const drive = createMockDrive();
+    mockDriveFilesList(drive, [
+      makeDriveFile({
+        parents: ["folder-a"],
+        driveId: "shared-drive-1",
+        headRevisionId: "rev-9",
+        version: "42",
+        ownedByMe: false,
+        starred: true,
+        capabilities: { canEdit: false },
+        lastModifyingUser: { me: true },
+      }),
+    ]);
+    drive.files.export = vi.fn(() => Promise.resolve({ data: "body" }));
+
+    const result = await createDriveSource(drive).sync(null);
+    expect(result.documents[0]!.metadata.extra).toMatchObject({
+      fileId: "file-1",
+      parents: ["folder-a"],
+      driveId: "shared-drive-1",
+      headRevisionId: "rev-9",
+      version: "42",
+      ownedByMe: false,
+      canEdit: false,
+      starred: true,
+      lastModifyingUserIsMe: true,
+    });
+  });
+
+  test("omits what Drive did not report but keeps the file id", async () => {
+    const drive = createMockDrive();
+    mockDriveFilesList(drive, [makeDriveFile()]);
+    drive.files.export = vi.fn(() => Promise.resolve({ data: "body" }));
+
+    const extra = (await createDriveSource(drive).sync(null)).documents[0]!.metadata
+      .extra as Record<string, unknown>;
+    expect(extra.fileId).toBe("file-1");
+    for (const k of [
+      "parents",
+      "driveId",
+      "headRevisionId",
+      "version",
+      "ownedByMe",
+      "canEdit",
+      "starred",
+      "lastModifyingUserIsMe",
+    ]) {
+      expect(k in extra).toBe(false);
+    }
+  });
+});

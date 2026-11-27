@@ -16,11 +16,11 @@ const COMMENTS_SELECTION = (first: number) =>
   `comments(first: ${first}) {
     totalCount
     pageInfo { hasNextPage endCursor }
-    nodes { author { ...A } body createdAt updatedAt }
+    nodes { id author { ...A } body createdAt updatedAt }
   }`;
 
 const ISSUE_FIELDS = `
-  __typename number title body state stateReason createdAt updatedAt closedAt url
+  __typename id number title body state stateReason createdAt updatedAt closedAt url
   author { ...A }
   labels(first: 15) { nodes { name } }
   assignees(first: 10) { nodes { login name } }
@@ -29,11 +29,14 @@ const ISSUE_FIELDS = `
 `;
 
 const PR_FIELDS = `
-  __typename number title body state createdAt updatedAt closedAt url
+  __typename id number title body state createdAt updatedAt closedAt url
   author { ...A }
   labels(first: 15) { nodes { name } }
   assignees(first: 10) { nodes { login name } }
   milestone { title }
+  headRefOid
+  reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { combinedSlug } } } }
+  reviewThreads(first: 20) { nodes { id } }
   isDraft merged mergedAt mergedBy { ...A }
   baseRefName headRefName additions deletions changedFiles
   ${COMMENTS_SELECTION(40)}
@@ -41,8 +44,8 @@ const PR_FIELDS = `
   reviews(first: 25) {
     pageInfo { hasNextPage endCursor }
     nodes {
-      author { ...A } state body submittedAt
-      comments(first: 15) { pageInfo { hasNextPage } nodes { author { ...A } body path createdAt updatedAt } }
+      id author { ...A } state body submittedAt
+      comments(first: 15) { pageInfo { hasNextPage } nodes { id author { ...A } body path createdAt updatedAt } }
     }
   }
   closingIssuesReferences(first: 10) { nodes { number repository { nameWithOwner } } }
@@ -99,8 +102,8 @@ fragment DiscussionF on Discussion {
 export const THREAD_COMMENTS_PAGE_QUERY = `query ThreadComments($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     issueOrPullRequest(number: $number) {
-      ... on Issue { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { author { ...A } body createdAt updatedAt } } }
-      ... on PullRequest { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { author { ...A } body createdAt updatedAt } } }
+      ... on Issue { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id author { ...A } body createdAt updatedAt } } }
+      ... on PullRequest { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id author { ...A } body createdAt updatedAt } } }
     }
   }
 }
@@ -113,8 +116,8 @@ export const PR_REVIEWS_PAGE_QUERY = `query PrReviews($owner: String!, $name: St
       reviews(first: 50, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          author { ...A } state body submittedAt
-          comments(first: 15) { pageInfo { hasNextPage } nodes { author { ...A } body path createdAt updatedAt } }
+          id author { ...A } state body submittedAt
+          comments(first: 15) { pageInfo { hasNextPage } nodes { id author { ...A } body path createdAt updatedAt } }
         }
       }
     }

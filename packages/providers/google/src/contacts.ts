@@ -21,6 +21,9 @@ import type { CountryCode } from "libphonenumber-js";
 
 const log = createLogger("source:google-contacts");
 
+/** Google's system contact group for starred contacts. */
+const STARRED_CONTACT_GROUP = "contactGroups/starred";
+
 export interface ContactsSyncCursor extends SyncCursor {
   syncToken?: string;
   pageToken?: string;
@@ -430,6 +433,17 @@ export class GoogleContactsSource {
         };
       });
 
+    // Group memberships: only contact-group ones (a person can also belong to
+    // a domain profile). The system "starred" group is how Google marks a
+    // favourite.
+    const groupResourceNames = [
+      ...new Set(
+        (person.memberships ?? [])
+          .map((m) => m.contactGroupMembership?.contactGroupResourceName)
+          .filter((g): g is string => typeof g === "string" && g.length > 0),
+      ),
+    ];
+
     // Build PersonMention
     const mention: PersonMention = {
       role: "contact",
@@ -453,6 +467,10 @@ export class GoogleContactsSource {
         documentType: "contact",
         people: [mention],
         extra: {
+          etag: person.etag ?? undefined,
+          resourceName: person.resourceName,
+          starred: groupResourceNames.includes(STARRED_CONTACT_GROUP),
+          groupResourceNames: groupResourceNames.length > 0 ? groupResourceNames : undefined,
           organization: org?.name ?? undefined,
           jobTitle: org?.title ?? undefined,
           department: org?.department ?? undefined,

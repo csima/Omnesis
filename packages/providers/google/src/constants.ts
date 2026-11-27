@@ -98,11 +98,10 @@ export const CALENDAR_MAX_RESULTS = 250;
 
 export const DRIVE_MAX_CONTENT_SIZE = 10 * 1024 * 1024;
 
-// Does NOT include `parents`/`driveId`/`ownedByMe`. Adding those is the
-// prerequisite for propagating folder path as metadata (folder-cache
-// resolver, three-bucket semantics).
+// `parents` and `driveId` are raw ids; resolving them to a folder path
+// (folder-cache resolver, three-bucket semantics) is still not done.
 export const DRIVE_FILE_FIELDS =
-  "id,name,mimeType,createdTime,modifiedTime,size,webViewLink,owners,shared,trashed,permissions(emailAddress,displayName,role,type)";
+  "id,name,mimeType,createdTime,modifiedTime,size,webViewLink,owners,shared,trashed,permissions(emailAddress,displayName,role,type),parents,driveId,headRevisionId,version,ownedByMe,starred,capabilities(canEdit),lastModifyingUser(me)";
 
 export const DRIVE_EXPORT_MAP: Record<string, string> = {
   "application/vnd.google-apps.document": "text/plain",
@@ -149,5 +148,6 @@ export const CONTACTS_PERSON_FIELDS = [
   "birthdays",
   "urls",
   "events",
+  "memberships",
   "metadata",
 ].join(",");

@@ -236,3 +236,108 @@ export const googleCalendarDocumentEventProfile: DocumentEventProfile = {
     },
   ],
 };
+
+/**
+ * Google Drive: one `file` document per processable file. The people are the
+ * owner, anyone with edit access (author), anyone with read or comment access
+ * (recipient), and addresses found in the extracted text (mentioned).
+ *
+ * Deliberately undeclared: `extra.mimeType`, `extra.shared`, `extra.fileSize`,
+ * `extra.pages` and `extra.truncated`.
+ */
+export const googleDriveDocumentEventProfile: DocumentEventProfile = {
+  documentTypes: ["file"],
+  personRoles: ["owner", "author", "recipient", "mentioned"],
+  metadataFields: [
+    {
+      path: "extra.fileId",
+      type: "string",
+      description:
+        "Drive's id for the file, the identifier a write-only connector names to act on it. Opaque: never shown to a person and never parsed for meaning.",
+    },
+    {
+      path: "extra.parents",
+      type: "string-array",
+      description:
+        "Ids of the folders the file sits in. Opaque Drive ids, not names or paths. Absent for a file with no parent folder visible to the account.",
+    },
+    {
+      path: "extra.driveId",
+      type: "string",
+      description:
+        "Id of the shared drive the file belongs to. Absent for a file in someone's My Drive. Opaque.",
+    },
+    {
+      path: "extra.headRevisionId",
+      type: "string",
+      description:
+        "Id of the file's current head revision, which changes whenever the content does. Absent for Google Docs, Sheets and Slides, which keep no binary revision. Opaque.",
+    },
+    {
+      path: "extra.version",
+      type: "string",
+      description:
+        "Drive's monotonically increasing version number for the file, as a decimal string. It also counts changes to the file's metadata.",
+    },
+    {
+      path: "extra.ownedByMe",
+      type: "boolean",
+      description:
+        "Whether the account owner owns the file, as opposed to it being shared with them.",
+    },
+    {
+      path: "extra.canEdit",
+      type: "boolean",
+      description: "Whether the account owner may edit the file's content.",
+    },
+    {
+      path: "extra.starred",
+      type: "boolean",
+      description: "Whether the account owner starred the file in Drive.",
+    },
+    {
+      path: "extra.lastModifyingUserIsMe",
+      type: "boolean",
+      description:
+        "True when the account owner made the file's most recent modification, false when someone else did. Absent when Drive did not report who modified it.",
+    },
+  ],
+};
+
+/**
+ * Google Contacts: one `contact` document per contact, naming the contact as
+ * the one `contact` person.
+ *
+ * Deliberately undeclared: the rendered extras (`organization`, `jobTitle`,
+ * `department`, `birthday`, `addresses`, `urls`, `events`, `biography`,
+ * `nickname`).
+ */
+export const googleContactsDocumentEventProfile: DocumentEventProfile = {
+  documentTypes: ["contact"],
+  personRoles: ["contact"],
+  metadataFields: [
+    {
+      path: "extra.resourceName",
+      type: "string",
+      description:
+        "The People API resource name of the contact, spelled people/ followed by an id. It is the identifier an update or delete of the contact names. Opaque.",
+    },
+    {
+      path: "extra.etag",
+      type: "string",
+      description:
+        "The contact's version tag from the People API, which an update must echo to be accepted and which changes on every edit. Opaque.",
+    },
+    {
+      path: "extra.starred",
+      type: "boolean",
+      description: "Whether the contact is starred, that is a member of Google's starred group.",
+    },
+    {
+      path: "extra.groupResourceNames",
+      type: "string-array",
+      description:
+        "Resource names of the contact groups the contact belongs to, such as contactGroups/myContacts or contactGroups/starred, or contactGroups/ followed by an id for a user-created label. Absent when the contact is in none.",
+    },
+  ],
+};
