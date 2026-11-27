@@ -38,8 +38,11 @@ const settings = config.object({
 /**
  * One conversation document per LinkedIn chat per UTC day.
  *
- * Deliberately undeclared: `extra.threadKey` / `extra.conversationId` (opaque
- * ids nobody spells) and `extra.date` (the document's own day).
+ * Deliberately undeclared: `extra.conversationId` (a copy of `extra.threadKey`)
+ * and `extra.date` (the document's own day).
+ *
+ * Kondo's read-only MCP tools report no unread, snooze, reminder, draft or
+ * pending-invite state, so none is emitted or declared.
  */
 export const kondoDocumentProfile: DocumentEventProfile = {
   documentTypes: ["conversation"],
@@ -85,6 +88,50 @@ export const kondoDocumentProfile: DocumentEventProfile = {
       path: "extra.archived",
       type: "boolean",
       description: "Whether the chat sits in Kondo's archive rather than the inbox.",
+    },
+    {
+      path: "extra.threadKey",
+      type: "string",
+      description:
+        "Kondo's key for the chat: the identifier a connector names to open or answer it, shared by every day of the same conversation. Opaque: never shown to a person and never parsed for meaning.",
+    },
+    {
+      path: "extra.inboxProfileId",
+      type: "string",
+      identifiesPeople: true,
+      description:
+        "The LinkedIn member id of the inbox the chat was read from, which is the account owner's own. Opaque; a connector names it as the member a reply is sent as.",
+    },
+    {
+      path: "extra.participantProfileIds",
+      type: "string-array",
+      identifiesPeople: true,
+      description:
+        "LinkedIn member ids of the other people in the chat, where Kondo reported them. Opaque; empty when it reported none.",
+    },
+    {
+      path: "extra.direction",
+      type: "string",
+      description:
+        "Whether the account owner wrote anything in this day's conversation (sent) or only others did (received).",
+      allowedValues: ["sent", "received"],
+    },
+    {
+      path: "extra.selfMessageCount",
+      type: "number",
+      description: "How many of the day's messages the owner wrote.",
+    },
+    {
+      path: "extra.lastMessageFromSelf",
+      type: "boolean",
+      description:
+        "Whether the newest message of the day was written by the owner. False means the other side spoke last.",
+    },
+    {
+      path: "extra.lastSelfMessageAt",
+      type: "string",
+      description:
+        "ISO time of the owner's newest message of the day. Absent when they wrote none.",
     },
   ],
 };
