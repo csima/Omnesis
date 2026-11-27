@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Caleb Sima
 
 import { config, defineProvider } from "@omnesis/source-sdk";
-import { SyncError } from "@omnesis/types";
 import { slackCredentialsSpec } from "./credentials-spec.js";
 import { slackIcon } from "./icons.js";
 import { profileFor } from "./profile.js";
@@ -14,10 +13,10 @@ import {
   discoverOfficial,
   discoverSession,
   loadOfficial,
+  loadSession,
   loadSessionManifest,
   authFailure,
 } from "./provider.js";
-import { bridge, credentialsFromBundle } from "./session.js";
 import { SlackSource } from "./source.js";
 import { slackStateSpec } from "./state.js";
 import { schemasFor } from "./schemas.js";
@@ -96,29 +95,10 @@ function entry(
         historyDays: days,
         dataCutoff: options.dataCutoff,
         host: options.host,
-        async acquire(signal) {
-          if (!session) return loadOfficial(ctx.accountId, ctx.configDir);
-          const manifest = await loadSessionManifest(ctx.configDir, ctx.accountId);
-          const found = credentialsFromBundle(await bridge(manifest.config, "collect", signal));
-          const credential = found.credentials.find(
-            (v) => accountKey(v.identity) === ctx.accountId,
-          );
-          if (!credential)
-            throw new SyncError(
-              "auth",
-              "Slack workspace sign-in is unavailable; sign in again in Slack or Chrome. Indexed history is kept.",
-              {
-                remediation: {
-                  summary: "Sign in again to this Slack workspace",
-                  steps: [
-                    "Open Slack or Chrome on the collector Mac and sign in. The next cycle retries automatically.",
-                  ],
-                  restartRequired: false,
-                },
-              },
-            );
-          return credential;
-        },
+        acquire: (signal) =>
+          session
+            ? loadSession(ctx.accountId, ctx.configDir, signal)
+            : loadOfficial(ctx.accountId, ctx.configDir),
       });
       const stored = await storedWorkspaceName(session, ctx.accountId, ctx.configDir);
       return {

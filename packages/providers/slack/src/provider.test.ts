@@ -13,11 +13,13 @@ import {
   authenticateSession,
   cleanupSession,
   discoverSession,
+  loadSession,
   loadSessionManifest,
   authFailure,
   verifyOfficial,
 } from "./provider.js";
 import { bridge } from "./session.js";
+import { accountKey } from "./types.js";
 import provider from "./index.js";
 import type { AuthSession } from "@omnesis/source-sdk";
 vi.mock("@omnesis/core", async (original) => ({
@@ -119,6 +121,48 @@ describe("Slack connection boundaries", () => {
     expect(authFailure(new SyncError("auth", "Safe auth failure"))).toMatchObject({
       code: "credential-rejected",
     });
+  });
+  it("reads a workspace missing from the helper a second time before calling it signed out", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const s = await session();
+    vi.mocked(s.ask)
+      .mockResolvedValueOnce({ root: "/fictional/helper-one", python: "/usr/bin/python3" })
+      .mockResolvedValueOnce({ sources: "slack:Slack" });
+    vi.mocked(bridge)
+      .mockResolvedValueOnce({ sources: ["slack:Slack"] })
+      .mockResolvedValueOnce(bundle());
+    vi.spyOn(SlackClient.prototype, "call").mockResolvedValue(identity);
+    await authenticateSession(s);
+    const key = "TEXAMPLE-USELF00";
+    const empty = { sessions: [], failedSources: [] };
+
+    vi.mocked(bridge).mockReset();
+    vi.mocked(bridge).mockResolvedValueOnce(empty).mockResolvedValueOnce(bundle());
+    const found = await loadSession(key, s.host.configDir, undefined, 1);
+    expect(accountKey(found.identity)).toBe(key);
+    expect(bridge).toHaveBeenCalledTimes(2);
+
+    vi.mocked(bridge).mockReset();
+    vi.mocked(bridge).mockResolvedValue(empty);
+    await expect(loadSession(key, s.host.configDir, undefined, 1)).rejects.toMatchObject({
+      kind: "auth",
+      message: expect.stringContaining("sign-in is unavailable"),
+    });
+    expect(bridge, "two reads, then signed out").toHaveBeenCalledTimes(2);
+
+    vi.mocked(bridge).mockReset();
+    vi.mocked(bridge).mockResolvedValue(bundle());
+    await loadSession(key, s.host.configDir, undefined, 1);
+    expect(bridge, "a workspace that is there is read once").toHaveBeenCalledTimes(1);
+
+    vi.mocked(bridge).mockReset();
+    vi.mocked(bridge).mockResolvedValue(empty);
+    const stop = new AbortController();
+    const waiting = loadSession(key, s.host.configDir, stop.signal, 60_000);
+    await vi.waitFor(() => expect(bridge).toHaveBeenCalledTimes(1));
+    stop.abort(new Error("cycle stopped"));
+    await expect(waiting).rejects.toThrow("cycle stopped");
+    expect(bridge, "a stopped cycle does not read again").toHaveBeenCalledTimes(1);
   });
   it("keeps per-account helper selection and removes only the selected account, without session secrets on disk", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");

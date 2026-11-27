@@ -131,6 +131,62 @@ export async function loadSessionManifest(configDir: string, key: string) {
     );
   }
 }
+/** How long a workspace missing from the helper's read waits before it is read again. */
+const SIGN_IN_REREAD_DELAY_MS = 2_000;
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+/**
+ * The stored sign-in for one session workspace. Slack and Chrome rewrite
+ * their local storage while they run, and a read that lands on a rewrite can
+ * come back without a workspace that is still signed in. A workspace missing
+ * from one read is therefore read a second time before it is reported as
+ * signed out.
+ */
+export async function loadSession(
+  key: string,
+  configDir: string,
+  signal?: AbortSignal,
+  rereadDelayMs = SIGN_IN_REREAD_DELAY_MS,
+): Promise<Credential> {
+  const manifest = await loadSessionManifest(configDir, key);
+  const read = async (): Promise<Credential | undefined> =>
+    credentialsFromBundle(await bridge(manifest.config, "collect", signal)).credentials.find(
+      (v) => accountKey(v.identity) === key,
+    );
+  let credential = await read();
+  if (!credential) {
+    await pause(rereadDelayMs, signal);
+    credential = await read();
+    if (credential) log.info(`Sign-in for ${key} was missing from one read and found on the next`);
+  }
+  if (!credential)
+    throw new SyncError(
+      "auth",
+      "Slack workspace sign-in is unavailable; sign in again in Slack or Chrome. Indexed history is kept.",
+      {
+        remediation: {
+          summary: "Sign in again to this Slack workspace",
+          steps: [
+            "Open Slack or Chrome on the collector Mac and sign in. The next cycle retries automatically.",
+          ],
+          restartRequired: false,
+        },
+      },
+    );
+  return credential;
+}
 export async function authenticateSession(session: AuthSession): Promise<AuthResult> {
   if (process.platform !== "darwin")
     throw new AuthFailure(
