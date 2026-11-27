@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   search: vi.fn(), searchAgentContext: vi.fn(), getSearchReadiness: vi.fn(),
-  getDocumentsPeopleBulk: vi.fn(), getDocumentSummariesBulk: vi.fn(), getPeople: vi.fn(), getStatus: vi.fn(),
+  getDocumentsPeopleBulk: vi.fn(), getDocumentSummariesBulk: vi.fn(), getPeople: vi.fn(), getStatus: vi.fn(), getAdminSources: vi.fn(),
 }));
 vi.mock("../api.js", () => api);
 vi.mock("../components/facets.js", () => ({ FacetPanel: () => null }));
@@ -49,7 +49,7 @@ beforeEach(() => {
   vi.stubGlobal("sessionStorage", { getItem: (key) => cache.get(key) ?? null, setItem: (key, value) => cache.set(key, value), removeItem: (key) => cache.delete(key) });
   host = dom.document.querySelector("main");
   api.getSearchReadiness.mockResolvedValue({ indexer: { status: "ready" }, agentContextAvailable: true });
-  api.getPeople.mockResolvedValue({ people: [] }); api.getStatus.mockResolvedValue({});
+  api.getPeople.mockResolvedValue({ people: [] }); api.getStatus.mockResolvedValue({}); api.getAdminSources.mockResolvedValue({ items: [] });
   api.getDocumentsPeopleBulk.mockResolvedValue({ docs: {} });
   api.getDocumentSummariesBulk.mockResolvedValue({ docs: { "doc-message": { id: "doc-message", title: "Sharing note", source_id: "example-messages:account" } } });
   api.search.mockResolvedValue(normal()); api.searchAgentContext.mockResolvedValue(diagnostic());

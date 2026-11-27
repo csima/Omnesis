@@ -241,7 +241,7 @@ async function fetchDescriptorMeta(signal) {
       // declared source of truth — see `SourceDescriptor.unitName`. This
       // keeps source-specific labels owned by the provider package and
       // out of the agent UI code.
-      if (!iconStr && !d.name && !d.unitName) continue;
+      if (!iconStr && !d.name && !d.unitName && !d.experimental) continue;
       // Descriptor entries are keyed by sourceType, which `lookupMeta`
       // already uses as its second-chance lookup. Single-account synced
       // sources will have a sync_state entry under the same sourceType
@@ -250,6 +250,7 @@ async function fetchDescriptorMeta(signal) {
       if (iconStr) out[d.id].icon = iconStr;
       if (d.name) out[d.id].label = d.name;
       if (d.unitName) out[d.id].unitName = d.unitName;
+      if (d.experimental === true) out[d.id].experimental = true;
     }
     return out;
   } catch {
@@ -356,6 +357,17 @@ export function sourceUnitName(sourceType) {
   const meta = _metaCache?.[sourceType];
   if (meta && typeof meta === "object" && meta.unitName) return meta.unitName;
   return null;
+}
+
+/**
+ * Whether a source type's descriptor marks it experimental. Read from the
+ * descriptors of the collectors online when the cache was loaded, so a type
+ * no online collector describes reads as not experimental.
+ */
+export function sourceIsExperimental(sourceType) {
+  if (!sourceType) return false;
+  const meta = _metaCache?.[sourceType];
+  return !!(meta && typeof meta === "object" && meta.experimental === true);
 }
 
 export function docTypeLabel(type) {

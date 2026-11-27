@@ -2067,6 +2067,56 @@ a:hover { text-decoration: underline; }
   flex-wrap: wrap;
 }
 
+/* Source chips under the search box: one row that scrolls sideways rather
+   than wrapping, so a long list of sources never pushes the results down. */
+.search-source-chips {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  /* The end padding lets the last chip scroll clear of the fade that hints
+     at chips beyond the edge. */
+  padding: 0 24px 4px 0;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.search-source-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+}
+.search-source-chip:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.search-source-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.search-source-chip.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-secondary));
+  color: var(--text-primary);
+}
+.search-source-chip .source-icon {
+  flex-shrink: 0;
+}
+
 /* Segmented control — a connected row of mutually exclusive options. */
 /* A `Segmented` control with a label beside it — the shape every mode toggle
    in the portal takes when the choice needs naming (which store, which

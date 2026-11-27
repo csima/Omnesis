@@ -3,6 +3,8 @@
 
 import { html } from "htm/preact";
 import { sourceTypeOf } from "../lib/source-id.js";
+import { sourceIcon, sourceIconResolves, sourceIsExperimental, sourceLabel } from "../lib/format.js";
+import { buildSourceChips, hasSourceFilter, toggleSourceFilter } from "../lib/search-source-filter.js";
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import {
   search,
@@ -10,6 +12,7 @@ import {
   getDocumentsPeopleBulk,
   getPeople,
   getStatus,
+  getAdminSources,
   searchAgentContext,
   getDocumentSummariesBulk,
 } from "../api.js";
@@ -102,6 +105,10 @@ export function SearchView({ initialQuery = "" } = {}) {
   // of `from:alice@example.com`. Falls back to generic placeholders if
   // the gateway hasn't responded yet (or the corpus is still empty).
   const [exampleAnchors, setExampleAnchors] = useState(null);
+  // What the source chips are built from: the registered sources, their
+  // document counts and the gateway's experimental mode. Null until loaded;
+  // a failed load leaves the page without chips.
+  const [chipInputs, setChipInputs] = useState(null);
   const inputRef = useRef(null);
 
   // Use a ref to track current state for the unmount cleanup
@@ -121,11 +128,19 @@ export function SearchView({ initialQuery = "" } = {}) {
     let cancelled = false;
     (async () => {
       try {
-        const [peopleResp, status] = await Promise.all([
+        const [peopleResp, status, adminSources] = await Promise.all([
           getPeople("", 10).catch(() => ({ people: [] })),
           getStatus().catch(() => null),
+          getAdminSources().catch(() => null),
         ]);
         if (cancelled) return;
+        if (adminSources) {
+          setChipInputs({
+            sources: adminSources.items ?? [],
+            documentCounts: status?.documents?.bySource ?? null,
+            experimental: status?.experimental === true,
+          });
+        }
         const topPerson = (peopleResp.people || []).find((p) => !p.isSelf) ?? null;
         const bySource = status?.documents?.bySource ?? {};
         // Prefer an account-bearing source (`<type>:<account>`), which is
@@ -264,6 +279,24 @@ export function SearchView({ initialQuery = "" } = {}) {
     doSearch(query, verbose);
   }
 
+  // A chip edits the query text. With a blank query it only sets the token,
+  // as typing it would, and the search runs when the operator submits;
+  // otherwise the edited query is searched straight away.
+  function handleSourceChip(type) {
+    const next = toggleSourceFilter(query, type);
+    setQuery(next);
+    if (query.trim()) {
+      doSearch(next, verbose);
+      return;
+    }
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange?.(next.length, next.length);
+    });
+  }
+
   function handleFilter(filterType, value) {
     const prefix = filterType === "type" ? "type:" : "source:";
     const newQuery = `${query.trim()} ${prefix}${value}`;
@@ -299,6 +332,9 @@ export function SearchView({ initialQuery = "" } = {}) {
   }, []);
 
   const hasSearched = results !== null;
+  const sourceChips = chipInputs
+    ? buildSourceChips({ ...chipInputs, isExperimental: sourceIsExperimental, label: sourceLabel })
+    : [];
   const contextPanels = readiness?.agentContextAvailable === true
     ? provenancePanels(results, provenanceByDoc)
     : Object.create(null);
@@ -325,6 +361,7 @@ export function SearchView({ initialQuery = "" } = {}) {
             ${loading ? html`<span class="spinner"></span>` : "Search"}
           </button>
         </div>
+        <${SourceChips} chips=${sourceChips} query=${query} onToggle=${handleSourceChip} />
         <div class="search-controls">
           <label class="toggle-label">
             <input type="checkbox" checked=${verbose} onChange=${(e) => setVerbose(e.target.checked)} />
@@ -382,6 +419,34 @@ export function SearchView({ initialQuery = "" } = {}) {
           </div>
         </div>
       `}
+    </div>
+  `;
+}
+
+/**
+ * One chip per source type, under the search box. A chip is selected while
+ * the query holds its `source:` token; pressing it adds or removes the token.
+ */
+function SourceChips({ chips, query, onToggle }) {
+  if (!chips.length) return null;
+  return html`
+    <div class="search-source-chips" role="group" aria-label="Filter by source">
+      ${chips.map((chip) => {
+        const selected = hasSourceFilter(query, chip.type);
+        return html`
+          <button
+            key=${chip.type}
+            type="button"
+            class=${`search-source-chip${selected ? " selected" : ""}`}
+            aria-pressed=${selected ? "true" : "false"}
+            title=${selected ? `Remove source:${chip.type}` : `Add source:${chip.type}`}
+            onClick=${() => onToggle(chip.type)}
+          >
+            ${sourceIconResolves(chip.type) && sourceIcon(chip.type, { size: 14 })}
+            <span class="search-source-chip-label">${chip.label}</span>
+          </button>
+        `;
+      })}
     </div>
   `;
 }
