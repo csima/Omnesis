@@ -884,6 +884,21 @@ public final class AppStore {
         adminCoord.statusSnapshot
     }
 
+    /// One chip per source type for the Search tab's filter row, by the same
+    /// rules as the portal: see `SearchSourceChip.build`.
+    var searchSourceChips: [SearchSourceChip] {
+        let labels = sourceLabelByType
+        return SearchSourceChip.build(
+            sources: sources,
+            documentsBySourceId: statusSnapshot?.documents.bySource,
+            experimentalEnabled: experimentalEnabled,
+            experimentalTypes: adminCoord.experimentalSourceTypes,
+            label: { type in
+                labels[type].flatMap { $0.isEmpty ? nil : $0 } ?? SearchSourceChip.fallbackLabel(type)
+            }
+        )
+    }
+
     /// Whether the paired gateway runs in experimental mode. Drives the
     /// gating of not-yet-battle-tested UI (the Watches menu entry, the Deep
     /// Research slash command). Defaults to `false` until `/status` has been
@@ -3358,6 +3373,7 @@ extension AppStore {
         connectionPath: GatewayConnectionPath? = nil,
         sourceIconByType: [String: String] = [:],
         sourceIconById: [String: String] = [:],
+        sourceLabelByType: [String: String] = [:],
         sourceUnitNameByType: [String: String] = PreviewMocks.agentSourceUnitNames,
         sourceBgColorByType: [String: String] = PreviewMocks.sourceBgColorByType,
         sourceAccentColorByType: [String: String] = PreviewMocks.sourceAccentColorByType,
@@ -3405,6 +3421,7 @@ extension AppStore {
             connectionPath: connectionPath,
             sourceIconByType: sourceIconByType,
             sourceIconById: sourceIconById,
+            sourceLabelByType: sourceLabelByType,
             sourceUnitNameByType: sourceUnitNameByType,
             sourceBgColorByType: sourceBgColorByType,
             sourceAccentColorByType: sourceAccentColorByType,

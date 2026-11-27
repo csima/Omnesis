@@ -28,8 +28,11 @@ struct SearchView: View {
     @State private var hasSearched = false
     @State private var lastQuery: String = ""
 
-    init(menuOpen: Binding<Bool>) {
+    /// `initialQuery` seeds the field without running a search (previews
+    /// and snapshots use it to show chips already selected).
+    init(menuOpen: Binding<Bool>, initialQuery: String = "") {
         self._menuOpen = menuOpen
+        self._query = State(initialValue: initialQuery)
     }
 
     @FocusState private var queryFocused: Bool
@@ -39,6 +42,7 @@ struct SearchView: View {
             VStack(spacing: 0) {
                 logoHeader
                 searchField
+                sourceChips
                 content
             }
             .background(Theme.bgPrimary.ignoresSafeArea())
@@ -114,6 +118,49 @@ struct SearchView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.bottom, Theme.Spacing.sm)
+    }
+
+    /// One chip per source type the user has. A chip is a view of the
+    /// query: it reads as selected while the text holds its `source:`
+    /// token, and tapping it adds or removes that token.
+    @ViewBuilder
+    private var sourceChips: some View {
+        let chips = store.searchSourceChips
+        if !chips.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(chips) { chip in
+                        SourceFilterChip(
+                            chip: chip,
+                            selected: SourceFilterQuery.contains(chip.type, in: query),
+                            store: store
+                        ) { toggleSource(chip.type) }
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+            }
+            .padding(.bottom, Theme.Spacing.sm)
+            .accessibilityIdentifier("search.sourceChips")
+        }
+    }
+
+    /// Edit the query's `source:` token. With text already there, re-run
+    /// the search; on an empty query only set the token and focus the field,
+    /// so the user types what to look for (as the portal does).
+    private func toggleSource(_ type: String) {
+        let hadText = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        query = SourceFilterQuery.toggling(type, in: query)
+        if hadText {
+            Task { await runSearch() }
+        } else {
+            queryFocused = true
+        }
+    }
+
+    private func showEmptyState() {
+        results = []
+        hasSearched = false
+        loadError = nil
     }
 
     @ViewBuilder
@@ -244,9 +291,7 @@ struct SearchView: View {
     private func runSearch() async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            results = []
-            hasSearched = false
-            loadError = nil
+            showEmptyState()
             return
         }
         guard let client = store.search else {
@@ -265,6 +310,46 @@ struct SearchView: View {
         } catch {
             loadError = error
         }
+    }
+}
+
+/// A source filter chip: the source's icon and name, filled when the query
+/// filters on it.
+@available(iOS 17.0, *)
+struct SourceFilterChip: View {
+    let chip: SearchSourceChip
+    let selected: Bool
+    let store: AppStore
+    let action: () -> Void
+    @ScaledMetric(relativeTo: .footnote) private var iconSize: CGFloat = 16
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                SourceIconView(sourceId: chip.representativeSourceId, store: store, size: iconSize)
+                Text(chip.label)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+                if selected {
+                    Image(systemName: "xmark")
+                        .font(.caption2.weight(.bold))
+                }
+            }
+            .foregroundStyle(selected ? Theme.accentHover : Theme.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(selected ? Theme.accent.opacity(0.15) : Theme.bgSecondary)
+            .overlay(
+                Capsule().strokeBorder(selected ? Theme.accent.opacity(0.6) : Theme.border, lineWidth: 1)
+            )
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        // The label speaks the state, so no `.isSelected` trait to say it twice.
+        .accessibilityLabel(selected ? "\(chip.label), filter, selected" : "\(chip.label), filter")
+        .accessibilityHint(selected ? "Removes this source from the search" : "Searches only this source")
+        .accessibilityIdentifier("search.sourceChip.\(chip.type)")
     }
 }
 
@@ -634,6 +719,17 @@ struct SearchPipelineFooter: View {
     @Previewable @State var menuOpen = false
     return SearchView(menuOpen: $menuOpen)
         .environment(AppStore.preview())
+}
+
+@available(iOS 17.0, *)
+#Preview("Search — source chips, one selected") {
+    @Previewable @State var menuOpen = false
+    return SearchView(menuOpen: $menuOpen, initialQuery: "invoice source:gmail")
+        .environment(AppStore.preview(
+            sources: PreviewMocks.searchChipSources,
+            statusSnapshot: PreviewMocks.searchChipStatusSnapshot,
+            sourceLabelByType: PreviewMocks.searchChipLabelByType
+        ))
 }
 
 @available(iOS 17.0, *)

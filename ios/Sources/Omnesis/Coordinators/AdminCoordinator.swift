@@ -75,6 +75,10 @@ final class AdminCoordinator {
     /// the provider package — adding a new provider with `unitName:
     /// "voicemails"` automatically labels its results correctly.
     private(set) var sourceUnitNameByType: [String: String] = [:]
+    /// Source types whose descriptor is marked experimental. The search
+    /// tab's source chips leave them out unless the gateway runs in
+    /// experimental mode.
+    private(set) var experimentalSourceTypes: Set<String> = []
     private(set) var statusSnapshot: StatusSnapshot?
     private(set) var indexStats: IndexStats?
     /// Open tasks on today's page, for the device's local day — the number
@@ -581,8 +585,10 @@ final class AdminCoordinator {
         var descriptorBgByType: [String: String] = [:]
         var descriptorAccentByType: [String: String] = [:]
         var unitByType: [String: String] = [:]
+        var experimentalTypes: Set<String> = []
         do {
             for d in try await admin.listDescriptors() {
+                if d.experimental == true { experimentalTypes.insert(d.typeId) }
                 if let unit = d.unitName, !unit.isEmpty { unitByType[d.typeId] = unit }
                 if !d.name.isEmpty { descriptorLabelByType[d.typeId] = d.name }
                 if let art = d.icon?.imageDataUri ?? d.icon?.url, !art.isEmpty {
@@ -594,6 +600,7 @@ final class AdminCoordinator {
                 }
             }
             sourceUnitNameByType = unitByType
+            experimentalSourceTypes = experimentalTypes
         } catch {
             // Best-effort: the descriptor route needs an online collector, so
             // it is the rung most likely to be missing. Losing it leaves the
@@ -1199,6 +1206,7 @@ extension AdminCoordinator {
         connectionPath: GatewayConnectionPath? = nil,
         sourceIconByType: [String: String],
         sourceIconById: [String: String] = [:],
+        sourceLabelByType: [String: String] = [:],
         sourceUnitNameByType: [String: String] = [:],
         sourceBgColorByType: [String: String] = [:],
         sourceAccentColorByType: [String: String] = [:],
@@ -1228,6 +1236,7 @@ extension AdminCoordinator {
         }
         self.sourceIconByType = sourceIconByType
         self.sourceIconById = sourceIconById
+        self.sourceLabelByType = sourceLabelByType
         self.sourceUnitNameByType = sourceUnitNameByType
         self.sourceBgColorByType = sourceBgColorByType
         self.sourceAccentColorByType = sourceAccentColorByType

@@ -2410,6 +2410,34 @@ final class PreviewSnapshotTests: XCTestCase {
         snapshot(SearchView(menuOpen: .constant(false)).environment(store), name: "10-search-empty")
     }
 
+    /// The source chip row: two invented Gmail accounts fold into one chip,
+    /// chips run by document count, and the one the query names is filled.
+    private func searchWithSourceChips(_ query: String) -> some View {
+        SearchView(menuOpen: .constant(false), initialQuery: query)
+            .environment(AppStore.preview(
+                sources: PreviewMocks.searchChipSources,
+                statusSnapshot: PreviewMocks.searchChipStatusSnapshot,
+                sourceLabelByType: PreviewMocks.searchChipLabelByType
+            ))
+    }
+
+    func testSearchSourceChips() {
+        snapshot(searchWithSourceChips("invoice source:gmail"), name: "10c-search-source-chips")
+        snapshot(searchWithSourceChips(""), name: "10d-search-source-chips-none")
+    }
+
+    func testSearchSourceChipsLargeText() {
+        snapshot(
+            searchWithSourceChips("source:whatsapp-messages").environment(\.dynamicTypeSize, .accessibility2),
+            name: "10e-search-source-chips-large-text"
+        )
+    }
+
+    func testSearchSourceChipsWide() {
+        let view = searchWithSourceChips("invoice source:gmail source:apple-health")
+        snapshot(view, name: "10f-search-source-chips-ipad", size: CGSize(width: 1366, height: 1024))
+    }
+
     func testSearchResults() {
         // We don't drive the live search field — just snapshot the
         // result-row composition directly so we can see the actual rows.
