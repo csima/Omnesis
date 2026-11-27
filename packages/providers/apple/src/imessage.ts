@@ -95,6 +95,12 @@ interface IMessageSchemaColumns {
   replyToGuid: boolean;
   threadOriginatorGuid: boolean;
   groupTitle: boolean;
+  isRead: boolean;
+  isDelivered: boolean;
+  dateRead: boolean;
+  dateEdited: boolean;
+  dateRetracted: boolean;
+  chatGuid: boolean;
 }
 
 interface IMessageDaySnapshot {
@@ -536,7 +542,18 @@ export class AppleIMessageSource {
     if (this.schemaColumns && this.schemaColumnsDb === db) return this.schemaColumns;
     const rows = db.prepare("PRAGMA table_info(message)").all() as { name: string }[];
     const names = new Set(rows.map((r) => r.name));
+    // chat.guid has been in chat.db since the first release, but introspect it
+    // like the rest so a stripped fixture or an odd schema never fails the query.
+    const chatNames = new Set(
+      (db.prepare("PRAGMA table_info(chat)").all() as { name: string }[]).map((r) => r.name),
+    );
     this.schemaColumns = {
+      isRead: names.has("is_read"),
+      isDelivered: names.has("is_delivered"),
+      dateRead: names.has("date_read"),
+      dateEdited: names.has("date_edited"),
+      dateRetracted: names.has("date_retracted"),
+      chatGuid: chatNames.has("guid"),
       cacheHasAttachments: names.has("cache_has_attachments"),
       associatedMessageEmoji: names.has("associated_message_emoji"),
       replyToGuid: names.has("reply_to_guid"),
@@ -578,6 +595,12 @@ export class AppleIMessageSource {
           columns.threadOriginatorGuid ? "m.thread_originator_guid" : "NULL"
         } as threadOriginatorGuid,
         ${columns.groupTitle ? "m.group_title" : "NULL"} as groupTitle,
+        ${columns.isRead ? "m.is_read" : "NULL"} as isRead,
+        ${columns.isDelivered ? "m.is_delivered" : "NULL"} as isDelivered,
+        ${columns.dateRead ? "m.date_read" : "NULL"} as dateRead,
+        ${columns.dateEdited ? "m.date_edited" : "NULL"} as dateEdited,
+        ${columns.dateRetracted ? "m.date_retracted" : "NULL"} as dateRetracted,
+        ${columns.chatGuid ? "c.guid" : "NULL"} as chatGuid,
         c.chat_identifier as chatIdentifier,
         c.display_name as chatDisplayName,
         c.style as chatStyle,
@@ -681,6 +704,7 @@ export class AppleIMessageSource {
       displayName: row.chatDisplayName,
       isGroup,
       service: row.service ?? "iMessage",
+      chatGuid: row.chatGuid ?? undefined,
       participantHandles: isGroup
         ? this.fetchChatRoster(db, row.chatIdentifier, rosterCache)
         : undefined,
@@ -821,6 +845,7 @@ export class AppleIMessageSource {
       replyToGuid: row.replyToGuid ?? undefined,
       threadOriginatorGuid: row.threadOriginatorGuid ?? undefined,
       contactId: row.contactId ?? undefined,
+      ...messageStateFields(row),
     };
   }
 
@@ -1395,6 +1420,29 @@ function dayKeyForRow(row: RawIMessage): string {
   return `${row.chatIdentifier}:${formatDateKey(imessageDateToDate(row.date))}`;
 }
 
+/** A chat.db date column: nanoseconds since 2001, 0 or null when unset. */
+function optionalMessageDate(value: number | null | undefined): Date | undefined {
+  return value ? imessageDateToDate(value) : undefined;
+}
+
+/**
+ * Read, delivery, edit and unsend state from the newer chat.db columns. Each
+ * key is left out when the column is absent or null, so older schemas produce
+ * the same parsed message they always did.
+ */
+function messageStateFields(row: RawIMessage): Partial<ParsedIMessage> {
+  const dateRead = optionalMessageDate(row.dateRead);
+  const dateEdited = optionalMessageDate(row.dateEdited);
+  const dateRetracted = optionalMessageDate(row.dateRetracted);
+  return {
+    ...(row.isRead != null ? { isRead: !!row.isRead } : {}),
+    ...(row.isDelivered != null ? { isDelivered: !!row.isDelivered } : {}),
+    ...(dateRead ? { dateRead } : {}),
+    ...(dateEdited ? { dateEdited } : {}),
+    ...(dateRetracted ? { dateRetracted } : {}),
+  };
+}
+
 function messageSignaturePart(row: RawIMessage): string {
   const attributed =
     row.attributedBody && row.attributedBody.byteLength > 0
@@ -1414,6 +1462,14 @@ function messageSignaturePart(row: RawIMessage): string {
     row.replyToGuid ?? "",
     row.threadOriginatorGuid ?? "",
     row.groupTitle ?? "",
+    // Read, delivery, edit and unsend state change a row without touching its
+    // text, and the day document's metadata carries them.
+    row.isRead ?? "",
+    row.isDelivered ?? "",
+    row.dateRead ?? "",
+    row.dateEdited ?? "",
+    row.dateRetracted ?? "",
+    row.chatGuid ?? "",
     row.chatDisplayName ?? "",
     row.chatHandleCount,
     row.contactId ?? "",

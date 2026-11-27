@@ -259,7 +259,13 @@ describe("Google Calendar profile matches the normalizer", () => {
     location: "Room 4",
     description: "Agenda and dial-in from sarah.mendez@example.com",
     organizer: { displayName: "Maya Reeves", email: "maya.reeves@example.com" },
-    attendees: [{ displayName: "Jamie Lopez", email: "jamie.lopez@example.com" }],
+    attendees: [
+      { displayName: "Jamie Lopez", email: "jamie.lopez@example.com" },
+      { email: "owner.self@example.com", self: true, responseStatus: "accepted" },
+    ],
+    etag: '"3300000000000000"',
+    sequence: 2,
+    recurringEventId: "evt-series",
   });
 
   test("emits exactly the declared document type and person roles", async () => {

@@ -484,6 +484,20 @@ describe("normalizeDayChat", () => {
       "extra.isGroup",
       "extra.messageCount",
       "extra.chatName",
+      "extra.chatGuid",
+      "extra.direction",
+      "extra.selfMessageCount",
+      "extra.lastMessageFromSelf",
+      "extra.lastSelfMessageAt",
+      "extra.lastSelfMessageDelivered",
+      "extra.lastSelfMessageRead",
+      "extra.unreadCount",
+      "extra.lastReadAt",
+      "extra.editedMessageCount",
+      "extra.retractedMessageCount",
+      "extra.lastMessageGuid",
+      "extra.lastIncomingMessageGuid",
+      "extra.messageGuids",
     ]);
   });
 
@@ -872,5 +886,230 @@ describe("self-authored vocabulary evidence", () => {
     expect(enabled.metadata.selfAuthoredText).toEqual([
       { text: "Lanternshift", recordedAt: "2024-03-08T10:30:00.000Z", origin: "written" },
     ]);
+  });
+});
+
+describe("normalizeDayChat self, reply and read-state metadata", () => {
+  const normalize = (messages: ParsedIMessage[], chat: IMessageChatInfo = oneToOneChat) =>
+    normalizeDayChat(
+      "2024-03-08",
+      messages,
+      chat,
+      ProviderId("apple:test"),
+      SourceId("apple-imessage:test"),
+    );
+
+  test("an owner reply that is newest marks the conversation answered", () => {
+    const extra = normalize(
+      [
+        makeMsg({ rowId: 1, guid: "g-in", date: new Date("2024-03-08T10:00:00Z") }),
+        makeMsg({
+          rowId: 2,
+          guid: "g-out",
+          isFromMe: true,
+          sender: "You",
+          date: new Date("2024-03-08T10:05:00Z"),
+        }),
+      ],
+      { ...oneToOneChat, chatGuid: "iMessage;-;+15550100001" },
+    ).metadata.extra!;
+    expect(extra).toMatchObject({
+      chatGuid: "iMessage;-;+15550100001",
+      direction: "sent",
+      selfMessageCount: 1,
+      lastMessageFromSelf: true,
+      lastSelfMessageAt: "2024-03-08T10:05:00.000Z",
+      lastMessageGuid: "g-out",
+      lastIncomingMessageGuid: "g-in",
+      messageGuids: ["g-in", "g-out"],
+      editedMessageCount: 0,
+      retractedMessageCount: 0,
+    });
+  });
+
+  test("a day the owner never spoke in is received, with no last-self time", () => {
+    const extra = normalize([makeMsg({ guid: "g-in" })]).metadata.extra!;
+    expect(extra).toMatchObject({
+      direction: "received",
+      selfMessageCount: 0,
+      lastMessageFromSelf: false,
+    });
+    expect(extra).not.toHaveProperty("lastSelfMessageAt");
+    expect(extra).not.toHaveProperty("chatGuid");
+    expect(extra).not.toHaveProperty("unreadCount");
+    expect(extra).not.toHaveProperty("lastReadAt");
+  });
+
+  test("system messages and reactions do not count as the owner speaking", () => {
+    const extra = normalize([
+      makeMsg({ rowId: 1, guid: "g-in", date: new Date("2024-03-08T10:00:00Z") }),
+      makeMsg({
+        rowId: 2,
+        guid: "g-sys",
+        isFromMe: true,
+        isSystemMessage: true,
+        text: "Named the group",
+        date: new Date("2024-03-08T10:01:00Z"),
+      }),
+      makeMsg({
+        rowId: 3,
+        guid: "g-tap",
+        isFromMe: true,
+        sender: "You",
+        date: new Date("2024-03-08T10:02:00Z"),
+        tapback: { type: "Loved", targetGuid: "g-in", action: "add" },
+      }),
+    ]).metadata.extra!;
+    expect(extra).toMatchObject({
+      selfMessageCount: 0,
+      lastMessageFromSelf: false,
+      messageGuids: ["g-in"],
+    });
+  });
+
+  test("per-message entries carry direction, handle, reply guids and state", () => {
+    const extra = normalize([
+      makeMsg({
+        rowId: 1,
+        guid: "g-in",
+        contactId: "+15550100001",
+        isRead: false,
+        isDelivered: true,
+        date: new Date("2024-03-08T10:00:00Z"),
+      }),
+      makeMsg({
+        rowId: 2,
+        guid: "g-out",
+        isFromMe: true,
+        sender: "You",
+        replyToGuid: "g-in",
+        threadOriginatorGuid: "g-in",
+        isRead: true,
+        isDelivered: true,
+        dateRead: new Date("2024-03-08T10:07:00Z"),
+        dateEdited: new Date("2024-03-08T10:06:00Z"),
+        dateRetracted: new Date("2024-03-08T10:08:00Z"),
+        date: new Date("2024-03-08T10:05:00Z"),
+      }),
+    ]).metadata.extra!;
+    expect(extra.messages).toEqual([
+      {
+        guid: "g-in",
+        fromSelf: false,
+        direction: "received",
+        handleId: "+15550100001",
+        isRead: false,
+        isDelivered: true,
+      },
+      {
+        guid: "g-out",
+        fromSelf: true,
+        direction: "sent",
+        replyToGuid: "g-in",
+        threadOriginatorGuid: "g-in",
+        isRead: true,
+        isDelivered: true,
+        dateRead: "2024-03-08T10:07:00.000Z",
+        dateEdited: "2024-03-08T10:06:00.000Z",
+        dateRetracted: "2024-03-08T10:08:00.000Z",
+      },
+    ]);
+    expect(extra).toMatchObject({
+      unreadCount: 1,
+      lastSelfMessageDelivered: true,
+      lastSelfMessageRead: true,
+      editedMessageCount: 1,
+      retractedMessageCount: 1,
+    });
+    // The owner's own message was read by the recipient; that is not the
+    // owner's read time.
+    expect(extra).not.toHaveProperty("lastReadAt");
+  });
+
+  test("lastReadAt is the newest read time among incoming messages", () => {
+    const extra = normalize([
+      makeMsg({
+        rowId: 1,
+        guid: "a",
+        isRead: true,
+        dateRead: new Date("2024-03-08T10:30:00Z"),
+        date: new Date("2024-03-08T10:00:00Z"),
+      }),
+      makeMsg({
+        rowId: 2,
+        guid: "b",
+        isRead: true,
+        dateRead: new Date("2024-03-08T09:59:00Z"),
+        date: new Date("2024-03-08T10:10:00Z"),
+      }),
+    ]).metadata.extra!;
+    expect(extra).toMatchObject({ unreadCount: 0, lastReadAt: "2024-03-08T10:30:00.000Z" });
+  });
+
+  test("the per-message list keeps only the newest 25", () => {
+    const messages = Array.from({ length: 40 }, (_, i) =>
+      makeMsg({
+        rowId: i + 1,
+        guid: `g-${i + 1}`,
+        date: new Date(Date.UTC(2024, 2, 8, 8, 0, i)),
+      }),
+    );
+    const extra = normalize(messages).metadata.extra!;
+    expect(extra.messageCount).toBe(40);
+    expect(extra.messageGuids).toHaveLength(25);
+    expect((extra.messageGuids as string[])[0]).toBe("g-16");
+    expect((extra.messageGuids as string[])[24]).toBe("g-40");
+    expect(extra.messages as unknown[]).toHaveLength(25);
+    expect(extra.lastMessageGuid).toBe("g-40");
+  });
+
+  test("RCS is a declared service value", () => {
+    const rcs = normalize([makeMsg({ service: "RCS" })], { ...oneToOneChat, service: "RCS" });
+    expect(rcs.metadata.extra?.service).toBe("RCS");
+    for (const path of ["tags", "extra.service"]) {
+      expect(
+        appleIMessageDocumentProfile.metadataFields?.find((f) => f.path === path)?.canonicalValues,
+      ).toContain("RCS");
+    }
+  });
+
+  test("every flat field the normalizer emits is declared in the profile", () => {
+    const extra = normalize(
+      [
+        makeMsg({ guid: "g-in", isRead: false, dateRead: new Date("2024-03-08T10:30:00Z") }),
+        makeMsg({
+          rowId: 2,
+          guid: "g-out",
+          isFromMe: true,
+          isRead: true,
+          isDelivered: true,
+          date: new Date("2024-03-08T10:40:00Z"),
+        }),
+      ],
+      { ...oneToOneChat, chatGuid: "iMessage;-;+15550100001" },
+    ).metadata.extra!;
+    const declared = new Set(
+      appleIMessageDocumentProfile.metadataFields?.map((f) => f.path.replace(/^extra\./, "")),
+    );
+    const newFields = [
+      "chatGuid",
+      "direction",
+      "selfMessageCount",
+      "lastMessageFromSelf",
+      "lastSelfMessageAt",
+      "lastSelfMessageDelivered",
+      "lastSelfMessageRead",
+      "unreadCount",
+      "lastReadAt",
+      "editedMessageCount",
+      "retractedMessageCount",
+      "lastMessageGuid",
+      "lastIncomingMessageGuid",
+      "messageGuids",
+    ];
+    for (const key of newFields) {
+      expect(Object.keys(extra)).toContain(key);
+      expect(declared.has(key)).toBe(true);
+    }
   });
 });

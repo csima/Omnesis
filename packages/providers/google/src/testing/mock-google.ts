@@ -169,7 +169,12 @@ export function makeCalendarEvent(
     location?: string;
     description?: string;
     attendees?: calendar_v3.Schema$EventAttendee[];
-    organizer?: { displayName?: string; email?: string };
+    organizer?: { displayName?: string; email?: string; self?: boolean };
+    etag?: string;
+    sequence?: number;
+    recurringEventId?: string;
+    transparency?: string;
+    visibility?: string;
     htmlLink?: string;
     created?: string;
     updated?: string;
@@ -197,6 +202,11 @@ export function makeCalendarEvent(
     created: overrides.created ?? "2025-01-01T00:00:00Z",
     updated: overrides.updated ?? "2025-01-01T00:00:00Z",
     conferenceData: overrides.conferenceData,
+    etag: overrides.etag,
+    sequence: overrides.sequence,
+    recurringEventId: overrides.recurringEventId,
+    transparency: overrides.transparency,
+    visibility: overrides.visibility,
   };
 }
 
