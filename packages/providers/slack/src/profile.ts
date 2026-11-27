@@ -40,6 +40,57 @@ export const slackDocumentProfile: DocumentEventProfile = {
       semantics: "group-conversation",
       description: "Whether the conversation is shared by several members.",
     },
+    {
+      path: "extra.direction",
+      type: "string",
+      description:
+        "Whether the account owner posted anything in this day's conversation (sent) or only others did (received).",
+      allowedValues: ["sent", "received"],
+    },
+    {
+      path: "extra.selfMessageCount",
+      type: "number",
+      description: "How many of the day's messages, thread replies included, the owner posted.",
+    },
+    {
+      path: "extra.lastMessageFromSelf",
+      type: "boolean",
+      description:
+        "Whether the newest message in the day, thread replies included, was posted by the owner.",
+    },
+    {
+      path: "extra.lastSelfMessageAt",
+      type: "string",
+      description:
+        "ISO time of the owner's newest message in the day. Absent when they posted none.",
+    },
+    {
+      path: "extra.workspaceId",
+      type: "string",
+      description: "Slack team id (T…) of the workspace. Opaque; what a connector posts into.",
+    },
+    {
+      path: "extra.channelId",
+      type: "string",
+      description: "Slack conversation id (C…, G… or D…) a reply is posted to. Opaque.",
+    },
+    {
+      path: "extra.threadTs",
+      type: "string-array",
+      description:
+        "The thread_ts of every thread with messages in the day, oldest first: a root's own ts for a top-level message or thread, the parent's ts for replies. Reply in a thread by posting with its value.",
+    },
+    {
+      path: "extra.unansweredThreadTs",
+      type: "string-array",
+      description:
+        "The threadTs entries whose newest message in the day was not posted by the owner.",
+    },
+    {
+      path: "extra.latestTs",
+      type: "string",
+      description: "The Slack ts of the newest message in the day, thread replies included.",
+    },
   ],
 };
 

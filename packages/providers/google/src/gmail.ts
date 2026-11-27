@@ -58,6 +58,7 @@ import {
   partHeader,
   selfAuthoredMailText,
 } from "./gmail-message.js";
+import { gmailDirection, gmailReplyFields, gmailTriage } from "./gmail-reply.js";
 import type {
   AttachmentInfo,
   AttachmentExtractionConfig,
@@ -1084,6 +1085,13 @@ export class GmailSource {
         people,
         extra: {
           threadId: msg.threadId,
+          direction: gmailDirection(labels, from, this.accountEmail),
+          ...gmailTriage(labels),
+          ...gmailReplyFields({
+            messageId: getHeader("Message-ID"),
+            inReplyTo: getHeader("In-Reply-To"),
+            references: getHeader("References"),
+          }),
           ...(attachments.infos.length > 0 ? { attachments: attachments.infos } : {}),
         },
       },
