@@ -1262,3 +1262,90 @@ describe("GoogleCalendarSource.syncStructured", () => {
     });
   });
 });
+
+describe("calendar write and triage metadata", () => {
+  function sourceWith(items: unknown[]) {
+    const calendar = createMockCalendar();
+    calendar.calendarList.list = vi.fn(() =>
+      Promise.resolve({ data: { items: [makeCalendarListEntry("cal-1", { summary: "Work" })] } }),
+    );
+    calendar.events.list = vi.fn(() => Promise.resolve({ data: { items, nextSyncToken: "tok" } }));
+    return createCalendarSource(calendar);
+  }
+
+  test("an invited event carries ids, revision and the owner's RSVP", async () => {
+    const source = sourceWith([
+      makeCalendarEvent("evt-1_20250115T100000Z", {
+        etag: '"3300000000000000"',
+        sequence: 4,
+        recurringEventId: "evt-1",
+        transparency: "transparent",
+        visibility: "private",
+        attendees: [
+          { email: "me@example.com", self: true, responseStatus: "tentative" },
+          { email: "alice@example.com", responseStatus: "accepted" },
+        ],
+        organizer: { email: "alice@example.com" },
+      }),
+    ]);
+    const res = await source.syncStructured(null);
+    const doc = res.documents?.[0];
+    expect(doc?.externalId).toBe("cal-1:evt-1_20250115T100000Z");
+    expect(doc?.metadata.extra).toMatchObject({
+      eventId: "evt-1_20250115T100000Z",
+      recurringEventId: "evt-1",
+      etag: '"3300000000000000"',
+      sequence: 4,
+      selfResponseStatus: "tentative",
+      organizerIsSelf: false,
+      transparency: "transparent",
+      visibility: "private",
+    });
+  });
+
+  test("an event the owner organizes alone has no RSVP and defaults to busy and default", async () => {
+    const source = sourceWith([
+      makeCalendarEvent("evt-2", { organizer: { email: "me@example.com", self: true } }),
+    ]);
+    const extra = (await source.syncStructured(null)).documents?.[0]?.metadata.extra;
+    expect(extra).toMatchObject({
+      eventId: "evt-2",
+      organizerIsSelf: true,
+      transparency: "opaque",
+      visibility: "default",
+    });
+    expect(extra).not.toHaveProperty("selfResponseStatus");
+    expect(extra).not.toHaveProperty("recurringEventId");
+    expect(extra).not.toHaveProperty("etag");
+    expect(extra).not.toHaveProperty("sequence");
+  });
+
+  test("a sequence of zero is kept and a missing organizer leaves organizerIsSelf out", async () => {
+    const noOrganizer = makeCalendarEvent("evt-3", { sequence: 0 });
+    delete noOrganizer.organizer;
+    const source = sourceWith([noOrganizer]);
+    const extra = (await source.syncStructured(null)).documents?.[0]?.metadata.extra;
+    expect(extra).toMatchObject({ sequence: 0 });
+    expect(extra).not.toHaveProperty("organizerIsSelf");
+  });
+
+  test("a declined RSVP reaches the document and agrees with the analytics row", async () => {
+    const source = sourceWith([
+      makeCalendarEvent("evt-4", {
+        attendees: [{ email: "me@example.com", self: true, responseStatus: "declined" }],
+      }),
+    ]);
+    const res = await source.syncStructured(null);
+    expect(res.documents?.[0]?.metadata.extra).toMatchObject({ selfResponseStatus: "declined" });
+    expect(rowsFor(res, "google_calendar_events")[0]).toMatchObject({
+      response_status: "declined",
+    });
+  });
+
+  test("a cancelled event is still removed rather than written as a document", async () => {
+    const source = sourceWith([makeCalendarEvent("evt-5", { status: "cancelled" })]);
+    const res = await source.syncStructured(null);
+    expect(res.documents ?? []).toHaveLength(0);
+    expect(res.deletedExternalIds).toContain("cal-1:evt-5");
+  });
+});

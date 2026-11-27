@@ -145,7 +145,7 @@ export const googleCalendarDocumentEventProfile: DocumentEventProfile = {
       path: "extra.status",
       type: "string",
       description:
-        "The event's lifecycle state. A cancelled event is removed from the index instead of being written, so only these two states reach a document.",
+        "The event's lifecycle state. A cancelled event is deleted from the index when Google reports it, rather than kept as a document, so only these two states reach a document; a cancellation is seen as the document disappearing.",
       allowedValues: ["confirmed", "tentative"],
       valueAliases: {
         tentative: ["provisional", "not yet confirmed", "penciled in"],
@@ -156,6 +156,67 @@ export const googleCalendarDocumentEventProfile: DocumentEventProfile = {
       type: "string",
       description:
         "RFC 5545 identifier for the event — the same value every system that exposes it uses, including ICS invitations delivered by email. Stable across edits: moving an event changes its time, not this. It is what a condition about one particular event has to be written against, since a title can be shared and a time is the thing being watched for. Opaque: never shown to a person and never parsed for meaning.",
+    },
+    {
+      path: "extra.eventId",
+      type: "string",
+      description:
+        "Google's own event id, the one a Calendar API write names (events.patch, events.delete). It is the tail of the document's external id, which also carries the calendar id. For one occurrence of a series it is the occurrence's own id. Opaque: never shown to a person and never parsed for meaning.",
+    },
+    {
+      path: "extra.recurringEventId",
+      type: "string",
+      description:
+        "The eventId of the series master this occurrence belongs to. Absent on a single event and on the master itself. Opaque.",
+    },
+    {
+      path: "extra.etag",
+      type: "string",
+      description:
+        "Google's ETag of the event as last synced, quotes included. A connector sends it as If-Match so a write fails instead of overwriting a newer edit. Changes on every edit. Opaque.",
+    },
+    {
+      path: "extra.sequence",
+      type: "number",
+      description:
+        "Google's revision counter of the event, raised when the organizer changes it in a way that matters to invitees. Absent when Google reports none.",
+    },
+    {
+      path: "extra.selfResponseStatus",
+      type: "string",
+      description:
+        "The account owner's own RSVP: needsAction is an invitation not yet answered. Absent when the owner is not on the guest list, as on an event they organize alone.",
+      allowedValues: ["needsAction", "declined", "tentative", "accepted"],
+      valueAliases: {
+        needsAction: ["unanswered", "no response", "not responded", "pending"],
+        declined: ["said no", "turned down"],
+        tentative: ["maybe", "might attend"],
+        accepted: ["said yes", "going", "attending"],
+      },
+    },
+    {
+      path: "extra.organizerIsSelf",
+      type: "boolean",
+      description:
+        "True when the account owner organizes the event, false when someone else does. Absent when the event reports no organizer.",
+    },
+    {
+      path: "extra.transparency",
+      type: "string",
+      description:
+        "Whether the event blocks the owner's time: opaque is busy, transparent is free. Google omits it for the default, which is reported as opaque.",
+      allowedValues: ["opaque", "transparent"],
+      valueAliases: {
+        opaque: ["busy", "blocks time"],
+        transparent: ["free", "available", "does not block time"],
+      },
+    },
+    {
+      path: "extra.visibility",
+      type: "string",
+      description:
+        "Who else can see the event's details on a shared calendar. Google omits it for the default, which is reported as default.",
+      allowedValues: ["default", "public", "private", "confidential"],
     },
     {
       path: "extra.calendarName",

@@ -113,6 +113,72 @@ export function buildIMessageSourceUrl(messageGuid: string | undefined): string 
   return `messages://open?message-guid=${encodeURIComponent(messageGuid)}`;
 }
 
+/** The newest messages whose identifiers and state a day document lists. */
+const MESSAGE_METADATA_LIMIT = 25;
+
+const toIso = (d: Date): string => d.toISOString();
+
+/**
+ * Who spoke last, what the owner has and hasn't read, and the identifiers a
+ * write-only connector needs to reply, for one day of a chat. Counts cover
+ * every message of the day; the per-message list holds the newest
+ * {@link MESSAGE_METADATA_LIMIT} so a busy day cannot grow the metadata
+ * without bound. `handleId` is the other party's handle string, not chat.db's
+ * local row number, so two Macs holding the same conversation emit the same
+ * document. Read, delivery, edit and unsend keys appear only when the
+ * database reported them.
+ */
+function conversationStateExtra(
+  chat: IMessageChatInfo,
+  messages: ParsedIMessage[],
+): Record<string, unknown> {
+  const spoken = messages.filter((m) => !m.isSystemMessage);
+  const selfMessages = spoken.filter((m) => m.isFromMe);
+  const incoming = spoken.filter((m) => !m.isFromMe);
+  const last = spoken[spoken.length - 1];
+  const lastSelf = selfMessages[selfMessages.length - 1];
+  const lastIncoming = incoming[incoming.length - 1];
+  const readKnown = incoming.some((m) => m.isRead !== undefined);
+  const lastRead = incoming.reduce<Date | undefined>(
+    (acc, m) => (m.dateRead && (!acc || m.dateRead > acc) ? m.dateRead : acc),
+    undefined,
+  );
+  const edited = spoken.filter((m) => m.dateEdited);
+  const retracted = spoken.filter((m) => m.dateRetracted);
+  const recent = spoken.slice(-MESSAGE_METADATA_LIMIT);
+  return {
+    ...(chat.chatGuid ? { chatGuid: chat.chatGuid } : {}),
+    direction: selfMessages.length === 0 ? "received" : "sent",
+    selfMessageCount: selfMessages.length,
+    ...(last ? { lastMessageFromSelf: last.isFromMe } : {}),
+    ...(lastSelf ? { lastSelfMessageAt: toIso(lastSelf.date) } : {}),
+    ...(lastSelf?.isDelivered !== undefined
+      ? { lastSelfMessageDelivered: lastSelf.isDelivered }
+      : {}),
+    ...(lastSelf?.isRead !== undefined ? { lastSelfMessageRead: lastSelf.isRead } : {}),
+    ...(readKnown ? { unreadCount: incoming.filter((m) => m.isRead === false).length } : {}),
+    ...(lastRead ? { lastReadAt: toIso(lastRead) } : {}),
+    editedMessageCount: edited.length,
+    retractedMessageCount: retracted.length,
+    ...(last ? { lastMessageGuid: last.guid } : {}),
+    ...(lastIncoming ? { lastIncomingMessageGuid: lastIncoming.guid } : {}),
+    messageGuids: recent.map((m) => m.guid),
+    messages: recent.map((m) => ({
+      guid: m.guid,
+      fromSelf: m.isFromMe,
+      direction: m.isFromMe ? "sent" : "received",
+      ...(!m.isFromMe && m.contactId ? { handleId: m.contactId } : {}),
+      ...(m.replyToGuid ? { replyToGuid: m.replyToGuid } : {}),
+      ...(m.threadOriginatorGuid ? { threadOriginatorGuid: m.threadOriginatorGuid } : {}),
+      ...(m.isRead !== undefined ? { isRead: m.isRead } : {}),
+      ...(m.isDelivered !== undefined ? { isDelivered: m.isDelivered } : {}),
+      ...(m.dateRead ? { dateRead: toIso(m.dateRead) } : {}),
+      ...(m.dateEdited ? { dateEdited: toIso(m.dateEdited) } : {}),
+      ...(m.dateRetracted ? { dateRetracted: toIso(m.dateRetracted) } : {}),
+    })),
+  };
+}
+
 /**
  * Normalize a set of messages for one chat on one day into a DocumentInput.
  */
@@ -382,6 +448,7 @@ export function normalizeDayChat(
         participants: Array.from(participants),
         participantHandles: chat.participantHandles ?? undefined,
         date,
+        ...conversationStateExtra(chat, regularMessages),
       },
     },
     sourceCreatedAt: new Date(`${date}T00:00:00.000Z`).toISOString(),

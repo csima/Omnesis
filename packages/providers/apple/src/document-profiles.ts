@@ -32,11 +32,12 @@ import type { DocumentEventProfile } from "@omnesis/source-sdk";
  * passes Apple's `message.service` through verbatim and falls back to
  * `"iMessage"`, so other services a future macOS emits stay valid.
  */
-const MESSAGE_SERVICES = ["iMessage", "SMS"];
+const MESSAGE_SERVICES = ["iMessage", "SMS", "RCS"];
 
 const MESSAGE_SERVICE_ALIASES: Record<string, string[]> = {
   iMessage: ["imessage", "blue bubble"],
   SMS: ["sms", "text message", "green bubble"],
+  RCS: ["rcs", "rich text message"],
 };
 
 /** One document per note; the folder name is the note's only tag. */
@@ -151,6 +152,88 @@ export const appleIMessageDocumentProfile: DocumentEventProfile = {
       // own display name — the same value that becomes their participant name.
       identifiesPeople: true,
       description: "Name given to the chat, as group chats usually have. Absent when it has none.",
+    },
+    {
+      path: "extra.chatGuid",
+      type: "string",
+      description:
+        "Messages' own identifier of the chat (chat.guid, such as iMessage;-;+15550100001), the one Messages automation addresses a chat by. Embeds the other party's handle for a one-to-one chat. Opaque to a person; never parsed for meaning. Absent when the database reports none.",
+      identifiesPeople: true,
+    },
+    {
+      path: "extra.direction",
+      type: "string",
+      description:
+        "Whether the account owner sent anything in this day's conversation (sent) or only others did (received).",
+      allowedValues: ["sent", "received"],
+    },
+    {
+      path: "extra.selfMessageCount",
+      type: "number",
+      description: "How many of the day's messages, reactions excluded, the owner sent.",
+    },
+    {
+      path: "extra.lastMessageFromSelf",
+      type: "boolean",
+      description:
+        "Whether the newest message of the day, reactions excluded, was sent by the owner. False means the other side spoke last.",
+    },
+    {
+      path: "extra.lastSelfMessageAt",
+      type: "string",
+      description: "ISO time of the owner's newest message of the day. Absent when they sent none.",
+    },
+    {
+      path: "extra.lastSelfMessageDelivered",
+      type: "boolean",
+      description:
+        "Whether Messages marked the owner's newest message of the day delivered. Absent when they sent none or the database has no delivery state.",
+    },
+    {
+      path: "extra.lastSelfMessageRead",
+      type: "boolean",
+      description:
+        "Whether the recipient has read the owner's newest message of the day. Absent when they sent none or the database has no read state.",
+    },
+    {
+      path: "extra.unreadCount",
+      type: "number",
+      description:
+        "How many of the day's incoming messages the owner has not read. Absent when the database has no read state.",
+    },
+    {
+      path: "extra.lastReadAt",
+      type: "string",
+      description:
+        "ISO time the owner last read an incoming message of the day. Absent when none was read or the database has no read time.",
+    },
+    {
+      path: "extra.editedMessageCount",
+      type: "number",
+      description: "How many of the day's messages were edited after being sent.",
+    },
+    {
+      path: "extra.retractedMessageCount",
+      type: "number",
+      description: "How many of the day's messages were unsent.",
+    },
+    {
+      path: "extra.lastMessageGuid",
+      type: "string",
+      description:
+        "Messages' guid of the newest message of the day. Opaque; a connector replies in the thread of it.",
+    },
+    {
+      path: "extra.lastIncomingMessageGuid",
+      type: "string",
+      description:
+        "Messages' guid of the newest message the owner received that day: what a reply answers. Absent when they received none.",
+    },
+    {
+      path: "extra.messageGuids",
+      type: "string-array",
+      description:
+        "Guids of the day's newest 25 messages, oldest first. The same messages, with the sender's handle (handleId), direction, reply and thread-originator guids, read, delivered, edited and unsent state, sit under extra.messages, a list of objects that is read rather than filtered on.",
     },
   ],
 };
