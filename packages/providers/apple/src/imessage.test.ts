@@ -123,13 +123,19 @@ function insertChat(
   db: Db,
   rowId: number,
   chatIdentifier: string,
-  opts: { style?: number; displayName?: string; service?: string; handleIds?: number[] } = {},
+  opts: {
+    style?: number;
+    displayName?: string;
+    service?: string;
+    handleIds?: number[];
+    guid?: string;
+  } = {},
 ) {
   db.prepare(
     "INSERT INTO chat (ROWID, guid, style, chat_identifier, service_name, display_name) VALUES (?, ?, ?, ?, ?, ?)",
   ).run(
     rowId,
-    `chat-${rowId}`,
+    opts.guid ?? `chat-${rowId}`,
     opts.style ?? 45,
     chatIdentifier,
     opts.service ?? "iMessage",
@@ -358,8 +364,10 @@ describe("AppleIMessageSource", () => {
     const replicaDb = createTestDb(replicaPath);
     insertHandle(replicaDb, 101, "+14085550123");
     insertHandle(replicaDb, 202, "friend@example.com");
-    insertChat(replicaDb, 110, "+14085550123", { style: 43, handleIds: [101] });
+    // chat.guid is synchronized through iCloud like message guids, so both stores agree on it.
+    insertChat(replicaDb, 110, "+14085550123", { style: 43, handleIds: [101], guid: "chat-1" });
     insertChat(replicaDb, 220, "cloud-group-chat", {
+      guid: "chat-2",
       style: 45,
       displayName: "Family",
       handleIds: [101, 202],
@@ -2125,5 +2133,166 @@ describe("AppleIMessageSource", () => {
         "+14085550123:2024-03-09",
       ]);
     });
+  });
+});
+
+describe("AppleIMessageSource write and read-state metadata", () => {
+  let tmpDir: string;
+  let testDb: Db;
+  let provider: AppleProvider;
+  let source: AppleIMessageSource;
+
+  async function open(newerColumns: boolean) {
+    tmpDir = mkdtempSync(join(tmpdir(), "apple-imessage-meta-"));
+    const dbPath = join(tmpDir, "chat.db");
+    testDb = createTestDb(dbPath);
+    if (newerColumns) {
+      for (const col of [
+        "is_read INTEGER DEFAULT 0",
+        "is_delivered INTEGER DEFAULT 0",
+        "date_read INTEGER DEFAULT 0",
+        "date_edited INTEGER DEFAULT 0",
+        "date_retracted INTEGER DEFAULT 0",
+      ]) {
+        testDb.exec(`ALTER TABLE message ADD COLUMN ${col}`);
+      }
+    }
+    insertHandle(testDb, 1, "+15550100001");
+    insertChat(testDb, 1, "+15550100001", { style: 45, handleIds: [1] });
+    provider = new AppleProvider({
+      notesDbPath: join(tmpDir, "nonexistent.sqlite"),
+      remindersDirPath: join(tmpDir, "nonexistent-dir"),
+      imessageDbPath: dbPath,
+      accountId: "test@example.com",
+    });
+    await provider.initialize();
+    await provider.authenticate();
+    source = new AppleIMessageSource(provider, {
+      sourceId: "apple-imessage:test@example.com",
+      providerId: "apple:test@example.com",
+    });
+  }
+
+  afterEach(async () => {
+    testDb.close();
+    await provider.disconnect();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("a database without the newer columns still syncs with self and chat metadata", async () => {
+    await open(false);
+    insertMessage(testDb, 1, 1, { text: "Are you free?", handleId: 1, guid: "guid-in" });
+    insertMessage(testDb, 2, 1, {
+      text: "Yes",
+      isFromMe: true,
+      date: DATE_2024_03_08_11AM,
+      guid: "guid-out",
+    });
+
+    const result = await source.sync(null);
+    expect(result.documents).toHaveLength(1);
+    const extra = result.documents[0].metadata.extra!;
+    expect(extra).toMatchObject({
+      chatGuid: "chat-1",
+      direction: "sent",
+      selfMessageCount: 1,
+      lastMessageFromSelf: true,
+      lastIncomingMessageGuid: "guid-in",
+      messageGuids: ["guid-in", "guid-out"],
+    });
+    expect(extra.messages).toEqual([
+      { guid: "guid-in", fromSelf: false, direction: "received", handleId: "+15550100001" },
+      { guid: "guid-out", fromSelf: true, direction: "sent" },
+    ]);
+    for (const absent of ["unreadCount", "lastReadAt", "lastSelfMessageRead"]) {
+      expect(extra).not.toHaveProperty(absent);
+    }
+  });
+
+  test("newer columns surface unread count, read time, edit and unsend state", async () => {
+    await open(true);
+    insertMessage(testDb, 1, 1, { text: "First", handleId: 1, guid: "guid-1" });
+    insertMessage(testDb, 2, 1, {
+      text: "Second",
+      handleId: 1,
+      date: DATE_2024_03_08_11AM,
+      guid: "guid-2",
+    });
+    insertMessage(testDb, 3, 1, {
+      text: "Reply",
+      isFromMe: true,
+      date: DATE_2024_03_08_11AM + 60_000_000_000,
+      guid: "guid-3",
+    });
+    const readAt = DATE_2024_03_08_10AM + 5_000_000_000;
+    const editedAt = DATE_2024_03_08_11AM + 120_000_000_000;
+    testDb.prepare("UPDATE message SET is_read = 1, date_read = ? WHERE ROWID = 1").run(readAt);
+    testDb
+      .prepare(
+        "UPDATE message SET is_read = 1, is_delivered = 1, date_edited = ?, date_retracted = ? WHERE ROWID = 3",
+      )
+      .run(editedAt, editedAt + 1_000_000_000);
+
+    const extra = (await source.sync(null)).documents[0].metadata.extra!;
+    expect(extra).toMatchObject({
+      unreadCount: 1,
+      lastReadAt: "2024-03-08T10:00:05.000Z",
+      lastSelfMessageDelivered: true,
+      lastSelfMessageRead: true,
+      editedMessageCount: 1,
+      retractedMessageCount: 1,
+    });
+    const last = (extra.messages as Record<string, unknown>[])[2];
+    expect(last).toMatchObject({
+      guid: "guid-3",
+      fromSelf: true,
+      isRead: true,
+      isDelivered: true,
+      dateEdited: "2024-03-08T11:02:00.000Z",
+      dateRetracted: "2024-03-08T11:02:01.000Z",
+    });
+  });
+
+  test("reply and thread-originator guids reach the per-message list", async () => {
+    await open(true);
+    insertMessage(testDb, 1, 1, { text: "Question", handleId: 1, guid: "guid-q" });
+    insertMessage(testDb, 2, 1, {
+      text: "Answer",
+      isFromMe: true,
+      date: DATE_2024_03_08_11AM,
+      guid: "guid-a",
+    });
+    testDb
+      .prepare(
+        "UPDATE message SET reply_to_guid = 'guid-q', thread_originator_guid = 'guid-q' WHERE ROWID = 2",
+      )
+      .run();
+    const extra = (await source.sync(null)).documents[0].metadata.extra!;
+    expect((extra.messages as Record<string, unknown>[])[1]).toMatchObject({
+      guid: "guid-a",
+      replyToGuid: "guid-q",
+      threadOriginatorGuid: "guid-q",
+    });
+  });
+
+  test("a later read of a message re-emits its day with the new unread count", async () => {
+    await open(true);
+    insertMessage(testDb, 1, 1, { text: "Ping", handleId: 1, guid: "guid-1" });
+    const first = await source.sync(null);
+    expect(first.documents[0].metadata.extra?.unreadCount).toBe(1);
+
+    testDb
+      .prepare("UPDATE message SET is_read = 1, date_read = ? WHERE ROWID = 1")
+      .run(DATE_2024_03_08_11AM);
+    const second = await source.sync(first.cursor);
+    const day = second.documents.find((d) => d.externalId === "+15550100001:2024-03-08");
+    expect(day?.metadata.extra?.unreadCount).toBe(0);
+  });
+
+  test("an RCS conversation keeps its service", async () => {
+    await open(false);
+    insertMessage(testDb, 1, 1, { text: "Hi", handleId: 1, service: "RCS" });
+    const doc = (await source.sync(null)).documents[0];
+    expect(doc.metadata.extra?.service).toBe("RCS");
   });
 });

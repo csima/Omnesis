@@ -146,6 +146,35 @@ interface CalendarPage {
 }
 
 /**
+ * The viewer's own RSVP — the attendee flagged `self`. Organizer-only events
+ * have no attendee row, so it is undefined there.
+ */
+function selfResponseStatus(event: calendar_v3.Schema$Event): string | undefined {
+  return (event.attendees ?? []).find((a) => a.self)?.responseStatus ?? undefined;
+}
+
+/**
+ * The identifiers a write-only connector patches an event with, and the
+ * mutable RSVP / availability state it triages on. Absent values are left out
+ * rather than written as null. Google omits `transparency` and `visibility`
+ * for the defaults, so they are filled in: an unset transparency is "opaque"
+ * (busy) and an unset visibility is "default".
+ */
+function calendarWriteFields(event: calendar_v3.Schema$Event): Record<string, unknown> {
+  const rsvp = selfResponseStatus(event);
+  return {
+    ...(event.id ? { eventId: event.id } : {}),
+    ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+    ...(event.etag ? { etag: event.etag } : {}),
+    ...(typeof event.sequence === "number" ? { sequence: event.sequence } : {}),
+    ...(rsvp ? { selfResponseStatus: rsvp } : {}),
+    ...(event.organizer ? { organizerIsSelf: event.organizer.self === true } : {}),
+    transparency: event.transparency ?? "opaque",
+    visibility: event.visibility ?? "default",
+  };
+}
+
+/**
  * Google Calendar source.
  * Fetches calendar events, normalizing each into a Document AND a
  * `google_calendar_events` analytics row (hybrid source).
@@ -728,6 +757,7 @@ export class GoogleCalendarSource {
           // link extractor can resolve `calendar-event` cross-source links
           // from email-attached invites
           iCalUID: event.iCalUID ?? undefined,
+          ...calendarWriteFields(event),
         },
       },
       sourceCreatedAt: sourceDate,
@@ -773,7 +803,7 @@ export class GoogleCalendarSource {
 
     // The viewer's own RSVP — the attendee flagged `self`. Organizer-only
     // events have no attendee row, so it stays null.
-    const selfResponse = (event.attendees ?? []).find((a) => a.self)?.responseStatus ?? null;
+    const selfResponse = selfResponseStatus(event) ?? null;
 
     return {
       id: `${calendar.id}:${event.id}`,

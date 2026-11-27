@@ -70,6 +70,17 @@ export interface RawIMessage {
   replyToGuid: string | null;
   threadOriginatorGuid: string | null;
   groupTitle: string | null;
+  /**
+   * Columns newer macOS releases add. Absent from the row (not just null) when
+   * the database's schema lacks the column, so an older chat.db reads cleanly.
+   */
+  isRead?: number | null;
+  isDelivered?: number | null;
+  dateRead?: number | null;
+  dateEdited?: number | null;
+  dateRetracted?: number | null;
+  /** chat.guid, e.g. `iMessage;-;+15550100001`. */
+  chatGuid?: string | null;
   chatIdentifier: string;
   chatDisplayName: string | null;
   /**
@@ -123,6 +134,13 @@ export interface ParsedIMessage {
   replyToGuid?: string;
   threadOriginatorGuid?: string;
   contactId?: string;
+  /** message.is_read: owner read it (incoming) or the recipient did (outgoing). Unset on schemas without the column. */
+  isRead?: boolean;
+  isDelivered?: boolean;
+  /** message.date_read; unset when never read or unknown. */
+  dateRead?: Date;
+  dateEdited?: Date;
+  dateRetracted?: Date;
 }
 
 /**
@@ -162,6 +180,8 @@ export interface IMessageChatInfo {
   displayName: string | null;
   isGroup: boolean;
   service: string;
+  /** chat.guid, the identifier Messages automation addresses a chat by. */
+  chatGuid?: string;
   /**
    * Full participant roster (phone/email handle strings, from
    * `chat_handle_join`) for a group chat, so members who stayed silent on a
