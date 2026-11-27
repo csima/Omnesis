@@ -17,10 +17,12 @@
  *
  * For each op the suite holds one call to what it may cost: a short hold, an
  * unrelated write served promptly behind it, and the whole job done once the
- * calls are. `OMNESIS_WRITER_MAINTENANCE_DOCS` sizes the corpus for a bench.
+ * calls are. A queued write's wait leaves out the WAL checkpoint the writer
+ * runs between ops once an op's frames are waiting: that copy is bounded by
+ * the WAL checkpoint suite. `OMNESIS_WRITER_MAINTENANCE_DOCS` sizes the corpus for a bench.
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { createLogger } from "@omnesis/core";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -33,6 +35,7 @@ import { WriterTaskRunner } from "./runners/writer.js";
 import { IoTaskRunner } from "./runners/io.js";
 import { writeGateFromScheduler } from "./write-ops.js";
 import { ioGateFromScheduler, type IoGate } from "./io-ops.js";
+import { checkpointedMs, writerBenchDbPath } from "./__fixtures__/writer-bench.js";
 import { catalogRefreshTask } from "./tasks/backfill-tasks.js";
 import { sweepCollapsedCandidates } from "./tasks/backfill-helpers.js";
 import {
@@ -78,7 +81,7 @@ describe("writer maintenance against a large encrypted corpus", () => {
   let pressureSeq = 0;
 
   beforeAll(async () => {
-    dbPath = `/tmp/omnesis-test-${randomUUID()}.db`;
+    dbPath = writerBenchDbPath();
     const seed = createDatabase(dbPath, { encryptionKey: key }) as unknown as Database.Database;
     try {
       setActiveAlgoVersion(seed as never, PILOT_ALGO);
@@ -145,19 +148,21 @@ describe("writer maintenance against a large encrypted corpus", () => {
   }
 
   /**
-   * Time a write queued behind an op. A writer op is dispatched when it is
-   * enqueued, so it is already inside the writer; an op that starts with io
-   * reads gets `settleMs` to reach the writer first.
+   * Time a write queued behind an op, less the checkpoints run meanwhile. A
+   * writer op is dispatched when it is enqueued, so it is already inside the
+   * writer; an op that starts with io reads gets `settleMs` to reach the writer
+   * first.
    */
   async function waitBehind(priority: "user" | "background", settleMs = 0): Promise<number> {
     if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+    const checkpointed = checkpointedMs(scheduler);
     const started = performance.now();
     expect(
       await runWithPriority(priority, () =>
         gate.setSyncState(`synth-pressure-${pressureSeq++}`, CURSOR, undefined),
       ),
     ).toBe(true);
-    return performance.now() - started;
+    return performance.now() - started - (checkpointedMs(scheduler) - checkpointed);
   }
 
   test("the catalog is measured on io readers and the writer only stores the rows", async () => {

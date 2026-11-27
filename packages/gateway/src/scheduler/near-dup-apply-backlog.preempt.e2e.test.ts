@@ -18,11 +18,12 @@
  * This suite seeds a signed corpus of invented documents, sixteen bucket rows
  * each, and holds the op to what one call may cost: a short hold, an unrelated
  * write that is served promptly behind it at a higher priority and at its own,
- * and the whole batch applied once the calls are done.
+ * and the whole batch applied once the calls are done. A queued write's wait
+ * leaves out the WAL checkpoint the writer runs between ops once a batch's
+ * frames are waiting: that copy is bounded by the WAL checkpoint suite.
  * `OMNESIS_NEAR_DUP_BACKLOG_DOCS` sizes the corpus for a bench run.
  */
 
-import { randomUUID } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -32,6 +33,7 @@ import { setActiveAlgoVersion } from "../near-dupes/meta.js";
 import { Scheduler } from "./scheduler.js";
 import { WriterTaskRunner } from "./runners/writer.js";
 import { writeGateFromScheduler } from "./write-ops.js";
+import { checkpointedMs, writerBenchDbPath } from "./__fixtures__/writer-bench.js";
 import type { NearDupApplyBatch } from "../near-dupes/types.js";
 import type { WriteGate } from "../write-gate.js";
 import type { SyncCursor } from "@omnesis/source-sdk";
@@ -173,7 +175,7 @@ describe("nearDup.applyBatch on the writer against a drive-sized signed corpus",
   let nextBatch = 0;
 
   beforeAll(async () => {
-    dbPath = `/tmp/omnesis-test-${randomUUID()}.db`;
+    dbPath = writerBenchDbPath();
     seedCorpus(dbPath);
     scheduler = new Scheduler({ enablePreemption: true });
     scheduler.registerRunner(
@@ -219,6 +221,18 @@ describe("nearDup.applyBatch on the writer against a drive-sized signed corpus",
   /** Give a batch just dispatched time to be inside the writer. */
   const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
 
+  /** Time a write queued behind the batch in flight, less the checkpoints run meanwhile. */
+  async function queuedWriteMs(priority: "user" | "background"): Promise<number> {
+    const checkpointed = checkpointedMs(scheduler);
+    const started = performance.now();
+    expect(
+      await runWithPriority(priority, () =>
+        gate.setSyncState(`synth-pressure-${pressureSeq++}`, CURSOR, undefined),
+      ),
+    ).toBe(true);
+    return performance.now() - started - (checkpointedMs(scheduler) - checkpointed);
+  }
+
   function count(sql: string, ...args: string[]): number {
     return read.prepare<string[], { n: number }>(sql).get(...args)!.n;
   }
@@ -252,13 +266,7 @@ describe("nearDup.applyBatch on the writer against a drive-sized signed corpus",
   test("a user write queued behind a batch is served promptly", async () => {
     const applying = apply(await enqueueBatch());
     await settle();
-    const started = performance.now();
-    expect(
-      await runWithPriority("user", () =>
-        gate.setSyncState(`synth-pressure-${pressureSeq++}`, CURSOR, undefined),
-      ),
-    ).toBe(true);
-    const waited = performance.now() - started;
+    const waited = await queuedWriteMs("user");
     expect((await applying).inboxConsumed).toBe(BATCH_DOCS);
     expect(waited).toBeLessThan(HOLD_BUDGET_MS);
   }, 600_000);
@@ -266,13 +274,7 @@ describe("nearDup.applyBatch on the writer against a drive-sized signed corpus",
   test("a background write at the batch's own priority is served promptly", async () => {
     const applying = apply(await enqueueBatch());
     await settle();
-    const started = performance.now();
-    expect(
-      await runWithPriority("background", () =>
-        gate.setSyncState(`synth-pressure-${pressureSeq++}`, CURSOR, undefined),
-      ),
-    ).toBe(true);
-    const waited = performance.now() - started;
+    const waited = await queuedWriteMs("background");
     expect((await applying).inboxConsumed).toBe(BATCH_DOCS);
     expect(waited).toBeLessThan(HOLD_BUDGET_MS);
     expect(maxApplyHoldMs()).toBeLessThan(HOLD_BUDGET_MS);
