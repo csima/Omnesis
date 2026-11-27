@@ -15,6 +15,8 @@ export interface NotionContext {
   accountId: string;
   dataCutoff?: string;
   userMap: UserMap;
+  /** The Notion user who owns the integration, when Notion names one. */
+  selfUserId?: string;
   /** Config dir the workspace's tokens live under — undefined means the default. */
   configDir?: string;
 }

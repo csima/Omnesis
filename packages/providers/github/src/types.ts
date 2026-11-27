@@ -311,6 +311,7 @@ export interface GqlActor {
 }
 
 export interface GqlComment {
+  id?: string;
   author?: GqlActor | null;
   body: string;
   createdAt: string;
@@ -327,6 +328,7 @@ export interface GqlCommentPage {
 }
 
 export interface GqlReview {
+  id?: string;
   author?: GqlActor | null;
   state: string;
   body?: string;
@@ -334,6 +336,7 @@ export interface GqlReview {
   comments?: {
     pageInfo?: { hasNextPage: boolean };
     nodes?: Array<{
+      id?: string;
       author?: GqlActor | null;
       body: string;
       path?: string | null;
@@ -345,6 +348,8 @@ export interface GqlReview {
 
 export interface GqlThreadBase {
   __typename: "Issue" | "PullRequest";
+  /** GraphQL global node id. */
+  id?: string;
   number: number;
   title: string;
   body?: string | null;
@@ -371,6 +376,14 @@ export interface GqlPullRequest extends GqlThreadBase {
   merged?: boolean;
   mergedAt?: string | null;
   mergedBy?: GqlActor | null;
+  /** Head commit sha of the pull request branch. */
+  headRefOid?: string;
+  reviewRequests?: {
+    nodes?: Array<{
+      requestedReviewer?: { __typename?: string; login?: string; combinedSlug?: string } | null;
+    } | null> | null;
+  } | null;
+  reviewThreads?: { nodes?: Array<{ id?: string } | null> | null } | null;
   baseRefName?: string;
   headRefName?: string;
   additions?: number;

@@ -25,6 +25,8 @@ import { googleBrokerSpec, type GoogleBrokerPurpose } from "./broker.js";
 import {
   gmailDocumentEventProfile,
   googleCalendarDocumentEventProfile,
+  googleDriveDocumentEventProfile,
+  googleContactsDocumentEventProfile,
 } from "./document-event-profiles.js";
 import {
   gmailStateSpec,
@@ -304,6 +306,7 @@ export default defineProvider<GoogleContext>({
         // `sync`.
         state: googleDriveStateSpec,
       },
+      documentEventProfile: googleDriveDocumentEventProfile,
       async create({ accountId, dataCutoff, sourceConfig, host }, ctx) {
         // Drive defaults to extracting binary file content (PDFs, Office,
         // …) so a search for "annual report" hits the PDF in your Drive
@@ -337,6 +340,7 @@ export default defineProvider<GoogleContext>({
         // `sync`.
         state: googleContactsStateSpec,
       },
+      documentEventProfile: googleContactsDocumentEventProfile,
       async create(_options, ctx) {
         const source = new GoogleContactsSource(authFor(ctx, "contacts"), ctx.accountId);
         return { sync: (cursor) => source.sync(cursor) };

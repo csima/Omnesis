@@ -8,6 +8,7 @@ import type {
   GqlActor,
   GqlComment,
   GqlDiscussion,
+  GqlIssue,
   GqlPullRequest,
   GqlThread,
   RestCommitDetail,
@@ -23,7 +24,7 @@ import type {
  * since only a full re-walk re-materializes what an existing cursor already
  * considers older than its watermark.
  */
-export const THREADS_RENDER_VERSION = 4;
+export const THREADS_RENDER_VERSION = 5;
 
 /**
  * Commit documents version independently — a thread-render change must not
@@ -200,6 +201,38 @@ class PeopleCollector {
 }
 
 // ---------------------------------------------------------------------------
+// Identifiers and self flags
+// ---------------------------------------------------------------------------
+
+/** Per-account context for the structured self flags. */
+export interface NormalizeSelf {
+  /** The authenticated (or configured) GitHub login; flags are omitted without it. */
+  selfLogin?: string;
+}
+
+/** Most ids kept per list, newest last: enough to name a recent comment, bounded for huge threads. */
+export const MAX_ID_LIST = 100;
+
+function isSelf(login: string | null | undefined, selfLogin: string | undefined): boolean {
+  return !!login && !!selfLogin && login.toLowerCase() === selfLogin.toLowerCase();
+}
+
+/** Non-empty ids in order, the newest {@link MAX_ID_LIST} kept; empty lists are omitted by callers. */
+function boundedIds(ids: ReadonlyArray<string | null | undefined>): string[] {
+  const kept = ids.filter((i): i is string => typeof i === "string" && i.length > 0);
+  return kept.slice(-MAX_ID_LIST);
+}
+
+/** Spread-ready `{ key: ids }`, omitted when there are none. */
+function idList<K extends string>(
+  key: K,
+  ids: ReadonlyArray<string | null | undefined>,
+): { [P in K]?: string[] } {
+  const kept = boundedIds(ids);
+  return kept.length > 0 ? ({ [key]: kept } as { [P in K]: string[] }) : {};
+}
+
+// ---------------------------------------------------------------------------
 // Thread rendering
 // ---------------------------------------------------------------------------
 
@@ -269,6 +302,7 @@ export function threadToDocument(
   sourceId: SourceId,
   /** Kinds of same-repo `#N` shorthand refs, resolved (and existence-checked) upstream. */
   refKinds?: ReadonlyMap<number, ThreadKind>,
+  self: NormalizeSelf = {},
 ): NormalizedThread {
   const isPr = thread.__typename === "PullRequest";
   const kind: ThreadKind = isPr ? "pull" : "issues";
@@ -387,6 +421,22 @@ export function threadToDocument(
   for (const source of mentionSources)
     for (const login of extractMentions(source)) people.mention(login);
 
+  const selfLogin = self.selfLogin;
+  const assigneeLogins = (thread.assignees?.nodes ?? []).flatMap((a) =>
+    a?.login ? [a.login] : [],
+  );
+  // Users by login, teams by `org/team`: the spelling a review request names.
+  const requestedReviewers = (pr?.reviewRequests?.nodes ?? []).flatMap((n) => {
+    const r = n?.requestedReviewer;
+    const name = r?.login ?? r?.combinedSlug;
+    return name ? [name] : [];
+  });
+  const reviewRequestedFromSelf = (pr?.reviewRequests?.nodes ?? []).some((n) =>
+    isSelf(n?.requestedReviewer?.login, selfLogin),
+  );
+  const mentionsSelf =
+    !!selfLogin && mentionSources.some((t) => extractMentions(t).includes(selfLogin.toLowerCase()));
+  const reviewNodes = (pr?.reviews?.nodes ?? []).filter((r) => r != null);
   const sourceUpdatedAt = latestActivity(thread.updatedAt, blocks);
   const doc: DocumentInput = {
     providerId,
@@ -411,6 +461,36 @@ export function threadToDocument(
         number: thread.number,
         kind: isPr ? "pull-request" : "issue",
         commentCount: thread.comments?.totalCount ?? 0,
+        ...(thread.id ? { nodeId: thread.id } : {}),
+        ...(pr?.headRefOid ? { headSha: pr.headRefOid } : {}),
+        ...(!isPr && (thread as GqlIssue).stateReason
+          ? { stateReason: (thread as GqlIssue).stateReason!.toLowerCase() }
+          : {}),
+        ...(assigneeLogins.length > 0 ? { assignees: assigneeLogins } : {}),
+        ...(requestedReviewers.length > 0 ? { requestedReviewers } : {}),
+        ...idList(
+          "commentIds",
+          commentNodes(thread.comments).map((c) => c.id),
+        ),
+        ...idList(
+          "reviewIds",
+          reviewNodes.map((r) => r.id),
+        ),
+        ...idList(
+          "reviewCommentIds",
+          reviewNodes.flatMap((r) => (r.comments?.nodes ?? []).map((c) => c?.id)),
+        ),
+        ...idList(
+          "reviewThreadIds",
+          (pr?.reviewThreads?.nodes ?? []).map((t) => t?.id),
+        ),
+        ...(selfLogin
+          ? {
+              authorIsSelf: isSelf(thread.author?.login, selfLogin),
+              mentionsSelf,
+              ...(pr ? { reviewRequestedFromSelf } : {}),
+            }
+          : {}),
         // "Closes #N" references and `#N` shorthand mentions, as same-source
         // external ids. Resolved by the `references` link convention, which
         // regenerates from this metadata on every re-extraction (a declared
@@ -554,6 +634,7 @@ export function commitToDocument(
   repo: string,
   providerId: ProviderId,
   sourceId: SourceId,
+  self: NormalizeSelf = {},
 ): DocumentInput {
   const sha = detail.sha;
   const message = detail.commit.message ?? "";
@@ -636,6 +717,13 @@ export function commitToDocument(
         sha,
         kind: "commit",
         filesChanged: files.length,
+        ...(self.selfLogin
+          ? {
+              authorIsSelf:
+                isSelf(detail.author?.login, self.selfLogin) ||
+                isSelf(parseNoreplyEmail(detail.commit.author?.email ?? ""), self.selfLogin),
+            }
+          : {}),
         ...(detail.parents && detail.parents.length > 1 ? { mergeCommit: true } : {}),
       },
     },

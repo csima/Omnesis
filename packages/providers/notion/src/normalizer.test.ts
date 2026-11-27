@@ -472,3 +472,204 @@ describe("documentEventProfile", () => {
     expect(metadataAt(rowDoc, "tags")).toBeUndefined();
   });
 });
+
+// ── structured ids, flags and the data-source parent ──────────────────
+
+describe("structured parent, edit and self metadata", () => {
+  const sourceId = SourceId("notion-pages:ws1");
+  const providerId = ProviderId("notion:ws1");
+  const ALICE = "aaaaaaaa-0000-4000-8000-000000000001";
+  const BOB = "bbbbbbbb-0000-4000-8000-000000000002";
+  const DB_ID = "3c4d5e6f-7081-92a3-b4c5-d6e7f8091a2b";
+  const DS_ID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+
+  const base = {
+    object: "page",
+    id: "5e6f7081-92a3-b4c5-d6e7-f8091a2b3c4d",
+    properties: { Name: { type: "title", title: [{ plain_text: "Draft notes" }] } },
+    url: "https://www.notion.so/draft-notes",
+    created_time: "2026-01-01T00:00:00.000Z",
+    last_edited_time: "2026-02-03T04:05:06.000Z",
+    created_by: { id: ALICE, object: "user" },
+    last_edited_by: { id: BOB, object: "user" },
+    archived: false,
+    in_trash: false,
+  };
+  const row = (parent: object, extra: object = {}) => ({ ...base, parent, ...extra }) as any;
+  const asRow = (page: any, opts?: Parameters<typeof databaseRowToDocument>[6]) =>
+    databaseRowToDocument(page, [], "Tracker", sourceId, providerId, undefined, opts);
+  const extraOf = (d: DocumentInput) => d.metadata.extra as Record<string, unknown>;
+
+  describe("data_source_id parent keeps the database id (bug fix)", () => {
+    const parent = { type: "data_source_id", data_source_id: DS_ID, database_id: DB_ID };
+
+    test("a row parented by a data source still carries notionDatabaseId and its data source", () => {
+      const extra = extraOf(asRow(row(parent)));
+      expect(extra.notionDatabaseId).toBe(DB_ID);
+      expect(extra.dataSourceId).toBe(DS_ID);
+      expect(extra.parentId).toBe(DS_ID);
+    });
+
+    test("a database_id parent is unchanged and takes the walked data source", () => {
+      const extra = extraOf(
+        asRow(row({ type: "database_id", database_id: DB_ID }), { dataSourceId: DS_ID }),
+      );
+      expect(extra.notionDatabaseId).toBe(DB_ID);
+      expect(extra.dataSourceId).toBe(DS_ID);
+      expect(extra.parentId).toBe(DB_ID);
+    });
+
+    test("a data_source_id parent with no database id falls back to the walked database", () => {
+      const extra = extraOf(
+        asRow(row({ type: "data_source_id", data_source_id: DS_ID }), { databaseId: DB_ID }),
+      );
+      expect(extra.notionDatabaseId).toBe(DB_ID);
+      expect(extra.dataSourceId).toBe(DS_ID);
+    });
+
+    test("without any database to name, the field stays absent rather than wrong", () => {
+      const extra = extraOf(asRow(row({ type: "data_source_id", data_source_id: DS_ID })));
+      expect(extra.notionDatabaseId).toBeUndefined();
+    });
+
+    test("a walked database never overrides the one the parent names", () => {
+      const extra = extraOf(asRow(row(parent), { databaseId: "other-db" }));
+      expect(extra.notionDatabaseId).toBe(DB_ID);
+    });
+  });
+
+  describe("shared fields", () => {
+    test("a page carries parent, edit time, flags and both user ids", () => {
+      const page = row({ type: "page_id", page_id: "parent-page-1" });
+      const extra = extraOf(pageToDocument(page, "# x", sourceId, providerId));
+      expect(extra).toMatchObject({
+        parentType: "page_id",
+        parentId: "parent-page-1",
+        lastEditedTime: "2026-02-03T04:05:06.000Z",
+        archived: false,
+        inTrash: false,
+        createdByUserId: ALICE,
+        lastEditedByUserId: BOB,
+      });
+    });
+
+    test("a workspace-level page has no parentId", () => {
+      const extra = extraOf(
+        pageToDocument(row({ type: "workspace", workspace: true }), "# x", sourceId, providerId),
+      );
+      expect(extra).not.toHaveProperty("parentId");
+    });
+
+    test("a block-parented page names its block", () => {
+      const extra = extraOf(
+        pageToDocument(row({ type: "block_id", block_id: "blk-1" }), "# x", sourceId, providerId),
+      );
+      expect(extra.parentId).toBe("blk-1");
+    });
+
+    test("archived and in_trash are reported, including the deprecated is_archived", () => {
+      const parent = { type: "workspace", workspace: true };
+      const trashed = extraOf(
+        pageToDocument(row(parent, { in_trash: true, archived: true }), "", sourceId, providerId),
+      );
+      expect(trashed).toMatchObject({ archived: true, inTrash: true });
+      const legacy = extraOf(
+        pageToDocument(
+          row(parent, { archived: undefined, is_archived: true }),
+          "",
+          sourceId,
+          providerId,
+        ),
+      );
+      expect(legacy).toMatchObject({ archived: true, inTrash: false });
+    });
+
+    test("a database summary carries the same structured fields", () => {
+      const db = {
+        object: "data_source",
+        id: DS_ID,
+        title: [{ plain_text: "Tracker" }],
+        properties: {},
+        url: "https://www.notion.so/tracker",
+        created_time: "2026-01-01T00:00:00.000Z",
+        last_edited_time: "2026-02-03T04:05:06.000Z",
+        created_by: { id: ALICE, object: "user" },
+        last_edited_by: { id: ALICE, object: "user" },
+        archived: false,
+        in_trash: true,
+        parent: { type: "database_id", database_id: DB_ID },
+        database_parent: { type: "page_id", page_id: "pg" },
+      } as any;
+      const schema = { tableName: "notion_t", columns: [] } as any;
+      const extra = extraOf(
+        databaseSummaryToDocument(db, schema, sourceId, providerId, undefined, ALICE),
+      );
+      expect(extra).toMatchObject({
+        parentId: DB_ID,
+        lastEditedTime: "2026-02-03T04:05:06.000Z",
+        archived: false,
+        inTrash: true,
+        createdByUserId: ALICE,
+        lastEditedByUserId: ALICE,
+        createdBySelf: true,
+        lastEditedBySelf: true,
+      });
+    });
+  });
+
+  describe("self flags", () => {
+    const parent = { type: "workspace", workspace: true };
+
+    test("flag who created and who last edited relative to the owner", () => {
+      const asAlice = extraOf(
+        pageToDocument(row(parent), "", sourceId, providerId, undefined, undefined, ALICE),
+      );
+      expect(asAlice).toMatchObject({ createdBySelf: true, lastEditedBySelf: false });
+      const asBob = extraOf(
+        pageToDocument(row(parent), "", sourceId, providerId, undefined, undefined, BOB),
+      );
+      expect(asBob).toMatchObject({ createdBySelf: false, lastEditedBySelf: true });
+      const stranger = extraOf(
+        pageToDocument(
+          row(parent),
+          "",
+          sourceId,
+          providerId,
+          undefined,
+          undefined,
+          "cccccccc-0000-4000-8000-000000000003",
+        ),
+      );
+      expect(stranger).toMatchObject({ createdBySelf: false, lastEditedBySelf: false });
+    });
+
+    test("rows flag them too, and omit them when the owner is unknown", () => {
+      const known = extraOf(asRow(row(parent), { selfUserId: ALICE }));
+      expect(known).toMatchObject({ createdBySelf: true, lastEditedBySelf: false });
+      const unknown = extraOf(asRow(row(parent)));
+      expect(unknown).not.toHaveProperty("createdBySelf");
+      expect(unknown).not.toHaveProperty("lastEditedBySelf");
+    });
+  });
+
+  test("declared Notion fields are all emitted by the documents that should carry them", () => {
+    const parent = { type: "data_source_id", data_source_id: DS_ID, database_id: DB_ID };
+    const rowDoc = asRow(row(parent), { selfUserId: ALICE, dataSourceId: DS_ID });
+    const pageDoc = pageToDocument(
+      row({ type: "page_id", page_id: "pg" }),
+      "",
+      sourceId,
+      providerId,
+      undefined,
+      undefined,
+      ALICE,
+    );
+    for (const f of notionDatabasesDocumentProfile.metadataFields ?? []) {
+      if (f.path === "tags") continue;
+      expect(extraOf(rowDoc), f.path).toHaveProperty(f.path.replace(/^extra\./, ""));
+    }
+    for (const f of notionPagesDocumentProfile.metadataFields ?? []) {
+      expect(extraOf(pageDoc), f.path).toHaveProperty(f.path.replace(/^extra\./, ""));
+    }
+  });
+});

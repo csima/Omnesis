@@ -35,6 +35,7 @@ export class NotionPagesSource {
   private providerId: ProviderId;
   private dataCutoff?: string;
   private userMap?: UserMap;
+  private selfUserId?: string;
 
   constructor(
     client: NotionClient,
@@ -42,12 +43,15 @@ export class NotionPagesSource {
     providerId: ProviderId,
     dataCutoff?: string,
     userMap?: UserMap,
+    /** The Notion user who owns the integration, for the `*BySelf` flags. */
+    selfUserId?: string,
   ) {
     this.client = client;
     this.sourceId = sourceId;
     this.providerId = providerId;
     this.dataCutoff = dataCutoff;
     this.userMap = userMap;
+    this.selfUserId = selfUserId;
   }
 
   /**
@@ -196,6 +200,7 @@ export class NotionPagesSource {
         this.providerId,
         this.userMap,
         linkedPageIds,
+        this.selfUserId,
       );
       documents.push(doc);
     }

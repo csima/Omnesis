@@ -69,6 +69,86 @@ export const githubThreadsDocumentProfile: DocumentEventProfile = {
       description:
         "Labels applied to an issue or pull request, using the repository's own label names. Absent when the thread has no labels; discussions never carry any.",
     },
+    {
+      path: "extra.nodeId",
+      type: "string",
+      description:
+        "GitHub's global GraphQL node id of the issue or pull request, the identifier a mutation names. Opaque: never shown to a person and never parsed for meaning. Absent on discussions.",
+    },
+    {
+      path: "extra.headSha",
+      type: "string",
+      description:
+        "Full sha of the head commit of a pull request's branch as last synced. A pull request only; absent on issues and discussions. Opaque.",
+    },
+    {
+      path: "extra.stateReason",
+      type: "string",
+      description:
+        "Why an issue is in its state, in GitHub's own words lowercased: completed or not_planned once closed, reopened after it was opened again. An issue only; absent while it has never been closed.",
+      canonicalValues: ["completed", "not_planned", "reopened", "duplicate"],
+      valueAliases: {
+        completed: ["done", "resolved", "fixed"],
+        not_planned: ["won't fix", "wontfix", "declined"],
+        reopened: ["opened again"],
+      },
+    },
+    {
+      path: "extra.assignees",
+      type: "string-array",
+      identifiesPeople: true,
+      description:
+        "GitHub logins the issue or pull request is assigned to. Absent when nobody is assigned.",
+    },
+    {
+      path: "extra.requestedReviewers",
+      type: "string-array",
+      identifiesPeople: true,
+      description:
+        "Who a pull request is still waiting on for review: user logins, and teams as org/team-slug. Absent when no review is requested and on issues.",
+    },
+    {
+      path: "extra.commentIds",
+      type: "string-array",
+      description:
+        "Node ids of the thread's conversation comments, oldest first, at most the newest 100. The identifiers a reply or edit names. Opaque.",
+    },
+    {
+      path: "extra.reviewIds",
+      type: "string-array",
+      description:
+        "Node ids of a pull request's submitted and pending reviews, oldest first, at most the newest 100. Opaque.",
+    },
+    {
+      path: "extra.reviewCommentIds",
+      type: "string-array",
+      description:
+        "Node ids of the inline review comments fetched with the pull request's reviews, at most the newest 100. Opaque.",
+    },
+    {
+      path: "extra.reviewThreadIds",
+      type: "string-array",
+      description:
+        "Node ids of a pull request's inline review threads, the identifiers a resolve names; at most the first 20 are fetched. Opaque.",
+    },
+    {
+      path: "extra.authorIsSelf",
+      type: "boolean",
+      description:
+        "True when the account owner opened the issue or pull request, false when someone else did. Absent when the account's login is not known.",
+    },
+    {
+      path: "extra.reviewRequestedFromSelf",
+      type: "boolean",
+      description:
+        "True when a review of the pull request is requested from the account owner by name (a team request does not count). A pull request only.",
+    },
+    {
+      path: "extra.mentionsSelf",
+      type: "boolean",
+      description:
+        "True when the issue or pull request's body, a comment or a review @-mentions the account owner, outside code. Absent when the account's login is not known.",
+    },
   ],
 };
 
@@ -90,6 +170,12 @@ export const githubCommitsDocumentProfile: DocumentEventProfile = {
       type: "boolean",
       description:
         "Present and true only on a merge commit, one with more than one parent. Absent on every other commit, so 'exists' is the test for it.",
+    },
+    {
+      path: "extra.authorIsSelf",
+      type: "boolean",
+      description:
+        "True when the account owner authored the commit (by GitHub login or noreply address), false when someone else did. Absent when the account's login is not known.",
     },
   ],
 };

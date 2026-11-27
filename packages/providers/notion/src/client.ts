@@ -460,6 +460,19 @@ export class NotionClient {
     return this.retry("listUsers", () => this.client.users.list({}));
   }
 
+  /**
+   * The Notion user who owns the integration: the person who authorized it.
+   * Undefined for a workspace-owned integration, which has no single owner.
+   */
+  async getOwnerUserId(): Promise<string | undefined> {
+    const me = await this.retry("getOwnerUserId", () =>
+      this.client.users.retrieve({ user_id: "me" }),
+    );
+    const owner = (me as { bot?: { owner?: { type?: string; user?: { id?: string } } } }).bot
+      ?.owner;
+    return owner?.type === "user" ? owner.user?.id : undefined;
+  }
+
   // ── Private ────────────────────────────────────────────────────────
 
   private async resolvePrimaryDataSourceId(databaseId: string): Promise<string> {

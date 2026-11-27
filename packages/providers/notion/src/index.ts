@@ -132,7 +132,16 @@ export default defineProvider<NotionContext>({
       log.warn(`Failed to list workspace users: ${err}`);
     }
 
-    return { client, accountId, dataCutoff, userMap, configDir: host?.configDir };
+    // Who the integration belongs to, for the `*BySelf` flags. Best effort: the
+    // flags are simply omitted when Notion does not say.
+    let selfUserId: string | undefined;
+    try {
+      selfUserId = await client.getOwnerUserId();
+    } catch (err) {
+      log.warn(`Failed to resolve the integration owner: ${err}`);
+    }
+
+    return { client, accountId, dataCutoff, userMap, selfUserId, configDir: host?.configDir };
   },
 
   credentialState(ctx) {
@@ -208,6 +217,7 @@ export default defineProvider<NotionContext>({
           providerId,
           dataCutoff,
           ctx.userMap,
+          ctx.selfUserId,
         );
         // Surface the icon at the runtime instance level too. The
         // collector only ships instance-level icons to the gateway's
@@ -251,6 +261,7 @@ export default defineProvider<NotionContext>({
           providerId,
           dataCutoff,
           ctx.userMap,
+          { selfUserId: ctx.selfUserId },
         );
         return {
           icon: notionDatabaseIcon,
