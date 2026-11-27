@@ -300,6 +300,10 @@ export function createServer(
     onSubscriptionService?: (service: SubscriptionService) => void;
     /** Receives the started status cache so the composition root can stop it before closing DBs. */
     onStatusCache?: (cache: StatusCache) => void;
+    /** SQLCipher key of the main store, for the `POST /sql` worker's own read-only handle. */
+    sqlEncryptionKey?: Buffer | null;
+    /** Receives the `POST /sql` runner so the composition root can stop its worker on shutdown. */
+    onSqlQueryRunner?: (runner: import("./sql-query-runner.js").SqlQueryRunner) => void;
     /**
      * Low-disk write guard. Free MB on the gateway DB volume below
      * which `DocumentService` rejects ingestion with 507. Resolved by
@@ -1985,6 +1989,8 @@ export function createServer(
     analyticsService,
     sourceService,
     webCapturePolicy: () => webCapturePolicy.ingestPolicy(),
+    sqlEncryptionKey: opts?.sqlEncryptionKey,
+    onSqlQueryRunner: opts?.onSqlQueryRunner,
   });
 
   // Push status / test, used by `omnesis push status|test`. Shares the

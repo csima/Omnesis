@@ -261,8 +261,14 @@ async function fetchStatus(): Promise<StatusData> {
   };
 }
 
-async function runOnce(): Promise<void> {
+async function runOnce(json = false): Promise<void> {
   try {
+    if (json) {
+      // Machine-readable: the status payload alone, no terminal rendering.
+      const data = await withSpinner("Loading status", () => fetchStatus());
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
     const [data, fx] = await withSpinner("Loading status", () =>
       Promise.all([fetchStatus(), buildCliFx()]),
     );
@@ -544,7 +550,7 @@ export const statusCommand = defineCommand({
     if (ctx.args.watch) {
       await runWatch();
     } else {
-      await runOnce();
+      await runOnce(Boolean(ctx.args.json));
     }
   },
 });

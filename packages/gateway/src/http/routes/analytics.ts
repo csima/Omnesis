@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Adrien Conrath
 
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import { createLogger, describeSqlGrantRefusal } from "@omnesis/core";
 import { scopeSatisfies, SCOPE_WRITE_ALL } from "@omnesis/types";
 import { analyticsSchemaUsesDynamicColumns, type AnalyticsTableSchema } from "@omnesis/source-sdk";
@@ -9,14 +9,23 @@ import {
   getSqliteCatalog,
   getSqliteTableInfo,
   getSqliteTableActivity,
-  runSqliteQuery,
 } from "../../sqlite-catalog.js";
+import {
+  SqlQueryRunner,
+  SqlQueryTimeoutError,
+  SqlWorkerBusyError,
+} from "../../sql-query-runner.js";
 import { enforceBroadWriteScope, enforceWriteScopeForSource, scope } from "../scope.js";
 import { ANALYTICS_INGEST_BODY_LIMIT_BYTES, ingestBodyLimit } from "../body-limits.js";
 import { ScopedSqlDeniedError } from "../../analytics/sandbox-tables.js";
 import { validateJson } from "../validate.js";
 import { analyticsIngestBody, sqlBody } from "../schemas/index.js";
-import { BadRequestError, NotFoundError, ServiceUnavailableError } from "../errors.js";
+import {
+  BadRequestError,
+  GatewayTimeoutError,
+  NotFoundError,
+  ServiceUnavailableError,
+} from "../errors.js";
 import {
   assertCanonicalWebSourceIds,
   filterCapturableVisits,
@@ -38,6 +47,12 @@ export interface AnalyticsRoutesDeps {
   sourceService: SourceService;
   /** The capture policy web visit rows are judged by on ingest. */
   webCapturePolicy?: () => WebCapturePolicy | null;
+  /** SQLCipher key of the store, so the `/sql` worker can open its own read-only handle. */
+  sqlEncryptionKey?: Buffer | null;
+  /** Per-query budget for `/sql`; defaults to `OMNESIS_SQL_TIMEOUT_MS` (15 s, clamped 1..60 s). */
+  sqlTimeoutMs?: number;
+  /** Receives the `/sql` runner so the composition root can stop its worker on shutdown. */
+  onSqlQueryRunner?: (runner: SqlQueryRunner) => void;
 }
 
 /**
@@ -47,37 +62,44 @@ export interface AnalyticsRoutesDeps {
 export function mountAnalyticsRoutes(app: RouteApp, deps: AnalyticsRoutesDeps): void {
   const { db, analyticsService, sourceService, webCapturePolicy } = deps;
 
-  // Dedicated read-only handle for the /sql endpoint. better-sqlite3
-  // enforces no writes at the engine level when `readonly: true`, so
-  // we no longer need a keyword block-list to filter the SQL — any
-  // INSERT / UPDATE / DELETE / DROP / ALTER / CREATE / TRUNCATE
-  // (including ones smuggled through CTEs, leading comments,
-  // multi-statement scripts, or PRAGMA writes) fails with
-  // "attempt to write a readonly database". Defence in depth: the
-  // production main-thread `db` is already read-only, but
-  // a separate handle here means the test harness's writable test DB
-  // can't accidentally accept a write through /sql either.
-  const readonlyDb: Db = db.readonly
-    ? db
-    : new Database(db.name, { readonly: true, fileMustExist: true });
-  if (readonlyDb !== db) {
-    readonlyDb.exec("PRAGMA busy_timeout = 5000");
-    readonlyDb.exec("PRAGMA mmap_size = 0");
-  }
+  // `/sql` runs user SQL, which over a large store can sit inside SQLite's
+  // native code for minutes. It therefore never runs on this thread: the runner
+  // executes it in a worker thread that opens its own read-only handle on the
+  // same store (same key, same pragmas), under a hard per-query deadline.
+  // better-sqlite3 enforces no writes at the engine level when
+  // `readonly: true`, so any INSERT / UPDATE / DELETE / DROP / ALTER / CREATE
+  // (including ones smuggled through CTEs, leading comments, multi-statement
+  // scripts, or PRAGMA writes) fails with "attempt to write a readonly
+  // database", and no keyword block-list is needed. The worker's handle is
+  // always read-only, so a test harness's writable DB cannot take a write
+  // through `/sql` either. An in-memory store cannot be reopened by another
+  // thread, so it runs inline on a read-only handle (tests only).
+  const sqlRunner = new SqlQueryRunner({
+    dbPath: db.name,
+    encryptionKey: deps.sqlEncryptionKey ?? null,
+    timeoutMs: deps.sqlTimeoutMs,
+    inlineDb: db.memory ? db : undefined,
+  });
+  deps.onSqlQueryRunner?.(sqlRunner);
 
   // SQLite raw query — `validateJson(sqlBody)` enforces shape (sql:
   // required string, limit: optional number) and surfaces the
-  // uniform validation envelope. The read-only handle is the
-  // engine-level gate that makes the keyword block-list unnecessary.
-  // The actual prepare/columns/all reshape lives in
-  // `sqlite-catalog.ts:runSqliteQuery` next to its peer-pattern read
-  // helper `getSqliteCatalog`; this handler is a thin transport layer
-  // that maps engine errors → 400.
+  // uniform validation envelope. The prepare/columns/all reshape lives in
+  // `sqlite-catalog.ts:runSqliteQuery`; this handler is a thin transport layer
+  // that maps engine errors → 400 and a blown deadline → 504.
   app.post("/sql", scope.admin(), validateJson(sqlBody), async (c) => {
     const body = c.req.valid("json");
     try {
-      return c.json(runSqliteQuery(readonlyDb, body));
+      return c.json(await sqlRunner.run(body));
     } catch (err) {
+      if (err instanceof SqlQueryTimeoutError) {
+        throw new GatewayTimeoutError(
+          `${err.message}. Narrow the query: filter on an exact source_id = '...' and an ` +
+            "indexed time bound instead of full-table LIKE / json_each scans.",
+          { timeoutMs: err.timeoutMs },
+        );
+      }
+      if (err instanceof SqlWorkerBusyError) throw new ServiceUnavailableError(err.message);
       throw new BadRequestError(err instanceof Error ? err.message : String(err));
     }
   });
