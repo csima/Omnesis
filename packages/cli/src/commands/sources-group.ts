@@ -13,6 +13,7 @@ import { detachSourceCommand } from "./detach.js";
 import { pauseSourceCommand } from "./pause.js";
 import { resumeSourceCommand } from "./resume.js";
 import { syncCommand } from "./sync.js";
+import { syncNowCommand } from "./sync-now.js";
 import { resyncCommand } from "./resync.js";
 import { reauthCommand } from "./reauth.js";
 import { debugCommand } from "./debug.js";
@@ -39,6 +40,7 @@ export const sourcesCommand = defineCommand({
     pause: pauseSourceCommand,
     resume: resumeSourceCommand,
     sync: syncCommand,
+    "sync-now": syncNowCommand,
     resync: resyncCommand,
     reauth: reauthCommand,
     debug: debugCommand,

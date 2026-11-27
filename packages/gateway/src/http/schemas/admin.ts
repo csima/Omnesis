@@ -322,6 +322,18 @@ export const sourceResyncBody = z.object({
 });
 export type SourceResyncBody = z.infer<typeof sourceResyncBody>;
 
+// POST /admin/sync-now — a targeted, bounded sync of named sources or one type.
+export const syncNowBody = z
+  .object({
+    sourceIds: z.array(z.string().min(1)).max(50).optional(),
+    sourceType: z.string().min(1).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  })
+  .refine((b) => (b.sourceIds?.length ?? 0) > 0 || b.sourceType !== undefined, {
+    message: "pass sourceIds or sourceType",
+  });
+export type SyncNowBody = z.infer<typeof syncNowBody>;
+
 // POST /admin/sources/:id/legacy-rows
 export const sourceLegacyRowsBody = z.object({
   action: z.enum(["claim", "drop"]),
