@@ -121,7 +121,7 @@ async function startGitDaemon(directory) {
     }
     daemon.kill("SIGKILL");
   }
-  throw new Error("git daemon did not start serving on a loopback port");
+  throw new Error("git daemon never served a loopback port after three attempts");
 }
 
 describe("updater fault observations", () => {
