@@ -69,8 +69,8 @@ function harness(
   return h;
 }
 
-const GMAIL: SyncNowSource = { id: "gmail:a@x.com", type: "gmail", enabled: true };
-const GMAIL2: SyncNowSource = { id: "gmail:b@x.com", type: "gmail", enabled: true };
+const GMAIL: SyncNowSource = { id: "gmail:a@example.com", type: "gmail", enabled: true };
+const GMAIL2: SyncNowSource = { id: "gmail:b@example.com", type: "gmail", enabled: true };
 const QUO: SyncNowSource = { id: "quo:ws1", type: "quo", enabled: true };
 const SLACK: SyncNowSource = { id: "slack:t1", type: "slack", enabled: false };
 
