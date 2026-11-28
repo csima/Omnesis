@@ -40,7 +40,7 @@ const GMAIL_SYSTEM_LABELS = [
 ];
 
 export const gmailDocumentEventProfile: DocumentEventProfile = {
-  // One document per message, plus one child document per attachment whose
+  // One document per message, one per unsent draft, plus one child document per attachment whose
   // text was successfully extracted.
   documentTypes: ["email", "attachment"],
   // `From` becomes the sender, `To` + `Cc` become recipients, and email
@@ -84,6 +84,18 @@ export const gmailDocumentEventProfile: DocumentEventProfile = {
         sent: ["outbound", "I sent", "from me", "replied"],
         received: ["inbound", "incoming", "from them"],
       },
+    },
+    {
+      path: "extra.isDraft",
+      type: "boolean",
+      description:
+        "True on the owner's unsent draft, indexed as its own document with the external id 'gmail-draft:<draftId>' (never the message id the sent mail will have). Reflects the draft as it stands in Gmail, manual edits included, and is deleted when the draft is sent or discarded. Absent, never false, on every other message.",
+    },
+    {
+      path: "extra.draftId",
+      type: "string",
+      description:
+        "Gmail's identifier for the draft, the id a connector passes to send or update it. Present only when isDraft is true. Opaque.",
     },
     {
       path: "extra.unread",

@@ -38,6 +38,8 @@ import {
   GMAIL_HISTORY_RECOVERY_OVERLAP_MS,
   GMAIL_HISTORY_RECOVERY_FALLBACK_MS,
   GMAIL_QUOTA_UNITS,
+  GMAIL_MAX_DRAFTS,
+  GMAIL_DRAFT_PAGE_SIZE,
   GMAIL_QUOTA_UNITS_PER_MINUTE,
   GMAIL_QUOTA_BURST_UNITS,
   GMAIL_QUOTA_FLOOR_UNITS_PER_MINUTE,
@@ -59,6 +61,7 @@ import {
   selfAuthoredMailText,
 } from "./gmail-message.js";
 import { gmailDirection, gmailReplyFields, gmailTriage } from "./gmail-reply.js";
+import { gmailDraftExternalId } from "./gmail-draft.js";
 import type {
   AttachmentInfo,
   AttachmentExtractionConfig,
@@ -138,6 +141,13 @@ export interface GmailSyncCursor extends SyncCursor {
    * Cleared when the walk ends.
    */
   listBefore?: string;
+  /**
+   * The drafts the corpus holds, as `draftId → id of the message the draft
+   * held when it was read`. Editing a draft gives it a new message, so a
+   * changed message id is what marks a draft to read again, and an id missing
+   * from the next listing is a draft sent or discarded. Carried on every page.
+   */
+  drafts?: Record<string, string>;
 }
 
 /**
@@ -315,6 +325,18 @@ export function gmailMessageUrl(messageId: string, accountEmail?: string): strin
   return `https://mail.google.com/mail/u/0/${authuser}#all/${messageId}`;
 }
 
+/** The web link that reopens a draft in Gmail's composer. */
+export function gmailDraftUrl(messageId: string, accountEmail?: string): string {
+  const authuser = accountEmail ? `?authuser=${encodeURIComponent(accountEmail)}` : "";
+  return `https://mail.google.com/mail/u/0/${authuser}#drafts?compose=${messageId}`;
+}
+
+/** Whether Gmail refused to show drafts: no access to them (403), or none to show (404). */
+function isDraftAccessDenied(err: unknown): boolean {
+  const status = googleApiStatus(err);
+  return status === 403 || status === 404;
+}
+
 // Gmail has no working "open this message" deep link on iOS, so we emit no
 // `appUrl` — the iOS app falls back to the web `sourceUrl`. The only
 // `googlegmail://` action is `/co` (compose), and mobile Gmail web drops the
@@ -474,10 +496,11 @@ export class GmailSource {
     const startedAt = this.budgetStart(opts?.run);
     this.attempt = {};
     try {
-      const result =
-        state.phase === "bootstrap" || !state.historyId
-          ? await this.bootstrapSync(state)
-          : await this.incrementalSync(state);
+      const bootstrapping = state.phase === "bootstrap" || !state.historyId;
+      const result = bootstrapping
+        ? await this.bootstrapSync(state)
+        : await this.incrementalSync(state);
+      await this.attachDrafts(state, result, bootstrapping);
       if (result.hasMore && Date.now() - startedAt >= GMAIL_SYNC_BUDGET_MS) {
         log.info(
           `Sync of ${this.id} paused after ${Math.round(GMAIL_SYNC_BUDGET_MS / 60_000)} minutes; the next sync continues it`,
@@ -504,6 +527,183 @@ export class GmailSource {
       }
       throw mapped;
     }
+  }
+
+  /**
+   * Bring the drafts up to date on the sync's result. Drafts are read on the
+   * first page of a bootstrap, so they show before a long walk ends, and on
+   * the last page of every incremental sync; other pages carry the map along.
+   */
+  private async attachDrafts(
+    state: GmailSyncCursor,
+    result: SyncResult,
+    bootstrapping: boolean,
+  ): Promise<void> {
+    const cursor = result.cursor as GmailSyncCursor;
+    const due = bootstrapping
+      ? !state.pageToken
+      : cursor.phase === "incremental" && !result.hasMore;
+    let drafts = state.drafts;
+    if (due) {
+      const synced = await this.syncDrafts(state.drafts ?? {});
+      result.documents.push(...synced.documents);
+      result.deletedExternalIds.push(...synced.deletedExternalIds);
+      drafts = synced.drafts;
+    }
+    result.cursor = {
+      ...cursor,
+      drafts: drafts && Object.keys(drafts).length > 0 ? drafts : undefined,
+    } satisfies GmailSyncCursor;
+  }
+
+  /**
+   * List the active drafts (up to {@link GMAIL_MAX_DRAFTS}), read the new and
+   * edited ones, and delete the documents of those no longer listed. A mailbox
+   * that refuses drafts (403/404) keeps what it had and loses nothing else.
+   */
+  private async syncDrafts(known: Record<string, string>): Promise<{
+    documents: DocumentInput[];
+    deletedExternalIds: string[];
+    drafts: Record<string, string>;
+  }> {
+    const unchanged = { documents: [], deletedExternalIds: [], drafts: known };
+    const listed = new Map<string, string>();
+    let complete = true;
+    try {
+      let pageToken: string | undefined;
+      do {
+        const token = pageToken;
+        const res = await this.request("draftsList", () =>
+          this.gmail.users.drafts.list({
+            userId: "me",
+            maxResults: Math.min(GMAIL_DRAFT_PAGE_SIZE, GMAIL_MAX_DRAFTS - listed.size),
+            pageToken: token,
+          }),
+        );
+        for (const draft of res.data.drafts ?? []) {
+          if (draft.id && listed.size < GMAIL_MAX_DRAFTS) {
+            listed.set(draft.id, draft.message?.id ?? "");
+          }
+        }
+        pageToken = res.data.nextPageToken ?? undefined;
+        if (pageToken && listed.size >= GMAIL_MAX_DRAFTS) {
+          complete = false;
+          pageToken = undefined;
+        }
+      } while (pageToken);
+    } catch (error: unknown) {
+      if (isRateLimit(error) || !isDraftAccessDenied(error)) throw error;
+      log.warn(`Gmail drafts unavailable for ${this.accountLabel}: skipping drafts this sync`);
+      return unchanged;
+    }
+
+    const toFetch = [...listed].filter(([id, messageId]) => !messageId || known[id] !== messageId);
+    const fetched = await pMap(
+      toFetch,
+      async ([id]) => {
+        try {
+          return await this.fetchDraft(id);
+        } catch (error: unknown) {
+          if (isRateLimit(error) || !isDraftAccessDenied(error)) throw error;
+          log.warn(`Gmail draft ${id} unavailable for ${this.accountLabel}: skipping it`);
+          return "denied" as const;
+        }
+      },
+      { concurrency: GOOGLE_FETCH_CONCURRENCY },
+    );
+
+    const drafts: Record<string, string> = {};
+    const documents: DocumentInput[] = [];
+    for (const [id, messageId] of listed) {
+      if (known[id] === messageId && messageId) drafts[id] = messageId;
+    }
+    fetched.forEach((result, i) => {
+      const [id] = toFetch[i]!;
+      if (result === "denied") {
+        // Keep what was indexed of it until it can be read again.
+        if (known[id] !== undefined) drafts[id] = known[id];
+      } else if (result !== null) {
+        documents.push(result.document);
+        drafts[id] = result.messageId;
+      }
+    });
+
+    const deletedExternalIds: string[] = [];
+    for (const id of Object.keys(known)) {
+      if (listed.has(id)) continue;
+      if (complete) deletedExternalIds.push(gmailDraftExternalId(id));
+      else drafts[id] = known[id]!;
+    }
+    return { documents, deletedExternalIds, drafts };
+  }
+
+  /** One draft as a document, or null when it was sent or discarded since it was listed. */
+  private async fetchDraft(
+    draftId: string,
+  ): Promise<{ document: DocumentInput; messageId: string } | null> {
+    const res = await this.request("draftsGet", () =>
+      this.gmail.users.drafts.get({ userId: "me", id: draftId, format: "full" }),
+    ).catch((error: unknown) => {
+      if (googleApiStatus(error) === 404) return null;
+      throw error;
+    });
+    const msg = res?.data.message;
+    if (!msg?.id || !msg.payload) return null;
+
+    const payload = msg.payload;
+    await this.fetchDeferredBodyText(msg.id, payload);
+    const getHeader = (name: string) => partHeader(payload, name) ?? "";
+    const subject = getHeader("subject") || "(no subject)";
+    const from = getHeader("from");
+    const to = getHeader("to");
+    const cc = getHeader("cc");
+    const bcc = getHeader("bcc");
+    const date = getHeader("date");
+    const body = chooseMailBody(messageParts(payload));
+    const now = Date.now();
+    const sourceDate = messageDate(date, msg.internalDate, now);
+    const saved = msg.internalDate ? Number.parseInt(msg.internalDate, 10) : Number.NaN;
+    const labels = msg.labelIds ?? [];
+    const content = messageContent({ subject, from, to, cc, bcc, date, body });
+
+    return {
+      messageId: msg.id,
+      document: {
+        providerId: this.providerId,
+        sourceId: this.id,
+        externalId: gmailDraftExternalId(draftId),
+        title: subject,
+        content,
+        contentHash: computeContentHash(content),
+        metadata: {
+          sourceUrl: gmailDraftUrl(msg.id, this.accountEmail),
+          tags: await this.resolveLabels(labels),
+          documentType: "email",
+          relevanceScore: this.computeRelevanceScore(labels, {
+            listUnsubscribe: "",
+            precedence: "",
+            autoSubmitted: "",
+          }),
+          people: messagePeople({ from, to, cc, bcc }, body),
+          extra: {
+            isDraft: true,
+            draftId,
+            threadId: msg.threadId,
+            direction: "sent",
+            unread: false,
+            archived: false,
+            starred: false,
+            ...gmailReplyFields({
+              messageId: getHeader("Message-ID"),
+              inReplyTo: getHeader("In-Reply-To"),
+              references: getHeader("References"),
+            }),
+          },
+        },
+        sourceCreatedAt: sourceDate,
+        sourceUpdatedAt: Number.isNaN(saved) ? sourceDate : new Date(saved).toISOString(),
+      },
+    };
   }
 
   /**
