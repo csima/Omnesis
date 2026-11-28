@@ -28,8 +28,17 @@ export const GMAIL_QUOTA_UNITS = {
   historyList: 2,
   messagesList: 5,
   messagesGetFull: 60,
+  draftsList: 5,
+  // `drafts.get` with `format: "full"` returns a whole message, so it is priced like one.
+  draftsGet: 60,
   attachmentsGet: 20,
 } as const;
+
+/** Most active drafts one account's source indexes; the rest are left unread. */
+export const GMAIL_MAX_DRAFTS = 500;
+
+/** Drafts asked for per `drafts.list` page. */
+export const GMAIL_DRAFT_PAGE_SIZE = 100;
 
 export type GmailRequest = keyof typeof GMAIL_QUOTA_UNITS;
 

@@ -33,6 +33,10 @@ export function createMockGmail(): any {
           get: vi.fn(() => Promise.resolve({ data: { data: "" } })),
         },
       },
+      drafts: {
+        list: vi.fn(() => Promise.resolve({ data: { drafts: [], nextPageToken: undefined } })),
+        get: vi.fn(() => Promise.resolve({ data: {} })),
+      },
       history: {
         list: vi.fn(() =>
           Promise.resolve({
