@@ -405,15 +405,13 @@ const PATHOLOGICAL: Array<[string, (size: number) => string]> = [
  */
 const FLOOR_MS = 25;
 
-/** The fastest of three runs, which keeps a busy host's pauses out of the ratio. */
-function fastest(text: string): number {
-  let best = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const started = performance.now();
-    redactSecrets(text);
-    best = Math.min(best, performance.now() - started);
-  }
-  return best;
+/** Runs of each size, alternated; a busy host only ever adds time to a run. */
+const ROUNDS = 5;
+
+function timed(text: string): number {
+  const started = performance.now();
+  redactSecrets(text);
+  return performance.now() - started;
 }
 
 /**
@@ -423,10 +421,16 @@ function fastest(text: string): number {
  * ratio near sixteen. The last term absorbs timer granularity and scheduling
  * noise on inputs that finish in a few milliseconds.
  */
-function expectLinear(build: (size: number) => string): void {
-  const small = fastest(build(N / 4));
-  const large = fastest(build(N));
-  expect(large).toBeLessThanOrEqual(Math.max(FLOOR_MS, 6 * small + 5));
+function expectLinear(build: (size: number) => string, size = N, message?: string): void {
+  const smallText = build(size / 4);
+  const largeText = build(size);
+  let small = Infinity;
+  let large = Infinity;
+  for (let i = 0; i < ROUNDS; i++) {
+    small = Math.min(small, timed(smallText));
+    large = Math.min(large, timed(largeText));
+  }
+  expect(large, message).toBeLessThanOrEqual(Math.max(FLOOR_MS, 6 * small + 5));
 }
 
 describe("redactSecrets runs in linear time", () => {
@@ -504,9 +508,7 @@ describe("redactSecrets runs in linear time", () => {
       ).join("");
       const build = (size: number): string =>
         unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
-      const small = fastest(build(N / 8));
-      const large = fastest(build(N / 2));
-      expect(large, JSON.stringify(unit)).toBeLessThanOrEqual(Math.max(FLOOR_MS, 6 * small + 5));
+      expectLinear(build, N / 2, JSON.stringify(unit));
     }
   }, 120_000);
 });

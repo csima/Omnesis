@@ -86,6 +86,44 @@ function identityFixture() {
   return config;
 }
 
+/**
+ * Serve `directory` over git://127.0.0.1 and wait until it answers. The port
+ * is found free and released before the daemon binds it, so another process
+ * can take it first; a daemon that exits is started again on a new port. The
+ * wait is a deadline rather than a count of tries, because a host running the
+ * whole unit suite in parallel can take seconds to start one.
+ */
+async function startGitDaemon(directory) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const server = createServer();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = server.address().port;
+    await new Promise((r) => server.close(r));
+    const daemon = spawn(
+      "git",
+      [
+        "daemon",
+        "--export-all",
+        `--base-path=${directory}`,
+        "--listen=127.0.0.1",
+        `--port=${port}`,
+      ],
+      { stdio: "ignore" },
+    );
+    children.push(daemon);
+    const url = `git://127.0.0.1:${port}/remote.git`;
+    const deadline = Date.now() + 8_000;
+    while (daemon.exitCode === null && daemon.signalCode === null && Date.now() < deadline) {
+      if (spawnSync("git", ["ls-remote", url], { stdio: "ignore" }).status === 0)
+        return { daemon, url };
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    daemon.kill("SIGKILL");
+  }
+  throw new Error("git daemon never served a loopback port after three attempts");
+}
+
 describe("updater fault observations", () => {
   it("refuses an ordinary CI host before creating files or touching installed services", () => {
     const work = join(scratch(), "must-not-exist");
@@ -492,35 +530,7 @@ process.on('SIGTERM',()=>{setTimeout(()=>{child.kill('SIGTERM');child.once('exit
       const directory = scratch();
       const repo = join(directory, "remote.git");
       execFileSync("git", ["init", "--bare", "--quiet", repo]);
-      const server = createServer();
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const port = server.address().port;
-      await new Promise((r) => server.close(r));
-      const daemon = spawn(
-        "git",
-        [
-          "daemon",
-          "--export-all",
-          `--base-path=${directory}`,
-          "--listen=127.0.0.1",
-          `--port=${port}`,
-        ],
-        { stdio: "ignore" },
-      );
-      children.push(daemon);
-      const url = `git://127.0.0.1:${port}/remote.git`;
-      let ready = false;
-      for (let i = 0; i < 50; i++) {
-        try {
-          execFileSync("git", ["ls-remote", url], { stdio: "ignore" });
-          ready = true;
-          break;
-        } catch {
-          await new Promise((r) => setTimeout(r, 20));
-        }
-      }
-      expect(ready).toBe(true);
+      const { daemon, url } = await startGitDaemon(directory);
       const local = join(directory, "local");
       execFileSync("git", ["init", "--quiet", local]);
       symlinkSync(join(root, "update-fault-command.sh"), join(directory, "git"));
